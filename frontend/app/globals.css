@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* CIE Design System — matches DESIGN.md color tokens */
+  --color-primary: #003e78;
+  --color-primary-container: #0a559f;
+  --color-surface: #f8f9ff;
+  --color-on-surface: #0b1c30;
+  --color-surface-container-low: #eff4ff;
+}
+
+body {
+  background-color: var(--color-surface);
+  color: var(--color-on-surface);
+}

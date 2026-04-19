@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+
+<html class="h-full" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Clinical Insight Engine - Analysis Execution</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "inverse-surface": "#213145",
+                        "on-surface-variant": "#424751",
+                        "surface-container-low": "#eff4ff",
+                        "secondary-fixed-dim": "#b4c7ea",
+                        "tertiary": "#672e00",
+                        "on-primary-container": "#adcbff",
+                        "inverse-primary": "#a7c8ff",
+                        "outline": "#727782",
+                        "on-secondary-container": "#4d607e",
+                        "on-tertiary-container": "#ffbb93",
+                        "on-primary-fixed-variant": "#004788",
+                        "error": "#ba1a1a",
+                        "background": "#f8f9ff",
+                        "surface-bright": "#f8f9ff",
+                        "surface-container-lowest": "#ffffff",
+                        "surface-dim": "#cbdbf5",
+                        "surface-container-high": "#dce9ff",
+                        "on-tertiary": "#ffffff",
+                        "on-error-container": "#93000a",
+                        "on-secondary": "#ffffff",
+                        "surface-container": "#e5eeff",
+                        "primary": "#003e78",
+                        "primary-fixed-dim": "#a7c8ff",
+                        "inverse-on-surface": "#eaf1ff",
+                        "secondary": "#4d5f7e",
+                        "tertiary-fixed-dim": "#ffb68a",
+                        "primary-fixed": "#d5e3ff",
+                        "on-secondary-fixed": "#061c37",
+                        "primary-container": "#0a559f",
+                        "on-secondary-fixed-variant": "#354765",
+                        "secondary-container": "#c8dbff",
+                        "tertiary-container": "#8a4000",
+                        "on-tertiary-fixed": "#321300",
+                        "on-tertiary-fixed-variant": "#743400",
+                        "tertiary-fixed": "#ffdbc8",
+                        "on-primary": "#ffffff",
+                        "surface": "#f8f9ff",
+                        "on-primary-fixed": "#001b3b",
+                        "on-background": "#0b1c30",
+                        "secondary-fixed": "#d5e3ff",
+                        "surface-tint": "#1e5fa9",
+                        "on-surface": "#0b1c30",
+                        "error-container": "#ffdad6",
+                        "on-error": "#ffffff",
+                        "surface-container-highest": "#d3e4fe",
+                        "surface-variant": "#d3e4fe",
+                        "outline-variant": "#c2c6d3"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "fontFamily": {
+                        "headline": ["Inter", "sans-serif"],
+                        "body": ["Inter", "sans-serif"],
+                        "label": ["Inter", "sans-serif"]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-surface text-on-surface h-full flex overflow-hidden">
+<!-- SideNavBar (Suppressed due to linear workflow intent) -->
+<!-- Main Content Area -->
+<div class="flex-1 flex flex-col h-full overflow-hidden">
+<!-- TopAppBar -->
+<header class="bg-surface/80 dark:bg-slate-950/80 backdrop-blur-md font-inter tracking-tight antialiased text-sm docked full-width top-0 sticky border-b border-slate-200/15 dark:border-slate-800/15 shadow-sm dark:shadow-none flex items-center justify-between px-8 py-3 w-full z-40">
+<div class="flex items-center gap-8">
+<div class="text-lg font-bold tracking-tighter text-blue-950 dark:text-white">CIE Workflow</div>
+<nav class="hidden md:flex items-center gap-6">
+<!-- Progress steps styled as nav for visual consistency but logical workflow representation -->
+<div class="text-slate-500 dark:text-slate-400">Definition</div>
+<span class="material-symbols-outlined text-outline-variant text-sm" data-icon="chevron_right">chevron_right</span>
+<div class="text-slate-500 dark:text-slate-400">AI Synthesis</div>
+<span class="material-symbols-outlined text-outline-variant text-sm" data-icon="chevron_right">chevron_right</span>
+<div class="text-blue-700 dark:text-blue-300 font-semibold border-b-2 border-blue-700 dark:border-blue-300 pb-1">Parameters</div>
+<span class="material-symbols-outlined text-outline-variant text-sm" data-icon="chevron_right">chevron_right</span>
+<div class="text-slate-500 dark:text-slate-400">Execution</div>
+<span class="material-symbols-outlined text-outline-variant text-sm" data-icon="chevron_right">chevron_right</span>
+<div class="text-slate-500 dark:text-slate-400">Review</div>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<button class="text-slate-500 dark:text-slate-400 hover:text-blue-600 hover:bg-slate-100/50 dark:hover:bg-slate-800/50 transition-colors p-2 rounded-full scale-98 active:opacity-80 transition-all">
+<span class="material-symbols-outlined" data-icon="notifications_active">notifications_active</span>
+</button>
+<button class="text-slate-500 dark:text-slate-400 hover:text-blue-600 hover:bg-slate-100/50 dark:hover:bg-slate-800/50 transition-colors p-2 rounded-full scale-98 active:opacity-80 transition-all">
+<span class="material-symbols-outlined" data-icon="history">history</span>
+</button>
+<button class="bg-gradient-to-r from-primary to-primary-container text-on-primary px-4 py-2 rounded-md text-sm font-medium scale-98 active:opacity-80 transition-all">
+                    Run Analysis
+                </button>
+</div>
+</header>
+<!-- Canvas -->
+<main class="flex-1 overflow-y-auto p-8 bg-surface">
+<div class="max-w-7xl mx-auto space-y-8">
+<!-- Header / Context -->
+<div class="flex justify-between items-end">
+<div>
+<p class="text-on-surface-variant font-label text-sm uppercase tracking-wider mb-2">Step 3 of 5 • Diabetes Patient Outcome Study</p>
+<h1 class="text-3xl font-headline font-medium text-on-surface tracking-tight">Analysis Execution</h1>
+</div>
+</div>
+<!-- Main Layout Grid -->
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+<!-- Left Column: Skills Gallery -->
+<div class="lg:col-span-4 space-y-6">
+<h2 class="text-lg font-headline font-medium text-on-surface">Analysis Models</h2>
+<div class="grid grid-cols-1 gap-4">
+<!-- Skill Card 1 -->
+<div class="bg-surface-container-lowest p-6 rounded-xl hover:shadow-[0_12px_40px_rgba(11,28,48,0.06)] transition-shadow cursor-pointer">
+<div class="flex items-start gap-4">
+<div class="p-3 bg-surface-container-low rounded-lg text-primary">
+<span class="material-symbols-outlined" data-icon="table_chart">table_chart</span>
+</div>
+<div>
+<h3 class="font-headline font-medium text-on-surface mb-1">Table 1 Generator</h3>
+<p class="text-sm font-body text-on-surface-variant leading-relaxed">Baseline characteristics summary</p>
+</div>
+</div>
+</div>
+<!-- Skill Card 2 (Active) -->
+<div class="bg-surface-container-lowest p-6 rounded-xl border border-primary/20 relative shadow-[0_12px_40px_rgba(11,28,48,0.06)]">
+<div class="absolute -left-2 top-1/2 -translate-y-1/2 w-1 h-8 bg-primary rounded-r-full"></div>
+<div class="flex items-start gap-4">
+<div class="p-3 bg-primary-fixed rounded-lg text-primary">
+<span class="material-symbols-outlined" data-icon="ssid_chart" data-weight="fill" style="font-variation-settings: 'FILL' 1;">ssid_chart</span>
+</div>
+<div>
+<h3 class="font-headline font-medium text-primary mb-1">Logistic Regression</h3>
+<p class="text-sm font-body text-on-surface-variant leading-relaxed">Binary outcome modeling</p>
+</div>
+</div>
+</div>
+<!-- Skill Card 3 -->
+<div class="bg-surface-container-lowest p-6 rounded-xl hover:shadow-[0_12px_40px_rgba(11,28,48,0.06)] transition-shadow cursor-pointer">
+<div class="flex items-start gap-4">
+<div class="p-3 bg-surface-container-low rounded-lg text-primary">
+<span class="material-symbols-outlined" data-icon="timeline">timeline</span>
+</div>
+<div>
+<h3 class="font-headline font-medium text-on-surface mb-1">Kaplan-Meier</h3>
+<p class="text-sm font-body text-on-surface-variant leading-relaxed">Survival analysis estimates</p>
+</div>
+</div>
+</div>
+<!-- Skill Card 4 -->
+<div class="bg-surface-container-lowest p-6 rounded-xl hover:shadow-[0_12px_40px_rgba(11,28,48,0.06)] transition-shadow cursor-pointer">
+<div class="flex items-start gap-4">
+<div class="p-3 bg-surface-container-low rounded-lg text-primary">
+<span class="material-symbols-outlined" data-icon="area_chart">area_chart</span>
+</div>
+<div>
+<h3 class="font-headline font-medium text-on-surface mb-1">ROC/AUC</h3>
+<p class="text-sm font-body text-on-surface-variant leading-relaxed">Model discrimination evaluation</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Right Column: Configuration & Preview -->
+<div class="lg:col-span-8 flex flex-col gap-8">
+<!-- Configuration Form -->
+<div class="bg-surface-container-lowest p-8 rounded-xl shadow-[0_12px_40px_rgba(11,28,48,0.02)]">
+<h2 class="text-xl font-headline font-medium text-on-surface mb-6">Logistic Regression Parameters</h2>
+<div class="space-y-6">
+<!-- Outcome Variable -->
+<div>
+<label class="block text-sm font-label font-medium text-on-surface mb-2">Outcome Variable</label>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline-variant" data-icon="search">search</span>
+<input class="w-full pl-10 pr-4 py-2 bg-surface border border-outline-variant/30 rounded-lg text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary text-sm font-body" readonly="" type="text" value="30-Day Readmission (Binary)"/>
+<span class="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-outline-variant" data-icon="expand_more">expand_more</span>
+</div>
+</div>
+<!-- Explanatory Variables -->
+<div>
+<div class="flex justify-between items-end mb-2">
+<label class="block text-sm font-label font-medium text-on-surface">Explanatory Variables</label>
+<span class="text-xs text-on-surface-variant">3 Selected</span>
+</div>
+<div class="bg-surface border border-outline-variant/20 rounded-lg p-2 min-h-[100px] flex flex-wrap gap-2 content-start">
+<div class="bg-surface-container-high text-on-surface px-3 py-1.5 rounded-full text-sm flex items-center gap-2">
+                                            HbA1c Baseline
+                                            <span class="material-symbols-outlined text-sm cursor-pointer hover:text-error" data-icon="close">close</span>
+</div>
+<div class="bg-surface-container-high text-on-surface px-3 py-1.5 rounded-full text-sm flex items-center gap-2">
+                                            Age at Admission
+                                            <span class="material-symbols-outlined text-sm cursor-pointer hover:text-error" data-icon="close">close</span>
+</div>
+<div class="bg-surface-container-high text-on-surface px-3 py-1.5 rounded-full text-sm flex items-center gap-2">
+                                            Insulin Regimen Type
+                                            <span class="material-symbols-outlined text-sm cursor-pointer hover:text-error" data-icon="close">close</span>
+</div>
+<input class="flex-1 bg-transparent border-none outline-none focus:ring-0 text-sm min-w-[150px] p-1.5" placeholder="Add variable..." type="text"/>
+</div>
+</div>
+<!-- Adjustment Variables -->
+<div>
+<label class="block text-sm font-label font-medium text-on-surface mb-2">Adjustment Variables (Covariates)</label>
+<div class="bg-surface border border-outline-variant/20 rounded-lg p-2 min-h-[60px] flex flex-wrap gap-2 content-start">
+<div class="bg-surface-container-high text-on-surface px-3 py-1.5 rounded-full text-sm flex items-center gap-2">
+                                            BMI Category
+                                            <span class="material-symbols-outlined text-sm cursor-pointer hover:text-error" data-icon="close">close</span>
+</div>
+<input class="flex-1 bg-transparent border-none outline-none focus:ring-0 text-sm min-w-[150px] p-1.5" placeholder="Add covariate..." type="text"/>
+</div>
+</div>
+<div class="pt-4 flex justify-end">
+<button class="bg-gradient-to-r from-primary to-primary-container text-on-primary px-6 py-2.5 rounded-md text-sm font-medium shadow-sm hover:opacity-90 transition-opacity flex items-center gap-2">
+<span class="material-symbols-outlined" data-icon="play_arrow">play_arrow</span>
+                                        Execute Model
+                                    </button>
+</div>
+</div>
+</div>
+<!-- Results Preview Section -->
+<div class="bg-surface-container-low p-8 rounded-xl relative overflow-hidden group">
+<!-- Overlay to suggest this is a preview or waiting state if execution hasn't happened, but we'll show it as partially rendered for UI purposes -->
+<div class="flex justify-between items-center mb-6">
+<h2 class="text-xl font-headline font-medium text-on-surface">Results Preview</h2>
+<span class="bg-tertiary-container text-on-tertiary text-xs font-label uppercase tracking-wide px-2 py-1 rounded">Draft</span>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-8 opacity-80 group-hover:opacity-100 transition-opacity">
+<!-- Mock Data Table -->
+<div class="bg-surface-container-lowest rounded-lg p-4">
+<h4 class="text-sm font-label font-medium text-on-surface-variant mb-4">Odds Ratios (95% CI)</h4>
+<div class="space-y-3">
+<div class="flex justify-between items-center text-sm font-body border-b border-outline-variant/10 pb-2">
+<span class="text-on-surface">HbA1c Baseline</span>
+<span class="text-on-surface font-medium">1.45 (1.12 - 1.88)</span>
+</div>
+<div class="flex justify-between items-center text-sm font-body border-b border-outline-variant/10 pb-2">
+<span class="text-on-surface">Age at Admission</span>
+<span class="text-on-surface font-medium">1.05 (1.02 - 1.08)</span>
+</div>
+<div class="flex justify-between items-center text-sm font-body">
+<span class="text-on-surface">Insulin Regimen</span>
+<span class="text-on-surface font-medium">0.85 (0.71 - 1.02)</span>
+</div>
+</div>
+</div>
+<!-- Mock Chart Area -->
+<div class="bg-surface-container-lowest rounded-lg p-4 flex flex-col justify-center items-center min-h-[160px] relative">
+<h4 class="text-sm font-label font-medium text-on-surface-variant absolute top-4 left-4">Forest Plot</h4>
+<!-- Abstract representation of a chart -->
+<div class="w-full px-8 mt-6 space-y-4">
+<div class="relative h-4 flex items-center">
+<div class="absolute left-1/2 w-0.5 h-full bg-outline-variant/30"></div>
+<div class="w-2/3 h-1 bg-primary/40 rounded-full mx-auto relative ml-auto mr-12">
+<div class="absolute top-1/2 left-1/2 -translate-y-1/2 -translate-x-1/2 w-2 h-2 bg-primary rounded-full"></div>
+</div>
+</div>
+<div class="relative h-4 flex items-center">
+<div class="absolute left-1/2 w-0.5 h-full bg-outline-variant/30"></div>
+<div class="w-1/2 h-1 bg-primary/40 rounded-full mx-auto relative ml-auto mr-8">
+<div class="absolute top-1/2 left-1/3 -translate-y-1/2 -translate-x-1/2 w-2 h-2 bg-primary rounded-full"></div>
+</div>
+</div>
+<div class="relative h-4 flex items-center">
+<div class="absolute left-1/2 w-0.5 h-full bg-outline-variant/30"></div>
+<div class="w-3/4 h-1 bg-outline-variant/40 rounded-full mx-auto relative ml-4 mr-auto">
+<div class="absolute top-1/2 left-2/3 -translate-y-1/2 -translate-x-1/2 w-2 h-2 bg-outline-variant rounded-full"></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Footer Navigation -->
+<div class="flex justify-between items-center pt-8 mt-8 border-t border-outline-variant/10">
+<button class="text-secondary hover:bg-surface-container-high px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2">
+<span class="material-symbols-outlined" data-icon="arrow_back">arrow_back</span>
+                        Previous Step
+                    </button>
+<button class="bg-primary text-on-primary px-6 py-2 rounded-md text-sm font-medium shadow-sm hover:opacity-90 transition-opacity flex items-center gap-2">
+                        Review Results
+                        <span class="material-symbols-outlined" data-icon="arrow_forward">arrow_forward</span>
+</button>
+</div>
+</div>
+</main>
+</div>
+</body></html>

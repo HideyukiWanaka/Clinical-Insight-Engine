@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>AI Synthesis - Meridian Clinical</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "surface-container-lowest": "#ffffff",
+                    "on-secondary-container": "#4d607e",
+                    "on-secondary": "#ffffff",
+                    "on-error-container": "#93000a",
+                    "outline-variant": "#c2c6d3",
+                    "on-tertiary-container": "#ffbb93",
+                    "on-surface-variant": "#424751",
+                    "on-error": "#ffffff",
+                    "surface-container-low": "#eff4ff",
+                    "on-tertiary": "#ffffff",
+                    "secondary": "#4d5f7e",
+                    "on-tertiary-fixed": "#321300",
+                    "surface-variant": "#d3e4fe",
+                    "secondary-container": "#c8dbff",
+                    "on-secondary-fixed": "#061c37",
+                    "primary": "#003e78",
+                    "inverse-surface": "#213145",
+                    "surface-tint": "#1e5fa9",
+                    "on-primary-fixed-variant": "#004788",
+                    "surface-container-highest": "#d3e4fe",
+                    "secondary-fixed-dim": "#b4c7ea",
+                    "on-primary": "#ffffff",
+                    "tertiary-fixed-dim": "#ffb68a",
+                    "surface-container": "#e5eeff",
+                    "on-primary-container": "#adcbff",
+                    "surface-container-high": "#dce9ff",
+                    "surface": "#f8f9ff",
+                    "primary-container": "#0a559f",
+                    "on-primary-fixed": "#001b3b",
+                    "on-secondary-fixed-variant": "#354765",
+                    "on-background": "#0b1c30",
+                    "on-surface": "#0b1c30",
+                    "surface-dim": "#cbdbf5",
+                    "outline": "#727782",
+                    "inverse-primary": "#a7c8ff",
+                    "on-tertiary-fixed-variant": "#743400",
+                    "error": "#ba1a1a",
+                    "tertiary-fixed": "#ffdbc8",
+                    "tertiary-container": "#8a4000",
+                    "secondary-fixed": "#d5e3ff",
+                    "background": "#f8f9ff",
+                    "surface-bright": "#f8f9ff",
+                    "primary-fixed": "#d5e3ff",
+                    "primary-fixed-dim": "#a7c8ff",
+                    "error-container": "#ffdad6",
+                    "tertiary": "#672e00",
+                    "inverse-on-surface": "#eaf1ff"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+            },
+            "spacing": {},
+            "fontFamily": {
+                    "headline": ["Inter"],
+                    "body": ["Inter"],
+                    "label": ["Inter"],
+                    "mono": ["Fira Code", "monospace"]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        body { font-family: 'Inter', sans-serif; background-color: #f8f9ff; color: #0b1c30; }
+        .glass-panel { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(12px); }
+        .ambient-shadow { box-shadow: 0 12px 40px rgba(11, 28, 48, 0.06); }
+        .ghost-border { border: 1px solid rgba(194, 198, 211, 0.15); }
+        .gradient-btn { background: linear-gradient(to right, #003e78, #0a559f); }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="flex h-screen overflow-hidden antialiased font-body bg-surface text-on-surface">
+<!-- SideNavBar -->
+<nav class="h-screen w-64 fixed left-0 top-0 bg-[#eff4ff] dark:bg-slate-900 flex flex-col py-8 space-y-2 z-20 transition-all">
+<div class="px-8 mb-8 flex items-center space-x-3">
+<div class="w-10 h-10 rounded-full bg-primary-container text-on-primary flex items-center justify-center font-bold text-lg">
+<span class="material-symbols-outlined" data-icon="hub">hub</span>
+</div>
+<div>
+<h1 class="text-lg font-semibold text-[#0b1c30] dark:text-slate-200 leading-tight">Clinical Intelligence</h1>
+<p class="text-xs text-on-surface-variant">Protocol v4.2.1</p>
+</div>
+</div>
+<div class="flex-1 px-0 flex flex-col gap-1">
+<a class="flex items-center space-x-3 text-sm font-medium tracking-wide uppercase label-md text-[#424751] dark:text-slate-400 pl-8 py-3 hover:text-[#003e78] dark:hover:text-white transition-all group" href="#">
+<span class="material-symbols-outlined text-xl group-hover:translate-x-1 duration-300" data-icon="clinical_notes">clinical_notes</span>
+<span class="group-hover:translate-x-1 duration-300">Definition</span>
+</a>
+<!-- Active State -->
+<a class="flex items-center space-x-3 text-sm font-medium tracking-wide uppercase label-md bg-white dark:bg-slate-800 text-[#003e78] dark:text-blue-300 rounded-l-full ml-4 pl-4 py-3 shadow-sm transition-all relative" href="#">
+<span class="material-symbols-outlined text-xl" data-icon="psychology" style="font-variation-settings: 'FILL' 1;">psychology</span>
+<span>AI Synthesis</span>
+<div class="absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-6 bg-primary rounded-l-full"></div>
+</a>
+<a class="flex items-center space-x-3 text-sm font-medium tracking-wide uppercase label-md text-[#424751] dark:text-slate-400 pl-8 py-3 hover:text-[#003e78] dark:hover:text-white transition-all group" href="#">
+<span class="material-symbols-outlined text-xl group-hover:translate-x-1 duration-300" data-icon="tune">tune</span>
+<span class="group-hover:translate-x-1 duration-300">Parameters</span>
+</a>
+<a class="flex items-center space-x-3 text-sm font-medium tracking-wide uppercase label-md text-[#424751] dark:text-slate-400 pl-8 py-3 hover:text-[#003e78] dark:hover:text-white transition-all group" href="#">
+<span class="material-symbols-outlined text-xl group-hover:translate-x-1 duration-300" data-icon="play_circle">play_circle</span>
+<span class="group-hover:translate-x-1 duration-300">Execution</span>
+</a>
+<a class="flex items-center space-x-3 text-sm font-medium tracking-wide uppercase label-md text-[#424751] dark:text-slate-400 pl-8 py-3 hover:text-[#003e78] dark:hover:text-white transition-all group" href="#">
+<span class="material-symbols-outlined text-xl group-hover:translate-x-1 duration-300" data-icon="fact_check">fact_check</span>
+<span class="group-hover:translate-x-1 duration-300">Review</span>
+</a>
+</div>
+<div class="px-6 mt-auto">
+<button class="w-full py-3 px-4 rounded-lg bg-surface-container-lowest text-primary text-sm font-medium shadow-sm hover:bg-surface transition-colors flex items-center justify-center space-x-2 border border-outline-variant/20">
+<span class="material-symbols-outlined text-lg" data-icon="add">add</span>
+<span>New Analysis</span>
+</button>
+</div>
+</nav>
+<!-- Main Content Canvas -->
+<main class="ml-64 flex-1 flex flex-col h-screen overflow-hidden bg-surface relative z-10">
+<!-- Header / Stepper Area -->
+<header class="px-10 py-8 pb-4 flex flex-col gap-6 z-10">
+<div class="flex justify-between items-end">
+<div>
+<h2 class="text-3xl font-headline tracking-tight font-medium text-on-surface">Diabetes Patient Outcome Study</h2>
+<p class="text-on-surface-variant mt-1">Data Preparation &amp; Pipeline Generation</p>
+</div>
+<div class="flex space-x-4">
+<button class="w-10 h-10 rounded-full bg-surface-container-low flex items-center justify-center text-on-surface-variant hover:bg-surface-container transition-colors">
+<span class="material-symbols-outlined" data-icon="more_horiz">more_horiz</span>
+</button>
+<button class="gradient-btn text-on-primary px-6 py-2.5 rounded-lg font-medium text-sm shadow-sm hover:shadow-md transition-shadow flex items-center space-x-2">
+<span>Approve &amp; Save</span>
+<span class="material-symbols-outlined text-lg" data-icon="arrow_forward">arrow_forward</span>
+</button>
+</div>
+</div>
+<!-- Stepper -->
+<div class="flex items-center max-w-2xl bg-surface-container-low p-2 rounded-xl">
+<div class="flex items-center flex-1">
+<div class="w-8 h-8 rounded-full bg-surface-container-lowest text-primary flex items-center justify-center font-medium text-sm shadow-sm">
+<span class="material-symbols-outlined text-lg" data-icon="check">check</span>
+</div>
+<span class="ml-3 text-sm font-medium text-on-surface-variant hidden sm:block">Definition</span>
+<div class="flex-1 h-0.5 bg-outline-variant/30 mx-4"></div>
+</div>
+<div class="flex items-center flex-1">
+<div class="w-8 h-8 rounded-full bg-primary text-on-primary flex items-center justify-center font-medium text-sm shadow-sm ring-4 ring-primary/10">
+                        2
+                    </div>
+<span class="ml-3 text-sm font-medium text-on-surface hidden sm:block">AI Synthesis</span>
+<div class="flex-1 h-0.5 bg-outline-variant/30 mx-4"></div>
+</div>
+<div class="flex items-center flex-1">
+<div class="w-8 h-8 rounded-full bg-surface-container-highest text-on-surface-variant flex items-center justify-center font-medium text-sm">
+                        3
+                    </div>
+<span class="ml-3 text-sm font-medium text-on-surface-variant hidden sm:block">Parameters</span>
+<div class="flex-1 h-0.5 bg-outline-variant/30 mx-4"></div>
+</div>
+<div class="flex items-center">
+<div class="w-8 h-8 rounded-full bg-surface-container-highest text-on-surface-variant flex items-center justify-center font-medium text-sm">
+<span class="material-symbols-outlined text-lg" data-icon="more_horiz">more_horiz</span>
+</div>
+</div>
+</div>
+</header>
+<!-- 3-Column Bento Layout -->
+<div class="flex-1 overflow-y-auto px-10 pb-10 hide-scrollbar">
+<div class="grid grid-cols-12 gap-6 h-full min-h-[600px]">
+<!-- Col 1: Instructions & Alerts (Span 3) -->
+<div class="col-span-12 lg:col-span-3 flex flex-col gap-6">
+<!-- Alert Card -->
+<div class="bg-error-container/40 rounded-xl p-5 flex flex-col gap-3 relative overflow-hidden group">
+<div class="absolute top-0 left-0 w-1 h-full bg-error opacity-70"></div>
+<div class="flex items-center space-x-2 text-error">
+<span class="material-symbols-outlined text-lg" data-icon="warning">warning</span>
+<h3 class="text-sm font-bold uppercase tracking-wider">Missing Value Summary</h3>
+</div>
+<div class="space-y-2">
+<div class="flex justify-between items-center bg-surface-container-lowest/60 px-3 py-2 rounded-md">
+<span class="text-sm font-medium text-on-surface">BMI</span>
+<span class="text-xs font-bold text-error bg-error/10 px-2 py-0.5 rounded">12% missing</span>
+</div>
+<div class="flex justify-between items-center bg-surface-container-lowest/60 px-3 py-2 rounded-md">
+<span class="text-sm font-medium text-on-surface">Age</span>
+<span class="text-xs font-bold text-tertiary bg-tertiary/10 px-2 py-0.5 rounded">2% missing</span>
+</div>
+</div>
+</div>
+<!-- Instructions Card -->
+<div class="bg-surface-container-lowest rounded-xl p-6 ambient-shadow flex-1 flex flex-col relative group">
+<div class="flex items-center justify-between mb-4">
+<h3 class="text-sm font-bold uppercase tracking-wider text-on-surface flex items-center gap-2">
+<span class="material-symbols-outlined text-primary" data-icon="chat">chat</span>
+                                Natural Language Instructions
+                            </h3>
+</div>
+<div class="flex-1 relative">
+<textarea class="w-full h-full min-h-[150px] resize-none bg-surface-container-low border-0 rounded-lg p-4 text-sm text-on-surface leading-relaxed focus:ring-2 focus:ring-primary/20 transition-shadow" placeholder="Describe your data preparation steps...">Exclude rows where BMI is missing. For Age, impute with the median value.</textarea>
+<div class="absolute bottom-3 right-3 flex items-center space-x-2 text-xs text-on-surface-variant bg-surface-container-lowest px-2 py-1 rounded shadow-sm">
+<span class="material-symbols-outlined text-[16px]" data-icon="auto_awesome">auto_awesome</span>
+<span>AI Ready</span>
+</div>
+</div>
+<button class="mt-4 w-full bg-surface-container-low hover:bg-surface-container text-primary font-medium text-sm py-3 rounded-lg flex items-center justify-center space-x-2 transition-colors border border-primary/10">
+<span class="material-symbols-outlined text-lg" data-icon="code">code</span>
+<span>Generate R Code</span>
+</button>
+</div>
+</div>
+<!-- Col 2: Code Editor (Span 6) -->
+<div class="col-span-12 lg:col-span-6 bg-surface-container-lowest rounded-xl p-0 ambient-shadow flex flex-col overflow-hidden">
+<div class="px-6 py-4 border-b border-outline-variant/10 flex justify-between items-center bg-surface-container-lowest">
+<div class="flex items-center space-x-3">
+<span class="material-symbols-outlined text-primary" data-icon="terminal">terminal</span>
+<h3 class="text-sm font-bold uppercase tracking-wider text-on-surface">AI-Generated Pipeline (R Code)</h3>
+</div>
+<div class="flex items-center space-x-3">
+<span class="text-xs font-medium text-on-surface-variant bg-surface-container-low px-2.5 py-1 rounded-md border border-outline-variant/20 flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]" data-icon="shuffle">shuffle</span>
+                                Seed: 42
+                            </span>
+<button class="text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined text-lg" data-icon="content_copy">content_copy</span>
+</button>
+</div>
+</div>
+<div class="flex-1 bg-[#1e1e1e] p-6 overflow-auto font-mono text-sm leading-relaxed text-[#d4d4d4]">
+<div class="flex">
+<div class="text-[#858585] text-right pr-4 select-none flex flex-col space-y-1">
+<span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span>
+</div>
+<div class="flex-1 flex flex-col space-y-1">
+<div><span class="text-[#c586c0]">library</span>(<span class="text-[#ce9178]">dplyr</span>)</div>
+<div><span class="text-[#6a9955]"># Data preparation pipeline generated by Clinical AI</span></div>
+<div>df_clean <span class="text-[#569cd6]">&lt;-</span> df_raw <span class="text-[#569cd6]">%&gt;%</span></div>
+<div class="bg-[#2d2d2d] -mx-2 px-2 py-0.5 rounded border-l-2 border-[#569cd6]">
+                                      <span class="text-[#dcdcaa]">filter</span>(!<span class="text-[#dcdcaa]">is.na</span>(BMI)) <span class="text-[#569cd6]">%&gt;%</span> <span class="text-[#6a9955]"># Exclude missing BMI</span>
+</div>
+<div class="bg-[#2d2d2d] -mx-2 px-2 py-0.5 rounded border-l-2 border-[#569cd6]">
+                                      <span class="text-[#dcdcaa]">mutate</span>(
+                                </div>
+<div class="bg-[#2d2d2d] -mx-2 px-2 py-0.5 rounded border-l-2 border-[#569cd6]">
+                                        Age = <span class="text-[#dcdcaa]">ifelse</span>(<span class="text-[#dcdcaa]">is.na</span>(Age), <span class="text-[#dcdcaa]">median</span>(Age, na.rm=T), Age)
+                                </div>
+<div class="bg-[#2d2d2d] -mx-2 px-2 py-0.5 rounded border-l-2 border-[#569cd6]">
+                                      ) <span class="text-[#6a9955]"># Impute Age with median</span>
+</div>
+<div> </div>
+<div><span class="text-[#dcdcaa]">summary</span>(df_clean)</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Col 3: Logs (Span 3) -->
+<div class="col-span-12 lg:col-span-3 bg-[#0b1c30] rounded-xl flex flex-col overflow-hidden ambient-shadow">
+<div class="px-5 py-4 border-b border-white/10 flex items-center space-x-2 bg-[#061222]">
+<span class="material-symbols-outlined text-inverse-primary text-sm" data-icon="history">history</span>
+<h3 class="text-xs font-bold uppercase tracking-wider text-inverse-on-surface">Execution Preview</h3>
+<div class="ml-auto w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
+</div>
+<div class="flex-1 p-5 overflow-auto font-mono text-xs leading-relaxed text-[#8ca4c4] space-y-3">
+<div class="flex flex-col gap-1">
+<span class="text-[#4d607e]">[10:24:05]</span>
+<span class="text-white">Initial N = 4,200</span>
+</div>
+<div class="flex flex-col gap-1">
+<span class="text-[#4d607e]">[10:24:06]</span>
+<span>Applying BMI exclusion...</span>
+</div>
+<div class="flex flex-col gap-1 border-l-2 border-primary-fixed pl-3 ml-1 py-1">
+<span class="text-[#4d607e]">[10:24:07]</span>
+<span class="text-primary-fixed-dim">[After BMI exclusion] N = 3,696 (504 rows removed)</span>
+</div>
+<div class="flex flex-col gap-1">
+<span class="text-[#4d607e]">[10:24:08]</span>
+<span>Imputing missing Age values...</span>
+</div>
+<div class="flex flex-col gap-1 pt-2 mt-2 border-t border-white/10">
+<span class="text-[#4d607e]">[10:24:09]</span>
+<span class="text-[#a7c8ff] font-bold">Result: N = 3,696</span>
+<span class="text-emerald-400 mt-1">✓ Pipeline executed successfully</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+</body></html>

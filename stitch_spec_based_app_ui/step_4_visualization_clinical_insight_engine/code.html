@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Clinical Intelligence - AI Gen</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-tertiary-fixed": "#321300",
+                        "on-tertiary-container": "#ffbb93",
+                        "on-secondary-fixed-variant": "#354765",
+                        "tertiary-fixed-dim": "#ffb68a",
+                        "primary-fixed-dim": "#a7c8ff",
+                        "on-primary-container": "#adcbff",
+                        "on-secondary-fixed": "#061c37",
+                        "secondary-container": "#c8dbff",
+                        "error-container": "#ffdad6",
+                        "surface-container-lowest": "#ffffff",
+                        "surface": "#f8f9ff",
+                        "inverse-primary": "#a7c8ff",
+                        "surface-container-highest": "#d3e4fe",
+                        "surface-tint": "#1e5fa9",
+                        "inverse-surface": "#213145",
+                        "on-tertiary-fixed-variant": "#743400",
+                        "surface-bright": "#f8f9ff",
+                        "surface-container-high": "#dce9ff",
+                        "outline-variant": "#c2c6d3",
+                        "on-tertiary": "#ffffff",
+                        "surface-variant": "#d3e4fe",
+                        "on-secondary": "#ffffff",
+                        "tertiary-fixed": "#ffdbc8",
+                        "primary-container": "#0a559f",
+                        "on-primary-fixed-variant": "#004788",
+                        "on-error": "#ffffff",
+                        "on-background": "#0b1c30",
+                        "on-surface-variant": "#424751",
+                        "background": "#f8f9ff",
+                        "outline": "#727782",
+                        "tertiary-container": "#8a4000",
+                        "surface-container": "#e5eeff",
+                        "secondary": "#4d5f7e",
+                        "surface-container-low": "#eff4ff",
+                        "primary-fixed": "#d5e3ff",
+                        "on-secondary-container": "#4d607e",
+                        "on-primary": "#ffffff",
+                        "tertiary": "#672e00",
+                        "on-error-container": "#93000a",
+                        "surface-dim": "#cbdbf5",
+                        "secondary-fixed-dim": "#b4c7ea",
+                        "secondary-fixed": "#d5e3ff",
+                        "error": "#ba1a1a",
+                        "primary": "#003e78",
+                        "on-primary-fixed": "#001b3b",
+                        "inverse-on-surface": "#eaf1ff",
+                        "on-surface": "#0b1c30"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {},
+                    "fontFamily": {
+                        "headline": ["Inter"],
+                        "body": ["Inter"],
+                        "label": ["Inter"]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        body { font-family: 'Inter', sans-serif; background-color: #f8f9ff; color: #0b1c30; }
+        .glass-panel { background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(12px); }
+        .gradient-btn { background: linear-gradient(to right, #003e78, #0a559f); }
+        .ambient-shadow { box-shadow: 0 12px 40px rgba(11, 28, 48, 0.06); }
+        .ghost-border { outline: 1px solid rgba(194, 198, 211, 0.15); }
+        
+        /* Custom Scrollbar for code blocks */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #c2c6d3; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #727782; }
+    </style>
+</head>
+<body class="bg-surface text-on-surface h-screen overflow-hidden flex flex-col">
+<!-- TopAppBar -->
+<header class="bg-[#f8f9ff]/80 dark:bg-[#0b1c30]/80 backdrop-blur-xl docked full-width top-0 z-50 shadow-[0_12px_40px_rgba(11,28,48,0.06)] flex justify-between items-center w-full px-6 h-16 shrink-0">
+<div class="flex items-center gap-8">
+<div class="text-lg font-bold tracking-tighter text-[#0b1c30] dark:text-white">Clinical Intelligence</div>
+<nav class="hidden md:flex gap-6 h-full items-center">
+<a class="font-['Inter'] font-medium tracking-tight text-sm text-[#424751] dark:text-slate-400 hover:text-[#0A559F] transition-colors hover:bg-[#eff4ff] dark:hover:bg-[#162a45] rounded-md transition-all active:scale-95 duration-200 cursor-pointer px-3 py-2" href="#">Import</a>
+<a class="font-['Inter'] font-medium tracking-tight text-sm text-[#424751] dark:text-slate-400 hover:text-[#0A559F] transition-colors hover:bg-[#eff4ff] dark:hover:bg-[#162a45] rounded-md transition-all active:scale-95 duration-200 cursor-pointer px-3 py-2" href="#">QC</a>
+<a class="font-['Inter'] font-medium tracking-tight text-sm text-[#424751] dark:text-slate-400 hover:text-[#0A559F] transition-colors hover:bg-[#eff4ff] dark:hover:bg-[#162a45] rounded-md transition-all active:scale-95 duration-200 cursor-pointer px-3 py-2" href="#">Analysis</a>
+<a class="font-['Inter'] font-medium tracking-tight text-sm text-[#0A559F] dark:text-blue-400 font-bold border-b-2 border-[#0A559F] pb-1 h-full flex items-center px-3" href="#">AI Gen</a>
+<a class="font-['Inter'] font-medium tracking-tight text-sm text-[#424751] dark:text-slate-400 hover:text-[#0A559F] transition-colors hover:bg-[#eff4ff] dark:hover:bg-[#162a45] rounded-md transition-all active:scale-95 duration-200 cursor-pointer px-3 py-2" href="#">Export</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<button class="text-[#0A559F] dark:text-blue-400 font-medium text-sm hover:bg-[#eff4ff] dark:hover:bg-[#162a45] px-4 py-2 rounded-md transition-all">Run Analysis</button>
+<div class="flex items-center gap-2">
+<button class="p-2 hover:bg-[#eff4ff] dark:hover:bg-[#162a45] rounded-full transition-all text-[#0b1c30] dark:text-white">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<button class="p-2 hover:bg-[#eff4ff] dark:hover:bg-[#162a45] rounded-full transition-all text-[#0b1c30] dark:text-white">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+</button>
+</div>
+<div class="w-8 h-8 rounded-full bg-surface-variant overflow-hidden ml-2">
+<img alt="User Profile" class="w-full h-full object-cover" data-alt="professional medical researcher female smiling confident studio lighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBDcSv62OHQMbT6IR1G4zZ466NAfAC6BMlKpovwlvfCJDVKSOpwhap9rT8tni7lyRkynWP_cJ1WsOW0VQa0INipHPIzvAX8c4zOo4FKArdeAVuZm3xu-EYE5e8KeIu3GK17kZZ-S-c9A2wq_tJnuEaKwx3AZlThLuUZMuQiQZeg8BcavjtI5nt3G-oAAgM68oqTdDZMF4o_3fRndb3jSEqn3aO603rrxKRVabFHYvFik8vihgAMYrtZcJ37fs6Nh_Me-hrPRQutchg"/>
+</div>
+</div>
+</header>
+<div class="flex flex-1 overflow-hidden">
+<!-- Main Canvas -->
+<main class="flex-1 overflow-y-auto p-8 flex flex-col gap-8">
+<!-- Wizard Header -->
+<div class="flex justify-between items-end pb-6 ghost-border border-b-0 border-l-0 border-r-0">
+<div>
+<div class="text-label-md text-on-surface-variant uppercase tracking-widest mb-2">Step 4 of 5</div>
+<h1 class="text-display-sm font-headline font-semibold text-on-background tracking-tight">Execution: Visual Reference</h1>
+<p class="text-body-md text-on-surface-variant mt-2 max-w-2xl leading-relaxed">Upload a reference chart to guide the AI in generating a matching ggplot2 visualization based on your active dataset.</p>
+</div>
+<div class="flex gap-4">
+<button class="px-6 py-2 rounded-md text-secondary hover:bg-surface-container-high transition-colors text-sm font-medium">Cancel</button>
+<button class="gradient-btn text-on-primary px-6 py-2 rounded-md ambient-shadow hover:opacity-90 transition-opacity text-sm font-medium">Approve &amp; Save to Script</button>
+</div>
+</div>
+<!-- Bento Grid Layout -->
+<div class="grid grid-cols-12 gap-8">
+<!-- Left Column: Input & Settings (5 cols) -->
+<div class="col-span-5 flex flex-col gap-8">
+<!-- Reference Image Upload -->
+<section class="bg-surface-container-lowest rounded-xl p-8 ambient-shadow relative group overflow-hidden">
+<div class="absolute inset-0 bg-surface-container-high/20 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
+<h2 class="text-title-md font-headline font-semibold mb-4 text-on-background">Reference Image</h2>
+<div class="border-2 border-dashed border-outline-variant/40 rounded-lg p-8 flex flex-col items-center justify-center text-center bg-surface hover:bg-surface-container-low transition-colors cursor-pointer">
+<span class="material-symbols-outlined text-4xl text-primary mb-3" data-icon="upload_file">upload_file</span>
+<p class="text-body-sm font-medium text-on-surface mb-1">Drag and drop your reference chart here</p>
+<p class="text-label-sm text-on-surface-variant mb-4">PNG, JPG or PDF (Max 10MB)</p>
+<button class="text-primary text-sm font-medium hover:underline">Browse files</button>
+</div>
+</section>
+<!-- Variable Mapping -->
+<section class="bg-surface-container-lowest rounded-xl p-8 ambient-shadow">
+<h2 class="text-title-md font-headline font-semibold mb-6 text-on-background">Variable Mapping</h2>
+<div class="space-y-5">
+<div class="flex flex-col gap-2">
+<label class="text-label-sm font-medium text-on-surface-variant uppercase tracking-wide">X-Axis Variable</label>
+<select class="w-full bg-surface-container-low border-none rounded-md text-body-sm text-on-surface p-3 focus:ring-1 focus:ring-primary">
+<option>Time (Months)</option>
+<option>Age</option>
+<option>Dosage</option>
+</select>
+</div>
+<div class="flex flex-col gap-2">
+<label class="text-label-sm font-medium text-on-surface-variant uppercase tracking-wide">Y-Axis Variable</label>
+<select class="w-full bg-surface-container-low border-none rounded-md text-body-sm text-on-surface p-3 focus:ring-1 focus:ring-primary">
+<option>Survival Probability</option>
+<option>Tumor Volume</option>
+<option>Response Rate</option>
+</select>
+</div>
+<div class="flex flex-col gap-2">
+<label class="text-label-sm font-medium text-on-surface-variant uppercase tracking-wide">Grouping / Strata</label>
+<select class="w-full bg-surface-container-low border-none rounded-md text-body-sm text-on-surface p-3 focus:ring-1 focus:ring-primary">
+<option>Treatment Group (Arm A vs B)</option>
+<option>Gender</option>
+<option>Biomarker Status</option>
+</select>
+</div>
+</div>
+</section>
+<!-- Output Settings -->
+<section class="bg-surface-container-lowest rounded-xl p-8 ambient-shadow">
+<h2 class="text-title-md font-headline font-semibold mb-6 text-on-background">Output Specifications</h2>
+<div class="flex gap-6">
+<div class="flex-1 flex flex-col gap-2">
+<label class="text-label-sm font-medium text-on-surface-variant uppercase tracking-wide">Format</label>
+<select class="w-full bg-surface-container-low border-none rounded-md text-body-sm text-on-surface p-3 focus:ring-1 focus:ring-primary">
+<option>High-Res PNG</option>
+<option>TIFF (Publication)</option>
+<option>SVG (Vector)</option>
+</select>
+</div>
+<div class="flex-1 flex flex-col gap-2">
+<label class="text-label-sm font-medium text-on-surface-variant uppercase tracking-wide">Resolution</label>
+<select class="w-full bg-surface-container-low border-none rounded-md text-body-sm text-on-surface p-3 focus:ring-1 focus:ring-primary">
+<option>300 DPI</option>
+<option>600 DPI (Journal Req.)</option>
+</select>
+</div>
+</div>
+</section>
+</div>
+<!-- Right Column: AI Output Preview (7 cols) -->
+<div class="col-span-7 flex flex-col gap-8 h-full">
+<section class="bg-surface-container-lowest rounded-xl p-0 ambient-shadow flex flex-col h-full overflow-hidden">
+<!-- Header Area -->
+<div class="p-6 border-b border-outline-variant/15 flex justify-between items-center bg-surface/50">
+<h2 class="text-title-md font-headline font-semibold text-on-background flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-xl" data-icon="auto_awesome">auto_awesome</span>
+                                Generated Output
+                            </h2>
+<div class="flex gap-2">
+<span class="px-3 py-1 rounded-full bg-tertiary-container/10 text-tertiary-container text-xs font-bold uppercase tracking-wide">Draft Ready</span>
+</div>
+</div>
+<!-- Content Canvas -->
+<div class="flex-1 flex flex-col p-6 gap-6 bg-surface">
+<!-- Chart Preview -->
+<div class="bg-white rounded-lg p-6 flex items-center justify-center min-h-[350px] relative ghost-border shadow-sm">
+<div class="absolute top-4 right-4 flex gap-2">
+<button class="p-1.5 bg-surface-container-low rounded text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined text-sm" data-icon="zoom_in">zoom_in</span>
+</button>
+<button class="p-1.5 bg-surface-container-low rounded text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined text-sm" data-icon="download">download</span>
+</button>
+</div>
+<!-- Placeholder for actual chart -->
+<img alt="Kaplan-Meier Curve generated preview" class="max-w-full max-h-full object-contain opacity-90" data-alt="clean precise medical data visualization graph kaplan meier survival curve blue and red lines white background high quality" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCT7lgwPM0_eKap4wIMZ2iDxVyn5G4bgl5fwI_05FQH3WOxO13MJ-wXucVabXRNcpXPP_Z3poNi6iYEAMOiY9jl-I3OXplvAsoTHumM2CeuPFzO2IBpII7QcOBSWgNoU64BeykfVsLmogxduG2k8Xpq-ZOM1TEtip_fWFYQPYLzWmZV0mlli1d2sulv37Ou9qHUUn73WdIZIu5CZkWTb-Fd8dGsIuiXa5WBMZb7b8HtT4DbJ_pnHkUiLW7QjJTjTz5-rp_oqnt_waE"/>
+</div>
+<!-- Code Snippet -->
+<div class="bg-[#0b1c30] rounded-lg overflow-hidden flex flex-col">
+<div class="bg-[#162a45] px-4 py-2 flex justify-between items-center">
+<span class="text-xs font-mono text-slate-300">R Script (ggplot2)</span>
+<button class="text-xs font-medium text-blue-400 hover:text-white flex items-center gap-1 transition-colors">
+<span class="material-symbols-outlined text-[14px]" data-icon="content_copy">content_copy</span>
+                                        Copy Code
+                                    </button>
+</div>
+<div class="p-4 overflow-x-auto text-sm font-mono text-slate-300 leading-relaxed whitespace-pre">
+<span class="text-blue-400">library</span>(survival)
+<span class="text-blue-400">library</span>(survminer)
+
+fit &lt;- <span class="text-blue-300">survfit</span>(Surv(time, status) ~ trt, data = clinical_data)
+
+<span class="text-blue-300">ggsurvplot</span>(fit,
+    data = clinical_data,
+    risk.table = <span class="text-orange-400">TRUE</span>,
+    pval = <span class="text-orange-400">TRUE</span>,
+    conf.int = <span class="text-orange-400">TRUE</span>,
+    palette = <span class="text-green-300">c</span>(<span class="text-green-200">"#0A559F"</span>, <span class="text-green-200">"#8A4000"</span>),
+    main = <span class="text-green-200">"Survival Analysis: Treatment vs Control"</span>,
+    xlab = <span class="text-green-200">"Time (Months)"</span>,
+    ylab = <span class="text-green-200">"Survival Probability"</span>,
+    ggtheme = <span class="text-blue-300">theme_minimal</span>()
+)</div>
+</div>
+</div>
+</section>
+</div>
+</div>
+</main>
+</div>
+</body></html>
