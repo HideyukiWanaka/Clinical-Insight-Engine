@@ -335,8 +335,8 @@ def _make_spr(
     total_tests: int = 5,
     failed_test_ids: list | None = None,
 ) -> MagicMock:
-    """Create a mock SkillPerformanceRecord (no spec to avoid import issues)."""
-    rec = MagicMock()
+    """Create a mock SkillPerformanceRecord."""
+    rec = MagicMock(spec=SkillPerformanceRecord)
     rec.reviewer_finding_ids = reviewer_finding_ids or []
     rec.passed_tests = passed_tests
     rec.total_tests = total_tests
@@ -345,17 +345,13 @@ def _make_spr(
     return rec
 
 
-def _make_session_factory(records: list):
-    """Return a session_factory callable that yields a mock session with records."""
-    @asynccontextmanager
-    async def _factory():
-        session = AsyncMock()
-        execute_result = MagicMock()
-        execute_result.scalars.return_value.all.return_value = records
-        session.execute = AsyncMock(return_value=execute_result)
-        yield session
-
-    return _factory
+@asynccontextmanager
+async def _session_with_records(records: list):
+    session = AsyncMock()
+    execute_result = MagicMock()
+    execute_result.scalars.return_value.all.return_value = records
+    session.execute = AsyncMock(return_value=execute_result)
+    yield session
 
 
 class TestRegressionCheckerSE001:
@@ -370,7 +366,10 @@ class TestRegressionCheckerSE001:
             _make_spr(reviewer_finding_ids=["CC-003"]),
         ]
 
-        checker = RegressionChecker(_make_session_factory(records))
+        async def factory():
+            return _session_with_records(records)
+
+        checker = RegressionChecker(factory)
         result = asyncio.get_event_loop().run_until_complete(
             checker.check_skill_triggers("statistics/t-test", "core")
         )
@@ -386,7 +385,10 @@ class TestRegressionCheckerSE001:
             _make_spr(reviewer_finding_ids=[]),
         ]
 
-        checker = RegressionChecker(_make_session_factory(records))
+        async def factory():
+            return _session_with_records(records)
+
+        checker = RegressionChecker(factory)
         result = asyncio.get_event_loop().run_until_complete(
             checker.check_skill_triggers("statistics/t-test", "core")
         )
@@ -406,7 +408,10 @@ class TestRegressionCheckerSE002:
             for _ in range(PASS_RATE_WINDOW)
         ]
 
-        checker = RegressionChecker(_make_session_factory(records))
+        async def factory():
+            return _session_with_records(records)
+
+        checker = RegressionChecker(factory)
         result = asyncio.get_event_loop().run_until_complete(
             checker.check_skill_triggers("statistics/t-test", "core")
         )
@@ -419,7 +424,10 @@ class TestRegressionCheckerSE002:
             for _ in range(PASS_RATE_WINDOW)
         ]
 
-        checker = RegressionChecker(_make_session_factory(records))
+        async def factory():
+            return _session_with_records(records)
+
+        checker = RegressionChecker(factory)
         result = asyncio.get_event_loop().run_until_complete(
             checker.check_skill_triggers("statistics/t-test", "core")
         )
@@ -437,7 +445,10 @@ class TestRegressionCheckerSE003:
             _make_spr(failed_test_ids=[]),
         ]
 
-        checker = RegressionChecker(_make_session_factory(records))
+        async def factory():
+            return _session_with_records(records)
+
+        checker = RegressionChecker(factory)
         result = asyncio.get_event_loop().run_until_complete(
             checker.check_skill_triggers("statistics/t-test", "core")
         )
@@ -448,14 +459,20 @@ class TestRegressionCheckerSE003:
             _make_spr(failed_test_ids=[]),  # latest
         ]
 
-        checker = RegressionChecker(_make_session_factory(records))
+        async def factory():
+            return _session_with_records(records)
+
+        checker = RegressionChecker(factory)
         result = asyncio.get_event_loop().run_until_complete(
             checker.check_skill_triggers("statistics/t-test", "core")
         )
         assert "SE-003" not in result
 
     def test_empty_records_returns_no_triggers(self) -> None:
-        checker = RegressionChecker(_make_session_factory([]))
+        async def factory():
+            return _session_with_records([])
+
+        checker = RegressionChecker(factory)
         result = asyncio.get_event_loop().run_until_complete(
             checker.check_skill_triggers("statistics/unknown", "core")
         )

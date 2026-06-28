@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Float,
     Index,
@@ -324,6 +325,112 @@ class SkillPerformanceRecord(_Base):
     )
 
 
+class SkillImprovementProposalRow(_Base):
+    """Persisted SkillImprovementProposal (ADR-0002 Phase 2–3).
+
+    One row per AI-generated improvement proposal.  Rows are INSERT-only
+    until a human reviews them; status and human_decision columns are then
+    updated exactly once.
+
+    Attributes:
+        id: Auto-generated UUID primary key.
+        proposal_id: Application-level UUID used as the stable external key.
+        generated_at: UTC datetime when the proposal was created.
+        target_skill_id: Fully-qualified skill identifier (e.g. "statistics/t-test").
+        target_namespace: ``"core"`` or ``"user"``.
+        current_version: Version string of the Skill at proposal time.
+        proposed_version: SemVer string after the proposed change is applied.
+        trigger_id: ``"SE-001"`` – ``"SE-004"`` that triggered this proposal.
+        trigger_evidence: JSON dict containing trigger evidence details.
+        proposed_changes: JSON list of change descriptors (diff-style).
+        human_review_required: Always ``True`` (ADR-0002 Principle 4).
+        status: Current lifecycle state of the proposal.
+        human_decision: JSON dict written when the proposal is reviewed.
+        reviewed_at: UTC datetime when the human reviewed the proposal.
+    """
+
+    __tablename__ = "skill_improvement_proposal"
+
+    __table_args__ = (
+        Index("ix_skill_improvement_proposal_skill_id", "target_skill_id"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid.uuid4()),
+        comment="UUID primary key (auto-generated)",
+    )
+    proposal_id: Mapped[str] = mapped_column(
+        String(36),
+        nullable=False,
+        unique=True,
+        comment="Application-level UUID for the proposal",
+    )
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        comment="UTC datetime when the proposal was generated",
+    )
+    target_skill_id: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+        comment="Fully-qualified skill identifier",
+    )
+    target_namespace: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        comment="core | user",
+    )
+    current_version: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        comment="Skill version at proposal time",
+    )
+    proposed_version: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        comment="SemVer string after the proposed change",
+    )
+    trigger_id: Mapped[str] = mapped_column(
+        String(8),
+        nullable=False,
+        comment="SE-001 | SE-002 | SE-003 | SE-004",
+    )
+    trigger_evidence: Mapped[dict | None] = mapped_column(
+        JSON,
+        nullable=True,
+        comment="JSON evidence dict from RegressionChecker",
+    )
+    proposed_changes: Mapped[list | None] = mapped_column(
+        JSON,
+        nullable=True,
+        comment="JSON list of diff-style change descriptors",
+    )
+    human_review_required: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        comment="Always True per ADR-0002 Principle 4",
+    )
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="pending_human_review",
+        comment="pending_human_review | approved | rejected | archived",
+    )
+    human_decision: Mapped[dict | None] = mapped_column(
+        JSON,
+        nullable=True,
+        comment="JSON dict written when the human reviews the proposal",
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="UTC datetime when the human reviewed the proposal",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Engine and session helpers
 # ---------------------------------------------------------------------------
@@ -418,6 +525,7 @@ __all__: list[str] = [
     "AuditLog",
     "WorkflowInstance",
     "SkillPerformanceRecord",
+    "SkillImprovementProposalRow",
     # Helpers
     "get_engine",
     "init_db",
