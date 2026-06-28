@@ -1,0 +1,13 @@
+pydantic>=2.0
+pydantic-settings>=2.0
+sqlalchemy>=2.0
+aiosqlite>=0.19
+httpx>=0.25
+keyring>=24.0
+pyyaml>=6.0
+jsonschema>=4.19
+
+[dev]
+pytest>=7.0
+pytest-asyncio>=0.21
+ruff>=0.1

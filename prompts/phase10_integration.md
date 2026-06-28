@@ -1,7 +1,18 @@
 # CIE Platform — Claude Code Implementation Prompts
 # Phase 10: Integration Tests & Final Verification
 # File: prompts/phase10_integration.md
-# Version: 1.0.0
+# Version: 1.1.0
+
+---
+
+## PROMPT 10-0: ブランチ作成
+
+```
+# Phase 9 が main に merge 済みであることを確認してから実行してください。
+git checkout main
+git pull origin main
+git checkout -b feature/phase-10-integration
+```
 
 ---
 
@@ -400,10 +411,49 @@ echo "================================================"
 # - test_skill_namespace_correct: 3名前空間の構造が正しいこと
 # - test_no_workflow_id_in_planner: planner.yamlにworkflow_id_assignment禁止が明記
 # - test_skill_lifecycle_spec: spec/skill-lifecycle.mdが存在すること
+
+---
+
+## PROMPT 10-X: プロジェクト完了処理
+
+```
+Phase 10 の全実装（PROMPT 10-1〜10-3）が完了し、全テストがパスし、
+PROJECT_RULES.md Section 17（Definition of Done）の全項目を満たしたことを
+確認してから、以下の手順でブランチを main へ統合してください。
+
+### 全テスト実行
+pytest tests/ -v --tb=short
+python3 tests/check_done.py
+
+### コミット
+git add -A
+git commit -m "feat(phase10): integration tests & definition-of-done verification"
+
+### main へ merge
+git checkout main
+git merge --no-ff feature/phase-10-integration \
+  -m "merge: phase-10-integration into main"
+
+### リリースタグを打つ
+git tag -a v2.1.0 -m "CIE Platform v2.1.0 — full implementation complete"
+# リモートにプッシュする場合：
+# git push origin main --tags
 ```
 
-### 制約事項
-- check_done.pyはCIシステムでも実行できるようにすること（exit codeで結果を返す）
-- 全チェックは独立して実行可能なこと（1つのチェック失敗が他に影響しない）
-- チェック結果は人間が読めるメッセージで出力すること（エラーコードだけでなく）
-```
+---
+
+## 完了チェックリスト
+
+| フェーズ | ブランチ | merge | テスト |
+|---|---|---|---|
+| Phase 1 | `feature/phase-1-foundation` | ✅ | `pytest tests/unit/` |
+| Phase 2 | `feature/phase-2-schema-pii` | ✅ | schema + PII tests |
+| Phase 3 | `feature/phase-3-security` | ✅ | security tests |
+| Phase 4 | `feature/phase-4-runtime` | ✅ | runtime tests |
+| Phase 5 | `feature/phase-5-agents` | ✅ | agent tests |
+| Phase 6 | `feature/phase-6-workflow` | ✅ | workflow tests |
+| Phase 7 | `feature/phase-7-evaluation` | ✅ | evaluation tests |
+| Phase 8 | `feature/phase-8-skills` | ✅ | skill tests |
+| Phase 9 | `feature/phase-9-ui` | ✅ | UI tests |
+| Phase 10 | `feature/phase-10-integration` | ✅ | E2E + check_done |
+| Release | `v2.1.0` tag on `main` | ✅ | all green |

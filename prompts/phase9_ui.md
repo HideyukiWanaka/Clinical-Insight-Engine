@@ -1,7 +1,18 @@
 # CIE Platform — Claude Code Implementation Prompts
 # Phase 9: Streamlit UI
 # File: prompts/phase9_ui.md
-# Version: 1.0.0
+# Version: 1.1.0
+
+---
+
+## PROMPT 9-0: ブランチ作成
+
+```
+# Phase 8 が main に merge 済みであることを確認してから実行してください。
+git checkout main
+git pull origin main
+git checkout -b feature/phase-9-ui
+```
 
 ---
 
@@ -424,4 +435,28 @@ CIE PlatformのSCR-04〜SCR-07を実装してください。
 - UP-004: PII関連パネルは必ずst.container(border=True)に橙色注記を付けること
 - 監査CSVにpayload本文を含めないこと（payload_hashのみ）
 - SCR-06のエクスポートボタンはreviewer_score < 90の場合にdisabled=Trueにすること
+```
+
+---
+
+## PROMPT 9-X: Phase 9 完了処理
+
+```
+Phase 9 の全実装（PROMPT 9-1〜9-4）が完了し、テストがすべてパスしたことを
+確認してから、以下の手順でブランチを main へ統合してください。
+
+### テスト確認
+pytest tests/unit/test_ui_components.py -v
+
+### コミット
+git add -A
+git commit -m "feat(phase9): streamlit UI — 3-pane layout, status bar, history, export"
+
+### main へ merge
+git checkout main
+git merge --no-ff feature/phase-9-ui \
+  -m "merge: phase-9-ui into main"
+
+### 次フェーズのブランチを main から作成
+git checkout -b feature/phase-10-integration
 ```

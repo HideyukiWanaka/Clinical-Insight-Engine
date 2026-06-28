@@ -1,7 +1,18 @@
 # CIE Platform — Claude Code Implementation Prompts
 # Phase 8: Skills Execution Engine & Lifecycle
 # File: prompts/phase8_skills.md
-# Version: 1.0.0
+# Version: 1.1.0
+
+---
+
+## PROMPT 8-0: ブランチ作成
+
+```
+# Phase 7 が main に merge 済みであることを確認してから実行してください。
+git checkout main
+git pull origin main
+git checkout -b feature/phase-8-skills
+```
 
 ---
 
@@ -403,4 +414,29 @@ CIE Platformのmeta/skill-scaffolderを実装してください。
   （"human"への変更はLifecycleService.register_user_skill()が担う）
 - テンプレートにビジネスロジックのサンプルコードを含めないこと
   （# TODO: プレースホルダーのみ）
+```
+
+---
+
+## PROMPT 8-X: Phase 8 完了処理
+
+```
+Phase 8 の全実装（PROMPT 8-1〜8-3）が完了し、テストがすべてパスしたことを
+確認してから、以下の手順でブランチを main へ統合してください。
+
+### テスト確認
+pytest tests/unit/test_skill_loader.py tests/unit/test_skill_executor.py \
+       tests/unit/test_skill_lifecycle.py -v
+
+### コミット
+git add -A
+git commit -m "feat(phase8): skills engine & lifecycle — loader, executor, scaffolder"
+
+### main へ merge
+git checkout main
+git merge --no-ff feature/phase-8-skills \
+  -m "merge: phase-8-skills into main"
+
+### 次フェーズのブランチを main から作成
+git checkout -b feature/phase-9-ui
 ```
