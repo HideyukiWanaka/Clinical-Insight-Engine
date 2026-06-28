@@ -1,0 +1,50 @@
+schema_version: "1.0"
+registry_type: "system"
+description: >
+  SystemWorkflowRegistry: 管理タスク専用ワークフローの定義。
+  Planner Agent を経由せず、UI Event から Orchestrator を直接起動する。
+  ADR-0003 に基づき knowledge_ingestion を収容。
+  将来の管理タスク（protocol_generation, audit_export 等）もここに追加。
+
+# ⚠️ Planner Agent はこのファイルを参照しない（ADR-0001 / ADR-0003）
+# ⚠️ workflow_selection_rules は定義しない（PlannerのWS-001〜WS-004とは完全に分離）
+
+workflows:
+  - workflow_id: "knowledge_ingestion"
+    description: "Document upload, quarantine, extraction, human review flow."
+    trigger: "ui_event.document_upload"
+    entry_agent: "knowledge_ingestion"
+    stages:
+      - stage_id: "quarantine"
+        agent_id: "knowledge_ingestion"
+        action: "ingest"
+      - stage_id: "pending_review"
+        agent_id: "reviewer"
+        action: "review_knowledge_draft"
+        requires_human_approval: true
+      - stage_id: "register"
+        agent_id: "knowledge_ingestion"
+        action: "register_approved"
+        condition: "human_approved == true"
+    on_rejection:
+      action: "delete_pending_draft"
+      audit_log: true
+
+  - workflow_id: "skill_lifecycle"
+    description: "Skill evaluation, proposal, human approval, and registration flow."
+    trigger: "ui_event.skill_update_request"
+    entry_agent: "skill_evaluator"
+    stages:
+      - stage_id: "evaluate"
+        agent_id: "skill_evaluator"
+        action: "evaluate_skill"
+      - stage_id: "propose"
+        agent_id: "skill_proposer"
+        action: "propose_update"
+      - stage_id: "approve"
+        agent_id: "reviewer"
+        action: "review_skill_proposal"
+        requires_human_approval: true
+    on_rejection:
+      action: "discard_proposal"
+      audit_log: true

@@ -1,0 +1,11 @@
+# CIE Knowledge Institutional Registry
+# Authoritative list of approved institutional knowledge entries.
+#
+# Rules:
+#   - Only KnowledgeLifecycleService may append entries here (ADR-0003)
+#   - approved_by_human must always be true (ADR-0003)
+#   - Soft delete only: set status: archived instead of removing entries (ADR-0003)
+#   - Physical deletion of entry files is forbidden (ADR-0003)
+
+schema_version: "1.0"
+entries: []

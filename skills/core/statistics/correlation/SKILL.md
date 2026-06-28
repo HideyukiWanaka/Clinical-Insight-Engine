@@ -3,9 +3,9 @@
 # Version: 1.0.0
 # Consumers: statistics agent
 # Knowledge references:
-#   - knowledge/statistics/method_selection_guide.md (Correlation Analysis)
-#   - knowledge/statistics/assumption_checklist.md (AC-001)
-#   - knowledge/R/comparison_correlation_reference.md
+#   - knowledge/official/statistics/method_selection_guide.md (Correlation Analysis)
+#   - knowledge/official/statistics/assumption_checklist.md (AC-001)
+#   - knowledge/official/R/comparison_correlation_reference.md
 
 ## Overview
 

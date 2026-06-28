@@ -565,6 +565,34 @@ class HumanApprovalRequiredError(CIEError):
         return base
 
 
+# ---------------------------------------------------------------------------
+# Knowledge
+# ---------------------------------------------------------------------------
+
+
+class KnowledgeError(CIEError):
+    """Raised when a knowledge-layer invariant is violated.
+
+    Covers parsing failures, missing parsers, lifecycle violations, and
+    forbidden operations defined in ADR-0003.
+
+    Attributes:
+        error_code: ``KNOWLEDGE_ERROR`` (overridable per-instance).
+    """
+
+    error_code: str = "KNOWLEDGE_ERROR"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: str = "KNOWLEDGE_ERROR",
+        execution_id: str | None = None,
+    ) -> None:
+        super().__init__(message, execution_id=execution_id)
+        self.error_code = error_code
+
+
 __all__: list[str] = [
     "CIEError",
     "SchemaValidationError",
@@ -576,4 +604,5 @@ __all__: list[str] = [
     "RuntimeExecutionError",
     "SkillError",
     "HumanApprovalRequiredError",
+    "KnowledgeError",
 ]

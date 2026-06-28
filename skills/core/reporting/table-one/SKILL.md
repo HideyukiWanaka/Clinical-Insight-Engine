@@ -3,9 +3,9 @@
 # Version: 1.0.0
 # Consumers: reporting agent
 # Knowledge references:
-#   - knowledge/reporting/manuscript_structure_guide.md (Results — Baseline data)
-#   - knowledge/R/descriptive_statistics_reference.md
-#   - knowledge/R/statistical_packages.md (var_n alias system)
+#   - knowledge/official/reporting/manuscript_structure_guide.md (Results — Baseline data)
+#   - knowledge/official/R/descriptive_statistics_reference.md
+#   - knowledge/official/R/statistical_packages.md (var_n alias system)
 
 ## Overview
 

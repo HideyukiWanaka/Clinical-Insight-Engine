@@ -141,9 +141,9 @@ consistency_checks:
 # -----------------------------------------------------------------------------
 context_loading:
   allowed_knowledge_sources:
-    - "knowledge/statistics/result_interpretation_guide.md"
-    - "knowledge/reporting/reporting_checklists.md"
-    - "knowledge/reporting/manuscript_structure_guide.md"
+    - "knowledge/official/statistics/result_interpretation_guide.md"
+    - "knowledge/official/reporting/reporting_checklists.md"
+    - "knowledge/official/reporting/manuscript_structure_guide.md"
   maximum_context_tokens: 8192
   inject_raw_data_rows: false              # Absolute hard guardrail
 

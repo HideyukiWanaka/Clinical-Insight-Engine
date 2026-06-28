@@ -3,9 +3,9 @@
 # Version: 1.0.0
 # Consumers: reporting agent
 # Knowledge references:
-#   - knowledge/reporting/manuscript_structure_guide.md
-#   - knowledge/reporting/reporting_checklists.md
-#   - knowledge/statistics/result_interpretation_guide.md (Templates R-001 to R-004)
+#   - knowledge/official/reporting/manuscript_structure_guide.md
+#   - knowledge/official/reporting/reporting_checklists.md
+#   - knowledge/official/statistics/result_interpretation_guide.md (Templates R-001 to R-004)
 
 ## Overview
 

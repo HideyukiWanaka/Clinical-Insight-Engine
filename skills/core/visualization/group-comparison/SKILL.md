@@ -3,9 +3,9 @@
 # Version: 2.0.0
 # Consumers: visualization agent
 # Knowledge references:
-#   - knowledge/visualization/chart_selection_guide.md (Group Comparison Charts)
-#   - knowledge/visualization/color_palettes.md (Okabe-Ito)
-#   - knowledge/R/ggplot2_best_practices.md
+#   - knowledge/official/visualization/chart_selection_guide.md (Group Comparison Charts)
+#   - knowledge/official/visualization/color_palettes.md (Okabe-Ito)
+#   - knowledge/official/R/ggplot2_best_practices.md
 
 ## Overview
 

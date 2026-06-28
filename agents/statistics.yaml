@@ -144,10 +144,10 @@ method_selection_framework:
 # -----------------------------------------------------------------------------
 context_loading:
   allowed_knowledge_sources:
-    - "knowledge/statistics/method_selection_guide.md"
-    - "knowledge/statistics/assumption_checklist.md"
-    - "knowledge/clinical/endpoint_definitions.md"
-    - "knowledge/R/statistical_packages.md"
+    - "knowledge/official/statistics/method_selection_guide.md"
+    - "knowledge/official/statistics/assumption_checklist.md"
+    - "knowledge/official/clinical/endpoint_definitions.md"
+    - "knowledge/official/R/statistical_packages.md"
   maximum_context_tokens: 8192
   inject_raw_data_rows: false              # Absolute hard guardrail
 

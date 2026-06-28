@@ -115,8 +115,8 @@ quality_gate_thresholds:
 # -----------------------------------------------------------------------------
 context_loading:
   allowed_knowledge_sources:
-    - "knowledge/clinical/endpoint_definitions.md"
-    - "knowledge/statistics/missing_data_taxonomy.md"
+    - "knowledge/official/clinical/endpoint_definitions.md"
+    - "knowledge/official/statistics/missing_data_taxonomy.md"
   maximum_context_tokens: 2048
   inject_raw_data_rows: false            # Absolute hard guardrail
 

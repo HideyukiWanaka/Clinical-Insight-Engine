@@ -3,10 +3,10 @@
 # Version: 1.0.0
 # Consumers: statistics agent
 # Knowledge references:
-#   - knowledge/statistics/method_selection_guide.md (Regression Analysis)
-#   - knowledge/statistics/assumption_checklist.md (AC-004, AC-006, AC-007)
-#   - knowledge/R/multivariate_analysis_reference.md
-#   - knowledge/R/r_error_handling.md (ERR-N01, ERR-N02, ERR-F02)
+#   - knowledge/official/statistics/method_selection_guide.md (Regression Analysis)
+#   - knowledge/official/statistics/assumption_checklist.md (AC-004, AC-006, AC-007)
+#   - knowledge/official/R/multivariate_analysis_reference.md
+#   - knowledge/official/R/r_error_handling.md (ERR-N01, ERR-N02, ERR-F02)
 
 ## Overview
 

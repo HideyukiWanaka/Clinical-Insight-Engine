@@ -148,9 +148,9 @@ behavior_rules:
 # -----------------------------------------------------------------------------
 context_loading:
   allowed_knowledge_sources:
-    - "knowledge/clinical/study_designs.md"
-    - "knowledge/clinical/endpoint_definitions.md"
-    - "knowledge/statistics/method_selection_guide.md"   # Added v2.1.0: MS-005/006 rules
+    - "knowledge/official/clinical/study_designs.md"
+    - "knowledge/official/clinical/endpoint_definitions.md"
+    - "knowledge/official/statistics/method_selection_guide.md"   # Added v2.1.0: MS-005/006 rules
   maximum_context_tokens: 4096
   inject_raw_data_rows: false # Absolute hard guardrail
 

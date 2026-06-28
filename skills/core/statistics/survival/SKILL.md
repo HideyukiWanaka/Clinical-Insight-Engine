@@ -3,9 +3,9 @@
 # Version: 1.0.0
 # Consumers: statistics agent
 # Knowledge references:
-#   - knowledge/statistics/method_selection_guide.md (Survival Analysis)
-#   - knowledge/R/survival_reference.md
-#   - knowledge/R/r_error_handling.md (ERR-D03)
+#   - knowledge/official/statistics/method_selection_guide.md (Survival Analysis)
+#   - knowledge/official/R/survival_reference.md
+#   - knowledge/official/R/r_error_handling.md (ERR-D03)
 
 ## Overview
 

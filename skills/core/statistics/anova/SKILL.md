@@ -3,9 +3,9 @@
 # Version: 2.0.0
 # Consumers: statistics agent
 # Knowledge references:
-#   - knowledge/statistics/method_selection_guide.md (Step 0, MS-005, MS-006)
-#   - knowledge/statistics/assumption_checklist.md (AC-001, AC-002)
-#   - knowledge/R/anova_multigroup_reference.md
+#   - knowledge/official/statistics/method_selection_guide.md (Step 0, MS-005, MS-006)
+#   - knowledge/official/statistics/assumption_checklist.md (AC-001, AC-002)
+#   - knowledge/official/R/anova_multigroup_reference.md
 
 ## Overview
 

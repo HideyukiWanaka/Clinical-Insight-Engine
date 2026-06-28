@@ -136,9 +136,9 @@ output_standards:
 # -----------------------------------------------------------------------------
 context_loading:
   allowed_knowledge_sources:
-    - "knowledge/visualization/chart_selection_guide.md"
-    - "knowledge/visualization/color_palettes.md"
-    - "knowledge/R/ggplot2_best_practices.md"
+    - "knowledge/official/visualization/chart_selection_guide.md"
+    - "knowledge/official/visualization/color_palettes.md"
+    - "knowledge/official/R/ggplot2_best_practices.md"
   maximum_context_tokens: 4096
   inject_raw_data_rows: false              # Absolute hard guardrail
 

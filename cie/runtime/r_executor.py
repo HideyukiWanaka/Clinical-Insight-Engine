@@ -29,7 +29,7 @@ from cie.security.context_guard import ContextGuard
 # ---------------------------------------------------------------------------
 # Forbidden pattern registry
 # Each entry: (compiled regex, human-readable violation description)
-# Source: knowledge/R/statistical_packages.md — Forbidden R Patterns
+# Source: knowledge/official/R/statistical_packages.md — Forbidden R Patterns
 # ---------------------------------------------------------------------------
 
 _PatternEntry = tuple[re.Pattern[str], str]
@@ -45,7 +45,7 @@ FORBIDDEN_R_PATTERNS: list[_PatternEntry] = [
 ]
 
 # Hard-coded absolute paths bypass the approved WORKSPACE_DIR/OUTPUT_DIR aliases
-# and break reproducibility (knowledge/R/statistical_packages.md).
+# and break reproducibility (knowledge/official/R/statistical_packages.md).
 _ABSOLUTE_PATH_PATTERNS: list[_PatternEntry] = [
     (re.compile(r"C:\\\\"), "Hard-coded Windows absolute path (C:\\...)"),
     (re.compile(r"C:/"), "Hard-coded Windows absolute path (C:/...)"),
@@ -329,7 +329,7 @@ class LocalRExecutor:
 
         R scripts following the 5-block template call
         ``digest::digest(data, algo="sha256")`` and may print the result
-        with a ``dataset_hash:`` prefix (knowledge/R/statistical_packages.md).
+        with a ``dataset_hash:`` prefix (knowledge/official/R/statistical_packages.md).
 
         Args:
             stdout: Sanitized stdout from the R process.

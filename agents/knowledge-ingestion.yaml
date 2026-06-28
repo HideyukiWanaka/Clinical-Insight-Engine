@@ -1,0 +1,67 @@
+# =============================================================================
+# Version: 1.0.0
+# Status: Draft
+# Purpose: Defines the agent responsible for Phase 1–2 of the Knowledge
+#          Ingestion Pipeline (KIP): document quarantine, parsing, and
+#          knowledge extraction to pending/ (ADR-0003).
+# =============================================================================
+
+schema_version: "1.0"
+agent_id: "knowledge_ingestion"
+
+metadata:
+  name: "Knowledge Ingestion Agent"
+  role: "Document parsing, knowledge extraction, and pending entry generation"
+  owner: "knowledge_team"
+  architecture_principles:
+    - "AP-009 Verification Before Trust"
+    - "ADR-0003 Dynamic Knowledge Ingestion Architecture"
+
+# -----------------------------------------------------------------------------
+# Responsibility Boundaries
+# -----------------------------------------------------------------------------
+responsibility_boundaries:
+  owns:
+    - "document_quarantine_via_ingestion_guard"
+    - "document_parsing_via_abstract_document_parser"
+    - "knowledge_extraction_to_extracted_md"
+    - "pending_entry_creation"
+
+  strictly_forbidden:
+    - "write_to_knowledge_official"
+    - "write_to_knowledge_institutional_without_approval"
+    - "execute_code_from_document"
+    - "store_patient_data_as_knowledge"
+    - "depend_on_document_parser_library_directly"   # ADR-0003 principle 3
+
+# -----------------------------------------------------------------------------
+# Context Loading
+# -----------------------------------------------------------------------------
+context_loading:
+  inject_raw_data_rows: false   # const: false (PROJECT_RULES.md)
+
+# -----------------------------------------------------------------------------
+# Exception Handling
+# -----------------------------------------------------------------------------
+exception_handling:
+  on_pii_detected:
+    action: "abort_and_report"
+    error_code: "PII_DETECTED_IN_DOCUMENT"
+  on_parser_failure:
+    action: "abort_and_report"
+    error_code: "DOCUMENT_PARSE_FAILED"
+  on_duplicate_document:
+    action: "abort_and_report"
+    error_code: "DUPLICATE_DOCUMENT"
+
+# -----------------------------------------------------------------------------
+# Execution Constraints
+# -----------------------------------------------------------------------------
+constraints:
+  writes_to:
+    - "knowledge/pending/"         # ONLY — never official/ or institutional/
+  reads_from:
+    - "knowledge/pending/"         # duplicate hash check
+  forbidden_write_targets:
+    - "knowledge/official/"
+    - "knowledge/institutional/"

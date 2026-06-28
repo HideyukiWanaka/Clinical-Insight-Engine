@@ -3,10 +3,10 @@
 # Version: 2.0.0
 # Consumers: statistics agent
 # Knowledge references:
-#   - knowledge/statistics/method_selection_guide.md (Step 0, Rules MS-005, MS-006)
-#   - knowledge/statistics/assumption_checklist.md (AC-001, AC-002)
-#   - knowledge/R/comparison_correlation_reference.md
-#   - knowledge/R/r_error_handling.md (ERR-F02, ERR-D01, ERR-D02)
+#   - knowledge/official/statistics/method_selection_guide.md (Step 0, Rules MS-005, MS-006)
+#   - knowledge/official/statistics/assumption_checklist.md (AC-001, AC-002)
+#   - knowledge/official/R/comparison_correlation_reference.md
+#   - knowledge/official/R/r_error_handling.md (ERR-F02, ERR-D01, ERR-D02)
 
 ## Overview
 

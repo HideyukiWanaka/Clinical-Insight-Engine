@@ -24,7 +24,9 @@ from cie.core.exceptions import AgentError, WorkflowError
 from cie.security.capability_token import CapabilityScope, CapabilityToken, CapabilityTokenManager
 from cie.security.context_guard import ContextGuard
 from cie.security.policy_engine import PolicyEngine
+from cie.knowledge.loader import KnowledgeLoader
 from cie.workflow.registry import WorkflowDefinition, WorkflowNodeDef, WorkflowRegistry
+from cie.workflow.system_registry import SystemWorkflowRegistry
 from cie.workflow.states import WorkflowState, WorkflowStateMachine
 
 logger = logging.getLogger(__name__)
@@ -107,6 +109,8 @@ class Orchestrator:
         context_guard: ContextGuard,
         audit_service: AuditService,
         agent_registry: dict[str, BaseAgent],
+        system_registry: SystemWorkflowRegistry | None = None,
+        knowledge_loader: KnowledgeLoader | None = None,
     ) -> None:
         self._registry = workflow_registry
         self._state_machine = state_machine
@@ -115,6 +119,8 @@ class Orchestrator:
         self._context_guard = context_guard
         self._audit = audit_service
         self._agent_registry = agent_registry
+        self._system_registry = system_registry
+        self._knowledge_loader = knowledge_loader
 
         # In-memory checkpoint for suspended workflows keyed by execution_id
         self._suspended: dict[str, dict] = {}
@@ -144,6 +150,11 @@ class Orchestrator:
             ``{"execution_id", "workflow_id_selected", "rule_id",
                "justification", "final_state", "node_results"}``.
         """
+        # PROJECT_RULES.md S.12: load knowledge once before any agent dispatch
+        frozen_knowledge = None
+        if self._knowledge_loader is not None:
+            frozen_knowledge = self._knowledge_loader.load_for_execution(execution_id)
+
         current_state = WorkflowState.DRAFT
 
         # Step 1 — ADR-0001: select workflow_id (Orchestrator-owned decision)
@@ -218,7 +229,11 @@ class Orchestrator:
         )
 
         # Step 6 — execute the DAG
-        initial_payload = {"intent_object": intent_object, "execution_id": execution_id}
+        initial_payload = {
+            "intent_object": intent_object,
+            "execution_id": execution_id,
+            "frozen_knowledge": frozen_knowledge,  # immutable; None if loader not configured
+        }
         loop_result = await self._task_dispatch_loop(
             execution_id=execution_id,
             workflow_def=workflow_def,
@@ -271,6 +286,60 @@ class Orchestrator:
             current_state=WorkflowState.RUNNING,
             skip_nodes=checkpoint["completed_nodes"],
         )
+
+    async def run_system_workflow(
+        self,
+        workflow_id: str,
+        input_data: dict,
+        triggered_by: str,
+    ) -> dict:
+        """Execute a system (administrative) workflow bypassing the Planner.
+
+        SystemWorkflowRegistry is queried directly; PlannerAgent is never
+        invoked (ADR-0003 principle 5, ADR-0001 boundary).
+
+        Args:
+            workflow_id: ID registered in spec/system-workflow.yaml.
+            input_data: Caller-supplied payload for the workflow stages.
+            triggered_by: User or system identity that initiated the workflow.
+
+        Returns:
+            Result dict with ``workflow_id``, ``triggered_by``, and ``status``.
+
+        Raises:
+            WorkflowError: If ``system_registry`` was not injected or the
+                workflow_id is unknown.
+        """
+        if self._system_registry is None:
+            raise WorkflowError(
+                "[SYSTEM_REGISTRY_NOT_CONFIGURED] SystemWorkflowRegistry is not configured on this Orchestrator.",
+            )
+
+        import uuid
+        execution_id = str(uuid.uuid4())
+
+        workflow_def = self._system_registry.get_workflow(workflow_id)
+
+        await self._write_audit(
+            execution_id=execution_id,
+            agent_id="orchestrator",
+            action="SYSTEM_WORKFLOW_STARTED",
+            status="success",
+            payload={
+                "workflow_id": workflow_id,
+                "triggered_by": triggered_by,
+                "input_keys": list(input_data.keys()),
+                "stage_count": len(workflow_def.get("stages", [])),
+            },
+        )
+
+        return {
+            "execution_id": execution_id,
+            "workflow_id": workflow_id,
+            "triggered_by": triggered_by,
+            "stages": workflow_def.get("stages", []),
+            "status": "started",
+        }
 
     # ------------------------------------------------------------------
     # Task dispatch loop (orchestrator.yaml 9 steps)

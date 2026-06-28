@@ -3,9 +3,9 @@
 # Version: 1.0.0
 # Consumers: visualization agent
 # Knowledge references:
-#   - knowledge/visualization/chart_selection_guide.md (Survival Charts)
-#   - knowledge/visualization/color_palettes.md
-#   - knowledge/R/ggplot2_best_practices.md (Kaplan-Meier section)
+#   - knowledge/official/visualization/chart_selection_guide.md (Survival Charts)
+#   - knowledge/official/visualization/color_palettes.md
+#   - knowledge/official/R/ggplot2_best_practices.md (Kaplan-Meier section)
 
 ## Overview
 
