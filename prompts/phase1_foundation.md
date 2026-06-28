@@ -1,7 +1,43 @@
 # CIE Platform — Claude Code Implementation Prompts
 # Phase 1: Project Foundation
 # File: prompts/phase1_foundation.md
-# Version: 1.0.0
+# Version: 1.1.0
+
+---
+
+## ブランチ戦略（全フェーズ共通）
+
+```
+main
+ └── feature/phase-1-foundation        ← Phase 1 作業ブランチ
+ └── feature/phase-2-schema-pii        ← Phase 2 作業ブランチ
+ └── feature/phase-3-security          ← Phase 3 作業ブランチ
+ └── feature/phase-4-runtime           ← Phase 4 作業ブランチ
+ └── feature/phase-5-agents            ← Phase 5 作業ブランチ
+ └── feature/phase-6-workflow          ← Phase 6 作業ブランチ
+ └── feature/phase-7-evaluation        ← Phase 7 作業ブランチ
+ └── feature/phase-8-skills            ← Phase 8 作業ブランチ
+ └── feature/phase-9-ui                ← Phase 9 作業ブランチ
+ └── feature/phase-10-integration      ← Phase 10 作業ブランチ
+```
+
+**ルール：**
+- `main` への直接コミットは禁止。必ず feature ブランチで作業する
+- 各フェーズの全 PROMPT が完了し、テストが通った後に `main` へ merge する
+- merge 前に `git diff main` でスコープ外の変更がないことを確認する
+
+---
+
+## PROMPT 1-0: ブランチ作成
+
+```
+以下のコマンドで Phase 1 の作業ブランチを作成してください。
+main ブランチが最新であることを確認してから実行してください。
+
+git checkout main
+git pull origin main
+git checkout -b feature/phase-1-foundation
+```
 
 ---
 
@@ -281,4 +317,28 @@ CIE Platformの監査ログ書き込み基盤を実装してください。
 - payloadの中身をDBに保存しないこと（ハッシュのみ）
 - immutabilityを保証するため、UPDATE/DELETEをAuditLogテーブルに発行しないこと
 - orchestrator.yaml の capture_reasoning_spans: false を厳守
+```
+
+---
+
+## PROMPT 1-X: Phase 1 完了処理
+
+```
+Phase 1 の全実装（PROMPT 1-1〜1-3）が完了し、テストがすべてパスしたことを
+確認してから、以下の手順でブランチを main へ統合してください。
+
+### テスト確認
+pytest tests/unit/ -v
+
+### コミット
+git add -A
+git commit -m "feat(phase1): project foundation — config, exceptions, database, audit"
+
+### main へ merge
+git checkout main
+git merge --no-ff feature/phase-1-foundation \
+  -m "merge: phase-1-foundation into main"
+
+### 次フェーズのブランチを main から作成
+git checkout -b feature/phase-2-schema-pii
 ```
