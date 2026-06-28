@@ -20,6 +20,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
+import shutil
 
 from cie.core.exceptions import RuntimeExecutionError
 from cie.security.capability_token import CapabilityScope, CapabilityToken
@@ -214,10 +215,11 @@ class LocalRExecutor:
         proc: asyncio.subprocess.Process | None = None
 
         start_ns = time.monotonic_ns()
+        rscript_path = shutil.which("Rscript") or "Rscript"
         try:
             # Step 4 — launch subprocess (shell=False is guaranteed by create_subprocess_exec)
             proc = await asyncio.create_subprocess_exec(
-                "Rscript",
+                rscript_path,
                 "--vanilla",
                 "--slave",
                 str(script_path),
