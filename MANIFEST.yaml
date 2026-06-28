@@ -1,8 +1,8 @@
 manifest:
   name: CIE Platform
   codename: CIE
-  version: 2.1.0
-  specification_version: 1.1
+  version: 2.2.0
+  specification_version: 1.2
 
 metadata:
   description: >
@@ -16,6 +16,18 @@ metadata:
   machine_readable: true
 
   changelog:
+    - version: "2.2.0"
+      date: "2026-06-28"
+      decisions:
+        - "ADR-0003: Dynamic Knowledge Ingestion Architecture"
+      changes:
+        - "knowledge/ namespace restructured into official/, institutional/, pending/"
+        - "knowledge/institutional/REGISTRY.yaml added as authoritative Knowledge registry"
+        - "schemas/knowledge-entry.schema.json added"
+        - "agents/knowledge-ingestion.yaml added"
+        - "skills/meta/knowledge-extractor/ added"
+        - "spec/system-workflow.yaml added as SystemWorkflowRegistry"
+        - "decisions/ADR-0003.md added"
     - version: "2.1.0"
       date: "2025-06-27"
       decisions:
@@ -57,6 +69,7 @@ loading_order:
   - spec/system.yaml
   - spec/runtime.yaml
   - spec/workflow.yaml
+  - spec/system-workflow.yaml       # Added: ADR-0003 — SystemWorkflowRegistry
   - spec/permissions.yaml
   - spec/skill-lifecycle.md
   - spec/ui/
@@ -122,6 +135,7 @@ repository:
       - agent.schema.json
       - task.schema.json
       - analysis-request.schema.json  # Added: Planner output schema
+      - knowledge-entry.schema.json   # Added: ADR-0003 — Knowledge entry schema
 
   agents:
 
@@ -137,6 +151,7 @@ repository:
       - reviewer.yaml
       - runtime.yaml
       - security.yaml
+      - knowledge-ingestion.yaml      # Added: ADR-0003
 
   skills:
 
@@ -173,13 +188,15 @@ repository:
         root: skills/meta/
         description: >
           Meta-Skills for Skill evaluation, improvement proposal generation,
-          and User Skill scaffolding. Provided by CIE infrastructure.
+          User Skill scaffolding, and Knowledge extraction.
+          Provided by CIE infrastructure.
           Cannot be overridden by user/ namespace.
         update_requires: "cie_team_only + human_approval"
         required:
           - skill-evaluator/
           - skill-proposer/
           - skill-scaffolder/
+          - knowledge-extractor/        # Added: ADR-0003
         structure_per_skill:
           - SKILL.md
           - examples/
@@ -202,6 +219,35 @@ repository:
   knowledge:
 
     root: knowledge/
+
+    # ADR-0003: 3-namespace structure (mirrors skills/ namespaces)
+    # Loading priority: institutional/ > official/
+    # pending/ is transient — never loaded into FrozenKnowledgeSet
+    namespaces:
+
+      official:
+        root: knowledge/official/
+        description: >
+          CIE official reference knowledge. Immutable without Architecture Review.
+          Corresponds to skills/core/.
+        update_requires: "architecture_review + human_approval"
+
+      institutional:
+        root: knowledge/institutional/
+        description: >
+          Facility/project-specific approved knowledge entries.
+          Added via Knowledge Ingestion Pipeline + Human Authority approval.
+          Corresponds to skills/user/.
+        update_requires: "human_approval"
+        registry: knowledge/institutional/REGISTRY.yaml
+        soft_delete_only: true          # Physical deletion is forbidden (ADR-0003)
+
+      pending:
+        root: knowledge/pending/
+        description: >
+          Transient staging area for AI-extracted knowledge awaiting human review.
+          Never loaded into FrozenKnowledgeSet.
+        update_requires: "knowledge_ingestion_pipeline"
 
     domains:
       - statistics
@@ -231,6 +277,7 @@ repository:
     required:
       - ADR-0001.md   # Orchestrator-Planner Responsibility Boundary
       - ADR-0002.md   # Meta-Skills and Self-Improving Skill Architecture
+      - ADR-0003.md   # Dynamic Knowledge Ingestion Architecture
 
 runtime:
 
@@ -257,6 +304,8 @@ security:
       - package_install
       - skill_update              # Added: ADR-0002 — Skill file writes require approval
       - user_skill_registration   # Added: ADR-0002
+      - knowledge_registration    # Added: ADR-0003 — institutional/ writes require approval
+      - knowledge_archive         # Added: ADR-0003 — Soft delete requires human authority
 
 development:
 
@@ -317,3 +366,9 @@ ai_behavior:
     - modify_core_skill_without_human_approval       # Added: ADR-0002
     - set_workflow_id_from_planner_agent             # Added: ADR-0001
     - mutate_dag_nodes_at_runtime                    # Added: ADR-0001
+    - write_to_knowledge_official                    # Added: ADR-0003
+    - write_to_knowledge_institutional_without_approval  # Added: ADR-0003
+    - physical_delete_knowledge_entry                # Added: ADR-0003 (soft delete only)
+    - depend_on_document_parser_directly             # Added: ADR-0003 (use AbstractDocumentParser)
+    - planner_access_system_workflow_registry        # Added: ADR-0003
+    - reload_frozen_knowledge_during_execution       # Added: ADR-0003

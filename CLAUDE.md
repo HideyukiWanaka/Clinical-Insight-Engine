@@ -11,6 +11,3 @@
 - 全Skill更新にhuman_review_required=True（ADR-0002）
 - inject_raw_data_rows は常にFalse
 - Capability Tokenはtry/finallyで必ず失効
-
-## 今日の実装ファイル
-prompts/phase1_foundation.md のPROMPT 1-1

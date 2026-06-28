@@ -1,7 +1,12 @@
 # PROJECT_RULES.md
 # CIE Platform Project Constitution
-# Version: 2.1.0
+# Version: 2.2.0
 # Status: Draft
+# Changelog v2.2.0:
+#   - Section 12: Knowledge Rules updated to reflect ADR-0003 3-namespace structure
+#   - Section 16: Forbidden Behaviors updated (ADR-0003 additions)
+#   - Section 17: Definition of Done updated (knowledge_ingestion_schema_valid)
+#   - Section 18: Long-Term Compatibility updated (SystemWorkflowRegistry, KIP)
 # Changelog v2.1.0:
 #   - Section 11: Skills updated to reflect ADR-0002 3-namespace structure
 #   - Section 17: Definition of Done updated (skill_lifecycle_defined)
@@ -215,10 +220,30 @@ meta/ cannot be overridden.
 
 ## 12. Knowledge Rules
 
-Knowledge is immutable during execution.
+Knowledge is immutable **during execution**.
 Knowledge never contains executable code.
 Knowledge is versioned.
 Knowledge is traceable.
+
+**ADR-0003: Three-namespace structure**
+
+| Namespace | Location | Who updates | Governance |
+|-----------|----------|-------------|------------|
+| official | knowledge/official/ | CIE team | Architecture Review + Human approval |
+| institutional | knowledge/institutional/ | Users/Admin | Human approval + REGISTRY.yaml |
+| pending | knowledge/pending/ | AI (KIP) | Transient only — never served to agents |
+
+**official/** knowledge is fully immutable at all times (not just during execution).
+
+**institutional/** knowledge is immutable during execution (FrozenKnowledgeSet).
+Updates and deletions are permitted between executions, with Human Authority approval.
+Deletion is **Soft Delete only** (status: archived). Physical deletion is forbidden.
+
+**pending/** is a transient staging area. It is never loaded into a FrozenKnowledgeSet
+and is never served to any Agent as authoritative knowledge.
+
+All knowledge entries must have a traceable source (DOI or URL is mandatory).
+All knowledge entries require `approved_by_human: true` before entering institutional/.
 
 ---
 
@@ -274,6 +299,12 @@ Only then generate code.
 - Never mutate DAG nodes at runtime (ADR-0001)
 - Never update core Skills without SkillLifecycle process (ADR-0002)
 - Never register User Skills without human approval (ADR-0002)
+- Never write to knowledge/official/ (ADR-0003)
+- Never write to knowledge/institutional/ without human approval (ADR-0003)
+- Never physically delete a knowledge entry — Soft Delete only (ADR-0003)
+- Never depend on a document parser library directly — use AbstractDocumentParser (ADR-0003)
+- Never allow Planner Agent to access SystemWorkflowRegistry (ADR-0003)
+- Never reload FrozenKnowledgeSet during workflow execution (ADR-0003)
 
 ---
 
@@ -291,6 +322,7 @@ A task is complete only when:
 - Affected ADR created if architecture changed
 - No warnings remain unresolved
 - Skill lifecycle process followed if any Skill was updated (ADR-0002)
+- Knowledge ingestion pipeline followed if any institutional/ entry was added (ADR-0003)
 
 ---
 
@@ -301,14 +333,18 @@ All architectural decisions must remain compatible with:
 - New runtime providers
 - Additional agents
 - Additional workflows (via ADR + spec/workflow.yaml)
+- Additional system workflows (via ADR + spec/system-workflow.yaml)
 - Additional core Skills (via SkillLifecycle)
 - Additional User Skills (via REGISTRY.yaml)
+- Additional document parser backends (via AbstractDocumentParser)
+- Additional institutional knowledge entries (via KIP + REGISTRY.yaml)
 - Future cloud deployment
 - Future distributed execution
 - Future MCP-compatible services
 - Future A2A-compatible services
 
 No design shall lock the platform to a specific AI vendor.
+No design shall lock the platform to a specific document processing library.
 
 ---
 
