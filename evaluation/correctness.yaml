@@ -1,0 +1,206 @@
+# =============================================================================
+# Version: 2.0.0
+# Status: Draft
+# Purpose: Defines the evaluation harness for scientific correctness across
+#          all generated artifacts. Implements AP-009 Verification Before Trust
+#          and AP-017 Evaluation Driven Development.
+#          This is the highest-priority evaluation dimension, reflecting
+#          PROJECT_RULES.md Priority 1: Scientific Correctness.
+# =============================================================================
+
+schema_version: "1.0"
+evaluation_id: "correctness"
+
+metadata:
+  name: "Scientific Correctness Evaluation"
+  owner: "evaluation_team"
+  architecture_principles:
+    - "AP-009 Verification Before Trust"
+    - "AP-017 Evaluation Driven Development"
+    - "AP-018 Observable Systems"
+  system_layer: "evaluation"
+  priority: 1
+  blocking: true
+
+# -----------------------------------------------------------------------------
+# Scope
+# -----------------------------------------------------------------------------
+scope:
+  description: >
+    Evaluates whether all generated artifacts are scientifically valid,
+    internally consistent, and free of fabricated or extrapolated claims.
+    Applied after Reviewer Agent completes and before human approval prompt.
+  artifacts_evaluated:
+    - "analysis_request"      # Intent Object from Planner Agent
+    - "analysis_plan"         # From Statistics Agent
+    - "r_script"              # From Statistics Agent specification
+    - "execution_result"      # From Runtime Agent
+    - "figures"               # From Visualization Agent
+    - "report"                # From Reporting Agent
+    - "review_report"         # From Reviewer Agent
+
+# -----------------------------------------------------------------------------
+# Passing Threshold
+# -----------------------------------------------------------------------------
+threshold:
+  minimum_score_pct: 90
+  reference: "spec/workflow.yaml quality_gate.evaluation_score.minimum"
+  on_failure: "block_pipeline_and_trigger_human_review"
+
+# -----------------------------------------------------------------------------
+# Evaluation Dimensions
+# -----------------------------------------------------------------------------
+dimensions:
+
+  - dimension_id: "COR-001"
+    name: "Intent Fidelity"
+    weight_pct: 15
+    description: >
+      The analysis plan and statistical methods selected by the Statistics Agent
+      must be traceable to and consistent with the intent_object produced by the
+      Planner Agent. No analysis step may exist without a corresponding intent.
+    checks:
+      - check_id: "COR-001-A"
+        statement: "Every selected method references an intent_object field as its justification."
+        severity: "critical"
+      - check_id: "COR-001-B"
+        statement: "The study_design in intent_object is reflected in the reporting checklist selected."
+        severity: "critical"
+      - check_id: "COR-001-C"
+        statement: "No analysis step exists without a traceable objective in the intent_object."
+        severity: "critical"
+
+  - dimension_id: "COR-002"
+    name: "Statistical Method Appropriateness"
+    weight_pct: 25
+    description: >
+      Selected statistical methods must be appropriate for the outcome type,
+      predictor type, study design, and sample size declared in the intent object.
+      Method selection must follow the decision framework in statistics.yaml.
+    checks:
+      - check_id: "COR-002-A"
+        statement: "Selected method matches the outcome_type × predictor_type combination in statistics.yaml method_selection_framework."
+        severity: "critical"
+      - check_id: "COR-002-B"
+        statement: "Non-parametric alternatives were selected when normality assumption failed."
+        severity: "critical"
+      - check_id: "COR-002-C"
+        statement: "Multiple comparison correction is applied when more than one hypothesis is tested."
+        severity: "critical"
+      - check_id: "COR-002-D"
+        statement: "Effect size and confidence interval are reported alongside every p-value."
+        severity: "critical"
+      - check_id: "COR-002-E"
+        statement: "Sample size is sufficient for the selected method given declared alpha and power."
+        severity: "advisory"
+
+  - dimension_id: "COR-003"
+    name: "Assumption Validation Completeness"
+    weight_pct: 15
+    description: >
+      All statistical assumptions required by selected methods must have been
+      explicitly checked before analysis results are accepted.
+    checks:
+      - check_id: "COR-003-A"
+        statement: "All assumption_checks_required items from Statistics Agent were executed."
+        severity: "critical"
+      - check_id: "COR-003-B"
+        statement: "Assumption check results are recorded in the analysis_plan and traceable in execution_result."
+        severity: "critical"
+      - check_id: "COR-003-C"
+        statement: "No analysis proceeded past a failed critical assumption without documented justification."
+        severity: "critical"
+
+  - dimension_id: "COR-004"
+    name: "Result Traceability"
+    weight_pct: 20
+    description: >
+      Every numeric value appearing in the report must be traceable to the
+      execution_result output. No fabricated, estimated, or manually inserted
+      values are permitted.
+    checks:
+      - check_id: "COR-004-A"
+        statement: "Every p-value in the report exists in execution_result with an exact match."
+        severity: "critical"
+      - check_id: "COR-004-B"
+        statement: "Every effect size and confidence interval in the report matches execution_result."
+        severity: "critical"
+      - check_id: "COR-004-C"
+        statement: "Every sample size figure matches dataset_structural_metadata row_count."
+        severity: "critical"
+      - check_id: "COR-004-D"
+        statement: "No numeric value in the report is absent from execution_result."
+        severity: "critical"
+
+  - dimension_id: "COR-005"
+    name: "Reporting Standard Compliance"
+    weight_pct: 15
+    description: >
+      The report must satisfy all mandatory items of the reporting checklist
+      inferred or specified for the study design (CONSORT, STROBE, TRIPOD, etc.).
+    checks:
+      - check_id: "COR-005-A"
+        statement: "reporting_checklist_status contains no unresolved mandatory items."
+        severity: "critical"
+      - check_id: "COR-005-B"
+        statement: "The correct checklist was applied for the study design."
+        severity: "critical"
+      - check_id: "COR-005-C"
+        statement: "All unresolved_items from Reporting Agent are acknowledged and assigned to human review."
+        severity: "advisory"
+
+  - dimension_id: "COR-006"
+    name: "Figure Concordance"
+    weight_pct: 10
+    description: >
+      All figures must accurately represent the corresponding statistical results.
+      No figure may depict data inconsistent with execution_result values.
+    checks:
+      - check_id: "COR-006-A"
+        statement: "Every figure in the figure_manifest is referenced in the report."
+        severity: "advisory"
+      - check_id: "COR-006-B"
+        statement: "Every figure referenced in the report exists in the figure_manifest."
+        severity: "critical"
+      - check_id: "COR-006-C"
+        statement: "Chart types selected match the data characteristics per visualization.yaml chart_selection_framework."
+        severity: "advisory"
+
+# -----------------------------------------------------------------------------
+# Scoring Rules
+# -----------------------------------------------------------------------------
+scoring:
+  method: "weighted_dimension_average"
+  critical_check_failure_policy:
+    any_critical_failure: "dimension_score_zero"
+    description: >
+      A single critical check failure reduces the entire dimension score to zero,
+      regardless of other checks in that dimension. This ensures critical issues
+      cannot be masked by high scores on advisory checks.
+  advisory_check_weight: 0.5
+  rounding: "floor"
+
+# -----------------------------------------------------------------------------
+# Output Schema
+# -----------------------------------------------------------------------------
+output:
+  schema_ref: "cie://schemas/report.schema.json"
+  report_type: "evaluation_report"
+  required_fields:
+    - "evaluation_score_pct"
+    - "dimension_scores"
+    - "reproducibility_verified"
+    - "completion_status"
+
+# -----------------------------------------------------------------------------
+# Failure Handling
+# -----------------------------------------------------------------------------
+exception_handling:
+  on_missing_artifact:
+    action: "score_dimension_zero"
+    log_finding: true
+    severity: "critical"
+  on_schema_validation_failure:
+    action: "abort_evaluation"
+    error_code: "ARTIFACT_SCHEMA_INVALID"
+    pipeline_continuation: false

@@ -1,0 +1,237 @@
+# =============================================================================
+# File: spec/permissions.yaml
+# Version: 2.1.0
+# Status: Draft
+# Purpose: Defines the absolute Zero Trust capability matrix.
+# Changelog v2.1.0 (ADR-0002):
+#   - Added skill.update_core capability
+#   - Added skill.register_user capability
+#   - Added skill_lifecycle agent permission entry
+# =============================================================================
+
+schema_version: "1.0"
+specification_id: "cie-spec-permissions"
+
+metadata:
+  owner: "security"
+  architecture_principle: "AP-011 Security by Default"
+  default_policy: "deny_all"
+
+# -----------------------------------------------------------------------------
+# Capability Definitions
+# -----------------------------------------------------------------------------
+capabilities:
+  # --- Dataset Domain ---
+  - id: "dataset.read_raw"
+    risk_level: "HIGH"
+    description: "Permission to read raw, unanonymized user data records."
+  - id: "dataset.proxy_metadata"
+    risk_level: "LOW"
+    description: "Permission to extract column names, types, and summary counts without viewing row content."
+  - id: "dataset.read_validated"
+    risk_level: "MEDIUM"
+    description: "Permission to read the validated, var_n mapped dataframe structure."
+
+  # --- Workflow & State Domain ---
+  - id: "workflow.state_read"
+    risk_level: "LOW"
+    description: "Permission to inspect the active state of a workflow instance."
+  - id: "workflow.state_write"
+    risk_level: "HIGH"
+    description: "Permission to mutate the active state machine of a workflow instance."
+
+  # --- Statistical Code Domain ---
+  - id: "r_code.generate_template"
+    risk_level: "MEDIUM"
+    description: "Permission to assemble 5-block R code structures using var_n aliases."
+  - id: "r_code.restore_variables"
+    risk_level: "HIGH"
+    description: "Permission to reverse-map var_n aliases back into original column names."
+
+  # --- Runtime Domain ---
+  - id: "runtime.invoke_execution"
+    risk_level: "CRITICAL"
+    description: "Permission to dispatch an Execution Request payload to the Runtime Provider."
+
+  # --- Reporting Domain ---
+  - id: "report.compile_manuscript"
+    risk_level: "LOW"
+    description: "Permission to synthesize statistical text outputs into formal journal section drafts."
+  - id: "report.export_external"
+    risk_level: "HIGH"
+    description: "Permission to write final documents to Google Docs/Slides or local disk."
+
+  # --- Governance & Audit Domain ---
+  - id: "human.request_approval"
+    risk_level: "LOW"
+    description: "Permission to pause execution flow and trigger human-in-the-loop review."
+  - id: "audit.write_entry"
+    risk_level: "LOW"
+    description: "Permission to append records to the immutable system decision log."
+
+  # --- Skill Lifecycle Domain (Added: ADR-0002) ---
+  - id: "skill.update_core"
+    risk_level: "HIGH"
+    description: "Permission to write to skills/core/ after human approval. Requires SkillLifecycle process."
+    requires_human_approval: true
+  - id: "skill.register_user"
+    risk_level: "MEDIUM"
+    description: "Permission to write to skills/user/ and update REGISTRY.yaml after human approval."
+    requires_human_approval: true
+  - id: "skill.read_performance_records"
+    risk_level: "LOW"
+    description: "Permission to read skill_performance_records from cie_database.db."
+
+# -----------------------------------------------------------------------------
+# Agent Permission Matrix (Zero Trust)
+# -----------------------------------------------------------------------------
+agent_permission_matrix:
+
+  orchestrator:
+    allow:
+      - "workflow.state_read"
+      - "workflow.state_write"
+      - "human.request_approval"
+      - "audit.write_entry"
+    deny:
+      - "dataset.*"
+      - "r_code.*"
+      - "runtime.*"
+      - "report.*"
+      - "skill.*"
+
+  planner:
+    allow:
+      - "dataset.proxy_metadata"
+      - "workflow.state_read"
+      - "audit.write_entry"
+    deny:
+      - "dataset.read_raw"
+      - "dataset.read_validated"
+      - "r_code.*"
+      - "runtime.*"
+      - "skill.*"
+
+  data_quality:
+    allow:
+      - "dataset.read_raw"
+      - "dataset.proxy_metadata"
+      - "dataset.read_validated"
+      - "audit.write_entry"
+    deny:
+      - "r_code.*"
+      - "runtime.*"
+      - "workflow.state_write"
+      - "skill.*"
+
+  statistics:
+    allow:
+      - "dataset.read_validated"
+      - "r_code.generate_template"
+      - "audit.write_entry"
+    deny:
+      - "dataset.read_raw"
+      - "r_code.restore_variables"
+      - "runtime.invoke_execution"
+      - "skill.*"
+
+  visualization:
+    allow:
+      - "dataset.read_validated"
+      - "r_code.generate_template"
+      - "audit.write_entry"
+    deny:
+      - "dataset.read_raw"
+      - "r_code.restore_variables"
+      - "runtime.invoke_execution"
+      - "skill.*"
+
+  reporting:
+    allow:
+      - "report.compile_manuscript"
+      - "audit.write_entry"
+    deny:
+      - "dataset.read_raw"
+      - "r_code.*"
+      - "runtime.*"
+      - "skill.*"
+
+  reviewer:
+    allow:
+      - "dataset.read_validated"
+      - "audit.write_entry"
+      - "skill.read_performance_records"   # Added: ADR-0002 — reads perf records for skill evaluation trigger
+    deny:
+      - "dataset.read_raw"
+      - "r_code.*"
+      - "runtime.*"
+      - "skill.update_core"
+      - "skill.register_user"
+
+  security:
+    allow:
+      - "r_code.restore_variables"
+      - "human.request_approval"
+      - "audit.write_entry"
+    deny:
+      - "dataset.read_raw"
+      - "r_code.generate_template"
+      - "runtime.invoke_execution"
+      - "skill.*"
+
+  runtime:
+    allow:
+      - "runtime.invoke_execution"
+      - "audit.write_entry"
+    deny:
+      - "dataset.read_raw"
+      - "r_code.*"
+      - "workflow.*"
+      - "skill.*"
+
+  # Added: ADR-0002 — Skill Lifecycle service permissions
+  skill_lifecycle:
+    description: "Manages Skill evaluation, proposal generation, and update execution after human approval."
+    allow:
+      - "skill.update_core"            # After human approval only
+      - "skill.register_user"          # After human approval only
+      - "skill.read_performance_records"
+      - "human.request_approval"
+      - "audit.write_entry"
+    deny:
+      - "dataset.*"
+      - "r_code.*"
+      - "runtime.*"
+      - "report.*"
+      - "workflow.state_write"
+    note: >
+      skill.update_core and skill.register_user are HIGH/MEDIUM risk capabilities
+      that require human_approval=true before any Skill file is written.
+      The skill_lifecycle agent issues human.request_approval first,
+      then awaits capability_token with confirmed human approval before proceeding.
+
+# -----------------------------------------------------------------------------
+# Ephemeral Capability Token Lifecycle
+# -----------------------------------------------------------------------------
+token_lifecycle:
+  issuance_rule: >
+    Orchestrator generates a Cryptographic Capability Token (CCT)
+    prior to dispatching any task node.
+  binding:
+    - "bound_to_execution_id"
+    - "bound_to_target_agent"
+    - "bound_to_specific_workflow_step"
+  revocation_triggers:
+    - "node_execution_completed"
+    - "node_execution_failed"
+    - "system_transition_to_paused"
+    - "token_ttl_expired"   # Hard limit: 300 seconds
+
+# -----------------------------------------------------------------------------
+# Policy Enforcement
+# -----------------------------------------------------------------------------
+policy_enforcement:
+  on_unauthorized_attempt:
+    action: "IMMEDIATE_WORKFLOW_TERMINATION"
+    audit_severity: "CRITICAL_SECURITY_VIOLATION"
+    revoke_all_tokens: true

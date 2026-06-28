@@ -1,0 +1,117 @@
+# =============================================================================
+# CIE Platform — .gitignore
+# =============================================================================
+
+# ─── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# 仮想環境
+.venv/
+venv/
+env/
+ENV/
+
+# ─── CIE固有: 患者データ・実行データ（最重要）────────────────────────────────
+# データベース（患者データの監査ログ・ワークフロー実行履歴を含む）
+cie_database.db
+cie_database.db-shm
+cie_database.db-wal
+*.db
+
+# 実行時ワークスペース（解析中のデータが含まれる）
+workspace/
+cie_workspace/
+
+# 出力ファイル（解析結果・レポート・図表）
+output/
+cie_output/
+outputs/
+*.pdf
+*.html
+*.png
+*.jpg
+*.svg
+generated_figures/
+
+# Rスクリプト実行時の一時ファイル
+*.Rhistory
+*.RData
+*.Rproj.user/
+.Rproj.user/
+
+# アーカイブ（過去の実行結果）
+archives/
+
+# ─── CIE固有: APIキー・認証情報（絶対に含めない）────────────────────────────
+# キーリングの設定ファイル（万一ローカルに書き出された場合）
+.keyring
+keyring.cfg
+secrets.yaml
+secrets.json
+*.key
+*.pem
+
+# 環境変数ファイル
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+
+# ─── CIE固有: User Skill（施設固有情報を含む可能性）────────────────────────
+# User Skillは施設固有の手順を含むため、共有リポジトリには含めない
+# （各施設が独自管理する）
+skills/user/*/
+!skills/user/REGISTRY.yaml
+
+# ─── テスト・カバレッジ ──────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# ─── 開発ツール ──────────────────────────────────────────────────────────────
+.ruff_cache/
+.mypy_cache/
+.dmypy.json
+
+# ─── IDE・エディタ ────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ─── Node.js（UIビルド・docx生成スクリプト用）───────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# ─── Docker ──────────────────────────────────────────────────────────────────
+.docker/
+docker-compose.override.yml
+
+# ─── ログ ────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ─── OS生成ファイル ───────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db

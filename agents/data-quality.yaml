@@ -1,0 +1,140 @@
+# =============================================================================
+# Version: 2.0.0
+# Status: Draft
+# Purpose: Defines the domain agent responsible for validating dataset integrity,
+#          detecting anomalies, and producing a structured data quality report
+#          before any statistical analysis is permitted to proceed.
+# =============================================================================
+
+schema_version: "1.0"
+agent_id: "data-quality"
+
+metadata:
+  name: "Dataset Quality Validation Agent"
+  role: "Pre-Analysis Data Integrity Enforcement"
+  owner: "data_team"
+  architecture_principles:
+    - "AP-002 Evaluation Driven"
+    - "AP-004 Agent Independence"
+    - "AP-005 Contract First"
+
+# -----------------------------------------------------------------------------
+# Responsibility Boundaries
+# -----------------------------------------------------------------------------
+responsibility_boundaries:
+  owns:
+    - "missing_value_detection_and_quantification"
+    - "data_type_consistency_validation"
+    - "outlier_and_implausible_value_flagging"
+    - "duplicate_record_detection"
+    - "referential_integrity_checking"
+    - "data_quality_report_schema_generation"
+
+  strictly_forbidden:
+    - "statistical_method_selection"         # Belongs exclusively to Statistics Agent
+    - "data_imputation_or_transformation"    # Belongs exclusively to execution agents
+    - "r_or_python_code_authoring"           # Belongs exclusively to execution agents
+    - "workflow_definition_mutation"         # Workflows are immutable architecture
+    - "patient_record_content_logging"       # PII must never enter audit logs
+
+# -----------------------------------------------------------------------------
+# Component Contract (Strict I/O)
+# -----------------------------------------------------------------------------
+contract:
+  input_schema:
+    required:
+      - "execution_id"
+      - "dataset_structural_metadata"        # Column names, inferred types, row counts ONLY
+      - "dataset_statistical_profile"        # Min, max, mean, missing counts per column
+      - "capability_token"
+    optional:
+      - "domain_validation_rules"            # Clinical range constraints per variable
+
+  output_schema:
+    guaranteed:
+      - "execution_id"
+      - "quality_gate_passed"                # Boolean — pipeline continues only if true
+      - "data_quality_report"                # Conforming to report.schema.json
+      - "critical_issues"                    # Array of blocking issues (must be empty to pass)
+      - "warnings"                           # Array of non-blocking advisory items
+      - "recommended_exclusions"             # Row indices or criteria for analyst review
+
+# -----------------------------------------------------------------------------
+# Behavioral Rules
+# -----------------------------------------------------------------------------
+behavior_rules:
+  - rule_id: "DQ-001"
+    priority: "CRITICAL"
+    statement: >
+      Never access raw patient record content. Operate exclusively on aggregated
+      structural metadata and statistical profile summaries provided by the runtime.
+
+  - rule_id: "DQ-002"
+    priority: "CRITICAL"
+    statement: >
+      Set quality_gate_passed=false if any critical issue is detected. The
+      orchestrator must not advance the workflow to the statistics stage until
+      a human reviewer resolves or explicitly waives each critical issue.
+
+  - rule_id: "DQ-003"
+    priority: "HIGH"
+    statement: >
+      Flag missing value rates exceeding 20% per variable as critical issues.
+      Flag rates between 5% and 20% as warnings with imputation recommendations.
+
+  - rule_id: "DQ-004"
+    priority: "HIGH"
+    statement: >
+      Apply domain-specific clinical range constraints when domain_validation_rules
+      are provided. Values outside clinically plausible ranges must be flagged
+      as critical issues regardless of statistical distribution.
+
+  - rule_id: "DQ-005"
+    priority: "MEDIUM"
+    statement: >
+      Produce a structured, schema-conforming JSON output only. No markdown prose,
+      no speculative commentary, no recommendations outside the defined schema fields.
+
+# -----------------------------------------------------------------------------
+# Quality Gate Thresholds
+# -----------------------------------------------------------------------------
+quality_gate_thresholds:
+  missing_value:
+    critical_threshold_pct: 20.0
+    warning_threshold_pct: 5.0
+  duplicate_records:
+    critical_threshold_pct: 1.0
+    warning_threshold_pct: 0.1
+  type_inconsistency:
+    any_occurrence: "critical"
+  implausible_values:
+    any_clinical_range_violation: "critical"
+
+# -----------------------------------------------------------------------------
+# Progressive Context Loading Configuration
+# -----------------------------------------------------------------------------
+context_loading:
+  allowed_knowledge_sources:
+    - "knowledge/clinical/endpoint_definitions.md"
+    - "knowledge/statistics/missing_data_taxonomy.md"
+  maximum_context_tokens: 2048
+  inject_raw_data_rows: false            # Absolute hard guardrail
+
+# -----------------------------------------------------------------------------
+# Failure Handling & Exceptions
+# -----------------------------------------------------------------------------
+exception_handling:
+  on_malformed_metadata:
+    action: "return_structured_error"
+    error_code: "METADATA_PARSE_FAILED"
+    message: "Dataset structural metadata is malformed or incomplete."
+
+  on_capability_token_breach:
+    action: "IMMEDIATE_ABORT"
+    error_code: "SECURITY_BREACH_ATTEMPT"
+
+  on_quality_gate_failure:
+    action: "return_structured_report"
+    pipeline_continuation: false
+    notify_orchestrator: true
+    trigger_human_review: true

@@ -1,0 +1,220 @@
+# =============================================================================
+# Version: 2.0.0
+# Status: Draft
+# Purpose: Defines the evaluation harness for statistical validity and
+#          reproducibility of all quantitative outputs.
+#          Implements AP-009 Verification Before Trust and
+#          system.yaml evaluation.mandatory: statistical_validity.
+#          Reflects PROJECT_RULES.md Priority 4: Reproducibility.
+# =============================================================================
+
+schema_version: "1.0"
+evaluation_id: "statistical"
+
+metadata:
+  name: "Statistical Validity & Reproducibility Evaluation"
+  owner: "evaluation_team"
+  architecture_principles:
+    - "AP-008 Explainability"
+    - "AP-009 Verification Before Trust"
+    - "AP-017 Evaluation Driven Development"
+  system_layer: "evaluation"
+  priority: 2
+  blocking: true
+
+# -----------------------------------------------------------------------------
+# Scope
+# -----------------------------------------------------------------------------
+scope:
+  description: >
+    Evaluates the statistical rigor of the analysis plan, execution results,
+    and the reproducibility of the full computational pipeline.
+    Operates on validated artifacts from Statistics Agent and Runtime Agent.
+  artifacts_evaluated:
+    - "analysis_plan"
+    - "r_script"
+    - "execution_result"
+    - "review_report"
+
+# -----------------------------------------------------------------------------
+# Passing Threshold
+# -----------------------------------------------------------------------------
+threshold:
+  minimum_score_pct: 90
+  reference: "spec/workflow.yaml quality_gate.evaluation_score.minimum"
+  on_failure: "block_pipeline_and_trigger_human_review"
+
+# -----------------------------------------------------------------------------
+# Evaluation Dimensions
+# -----------------------------------------------------------------------------
+dimensions:
+
+  - dimension_id: "STAT-001"
+    name: "Analysis Plan Completeness"
+    weight_pct: 20
+    description: >
+      The analysis plan produced by the Statistics Agent must fully specify
+      all methodological decisions required to execute and interpret the analysis.
+    checks:
+      - check_id: "STAT-001-A"
+        statement: "analysis_plan declares at least one primary statistical method with justification."
+        severity: "critical"
+      - check_id: "STAT-001-B"
+        statement: "All assumption_checks_required are listed with explicit pass/fail criteria."
+        severity: "critical"
+      - check_id: "STAT-001-C"
+        statement: "Multiple comparison correction method is declared when n_hypotheses > 1."
+        severity: "critical"
+      - check_id: "STAT-001-D"
+        statement: "Expected output fields (effect size, CI bounds, p-value, n) are declared."
+        severity: "critical"
+      - check_id: "STAT-001-E"
+        statement: "Significance threshold (alpha) is explicitly declared."
+        severity: "advisory"
+
+  - dimension_id: "STAT-002"
+    name: "Assumption Check Validity"
+    weight_pct: 20
+    description: >
+      Statistical assumptions must be formally tested, not assumed. Results
+      of assumption checks must drive method selection or trigger non-parametric
+      alternatives per statistics.yaml decision framework.
+    checks:
+      - check_id: "STAT-002-A"
+        statement: "Normality testing was performed for continuous outcomes when parametric methods were selected."
+        severity: "critical"
+      - check_id: "STAT-002-B"
+        statement: "Homoscedasticity was tested when ANOVA or linear regression was applied."
+        severity: "critical"
+      - check_id: "STAT-002-C"
+        statement: "Non-parametric method was selected when normality assumption failed."
+        severity: "critical"
+      - check_id: "STAT-002-D"
+        statement: "Proportional hazards assumption was tested when Cox regression was applied."
+        severity: "critical"
+      - check_id: "STAT-002-E"
+        statement: "Independence assumption was documented and verified or explicitly noted as unverifiable."
+        severity: "advisory"
+
+  - dimension_id: "STAT-003"
+    name: "Result Completeness"
+    weight_pct: 20
+    description: >
+      Execution results must include all required quantitative outputs.
+      P-value-only results are insufficient per statistics.yaml rule ST-004.
+    checks:
+      - check_id: "STAT-003-A"
+        statement: "Every hypothesis test result includes: test statistic, degrees of freedom, p-value, effect size, and 95% CI."
+        severity: "critical"
+      - check_id: "STAT-003-B"
+        statement: "Sample sizes (n per group) are reported for all group comparisons."
+        severity: "critical"
+      - check_id: "STAT-003-C"
+        statement: "Descriptive statistics (mean/SD or median/IQR) are reported for all outcome variables."
+        severity: "critical"
+      - check_id: "STAT-003-D"
+        statement: "Missing data handling method is documented in the execution_result."
+        severity: "advisory"
+
+  - dimension_id: "STAT-004"
+    name: "Numerical Consistency"
+    weight_pct: 20
+    description: >
+      All numeric values must be internally consistent across the full artifact
+      chain. Contradictory values between report, figures, and execution_result
+      indicate fabrication or extraction error.
+    checks:
+      - check_id: "STAT-004-A"
+        statement: "Confidence interval bounds are consistent with reported effect size and standard error."
+        severity: "critical"
+      - check_id: "STAT-004-B"
+        statement: "P-value direction is consistent with test statistic sign and confidence interval."
+        severity: "critical"
+      - check_id: "STAT-004-C"
+        statement: "Sum of group n values equals total N reported in dataset_structural_metadata."
+        severity: "critical"
+      - check_id: "STAT-004-D"
+        statement: "Percentage values sum correctly within their respective categories."
+        severity: "critical"
+
+  - dimension_id: "STAT-005"
+    name: "Reproducibility"
+    weight_pct: 20
+    description: >
+      The analysis must be fully reproducible from the declared inputs and R script.
+      Reflects PROJECT_RULES.md Priority 4 and system.yaml quality_attributes.
+    checks:
+      - check_id: "STAT-005-A"
+        statement: "Random seed is declared and fixed in the R script for any stochastic operations."
+        severity: "critical"
+      - check_id: "STAT-005-B"
+        statement: "All R package versions used are captured in execution_result."
+        severity: "critical"
+      - check_id: "STAT-005-C"
+        statement: "Source dataset is identified by hash (sha256) in execution_result."
+        severity: "critical"
+      - check_id: "STAT-005-D"
+        statement: "Re-execution of the R script with the same inputs produces bit-identical numeric outputs."
+        severity: "critical"
+      - check_id: "STAT-005-E"
+        statement: "R script contains no hard-coded absolute file paths."
+        severity: "advisory"
+
+# -----------------------------------------------------------------------------
+# Scoring Rules
+# -----------------------------------------------------------------------------
+scoring:
+  method: "weighted_dimension_average"
+  critical_check_failure_policy:
+    any_critical_failure: "dimension_score_zero"
+  advisory_check_weight: 0.5
+  rounding: "floor"
+
+# -----------------------------------------------------------------------------
+# Reproducibility Verification Protocol
+# -----------------------------------------------------------------------------
+reproducibility_verification:
+  method: "hash_comparison"
+  procedure:
+    - step: 1
+      action: "capture_sha256_of_execution_result_numerics"
+    - step: 2
+      action: "re_execute_r_script_in_isolated_runtime"
+    - step: 3
+      action: "capture_sha256_of_re_execution_numerics"
+    - step: 4
+      action: "compare_hashes"
+      on_mismatch: "set_reproducibility_verified_false_and_flag_critical"
+  tolerance:
+    floating_point_delta: 1.0e-10
+    description: "Floating point results within this delta are considered identical."
+
+# -----------------------------------------------------------------------------
+# Output Schema
+# -----------------------------------------------------------------------------
+output:
+  schema_ref: "cie://schemas/report.schema.json"
+  report_type: "evaluation_report"
+  required_fields:
+    - "evaluation_score_pct"
+    - "dimension_scores"
+    - "reproducibility_verified"
+    - "completion_status"
+
+# -----------------------------------------------------------------------------
+# Failure Handling
+# -----------------------------------------------------------------------------
+exception_handling:
+  on_re_execution_failure:
+    action: "score_STAT-005_zero"
+    log_finding: true
+    severity: "critical"
+    message: "Re-execution for reproducibility verification failed. Runtime error during verification run."
+  on_missing_artifact:
+    action: "score_dimension_zero"
+    log_finding: true
+    severity: "critical"
+  on_schema_validation_failure:
+    action: "abort_evaluation"
+    error_code: "ARTIFACT_SCHEMA_INVALID"
+    pipeline_continuation: false

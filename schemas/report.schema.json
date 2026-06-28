@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cie://schemas/report.schema.json",
+  "title": "CIE Unified Report",
+  "description": "Unified schema for all structured report artifacts produced by domain agents: quality_report (Data Quality Agent), review_report (Reviewer Agent), and evaluation_report (Evaluation node). Each report_type populates only its relevant section.",
+  "version": "1.0.0",
+  "type": "object",
+  "required": [
+    "report_id",
+    "execution_id",
+    "report_type",
+    "produced_by_agent_id",
+    "schema_version",
+    "created_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "report_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "execution_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "report_type": {
+      "type": "string",
+      "enum": ["quality_report", "review_report", "evaluation_report", "security_report"],
+      "description": "Determines which section object is populated."
+    },
+    "produced_by_agent_id": {
+      "type": "string",
+      "enum": ["data-quality", "reviewer", "security", "evaluation"],
+      "description": "Agent that produced this report. Must match agent_id in agents/ definitions."
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "gate_passed": {
+      "type": "boolean",
+      "description": "Unified gate result. Maps to quality_gate_passed (Data Quality), review_passed (Reviewer), or evaluation_score >= threshold (Evaluation)."
+    },
+    "readiness_score": {
+      "type": ["number", "null"],
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Normalized score 0.0–1.0. Required for review_report and evaluation_report."
+    },
+    "critical_findings": {
+      "type": "array",
+      "description": "Blocking issues that set gate_passed=false.",
+      "items": { "$ref": "#/$defs/Finding" }
+    },
+    "advisory_findings": {
+      "type": "array",
+      "description": "Non-blocking improvement suggestions.",
+      "items": { "$ref": "#/$defs/Finding" }
+    },
+    "quality_report_section": {
+      "$ref": "#/$defs/QualityReportSection"
+    },
+    "review_report_section": {
+      "$ref": "#/$defs/ReviewReportSection"
+    },
+    "evaluation_report_section": {
+      "$ref": "#/$defs/EvaluationReportSection"
+    },
+    "security_report_section": {
+      "$ref": "#/$defs/SecurityReportSection"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "$defs": {
+    "Finding": {
+      "type": "object",
+      "required": ["finding_id", "severity", "description", "affected_component"],
+      "additionalProperties": false,
+      "properties": {
+        "finding_id": {
+          "type": "string",
+          "description": "Unique finding reference. e.g. 'DQ-CRIT-001', 'CC-001'."
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["critical", "advisory"]
+        },
+        "description": {
+          "type": "string"
+        },
+        "affected_component": {
+          "type": "string",
+          "description": "Column name, node ID, artifact ID, or agent ID depending on context."
+        },
+        "resolution_required_before": {
+          "type": ["string", "null"],
+          "description": "Node ID that must not execute until this finding is resolved."
+        },
+        "human_resolution_required": {
+          "type": "boolean"
+        }
+      }
+    },
+    "QualityReportSection": {
+      "type": "object",
+      "description": "Populated only when report_type = quality_report.",
+      "additionalProperties": false,
+      "properties": {
+        "columns_evaluated": { "type": "integer", "minimum": 0 },
+        "columns_with_critical_missing": { "type": "integer", "minimum": 0 },
+        "columns_with_warning_missing": { "type": "integer", "minimum": 0 },
+        "duplicate_record_count": { "type": "integer", "minimum": 0 },
+        "duplicate_record_rate_pct": { "type": "number", "minimum": 0.0 },
+        "type_inconsistency_count": { "type": "integer", "minimum": 0 },
+        "clinical_range_violations": { "type": "integer", "minimum": 0 },
+        "recommended_exclusions": {
+          "type": "array",
+          "description": "Row criteria or explicit indices recommended for analyst review.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "ReviewReportSection": {
+      "type": "object",
+      "description": "Populated only when report_type = review_report.",
+      "additionalProperties": false,
+      "properties": {
+        "consistency_matrix": {
+          "type": "array",
+          "description": "Results of each consistency check. Conforms to reviewer.yaml consistency_checks.",
+          "items": {
+            "type": "object",
+            "required": ["check_id", "passed", "severity_on_failure"],
+            "additionalProperties": false,
+            "properties": {
+              "check_id": { "type": "string" },
+              "passed": { "type": "boolean" },
+              "severity_on_failure": { "type": "string", "enum": ["critical", "advisory"] },
+              "detail": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "artifacts_reviewed": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Artifact IDs included in this review."
+        },
+        "unresolved_authorial_items": {
+          "type": "array",
+          "description": "Items from Reporting Agent unresolved_items that require human decision.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "EvaluationReportSection": {
+      "type": "object",
+      "description": "Populated only when report_type = evaluation_report.",
+      "additionalProperties": false,
+      "properties": {
+        "evaluation_score_pct": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 100.0,
+          "description": "Aggregate score. Must be >= 90 to pass per spec/workflow.yaml quality_gate."
+        },
+        "dimension_scores": {
+          "type": "object",
+          "description": "Score per evaluation dimension from evaluation/correctness.yaml etc.",
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 100.0
+          }
+        },
+        "reproducibility_verified": { "type": "boolean" },
+        "completion_status": {
+          "type": "string",
+          "enum": ["completed", "failed", "partial"]
+        }
+      }
+    },
+    "SecurityReportSection": {
+      "type": "object",
+      "description": "Populated only when report_type = security_report.",
+      "additionalProperties": false,
+      "properties": {
+        "events_logged": { "type": "integer", "minimum": 0 },
+        "breach_events": { "type": "integer", "minimum": 0 },
+        "tokens_issued": { "type": "integer", "minimum": 0 },
+        "tokens_revoked": { "type": "integer", "minimum": 0 },
+        "unauthorized_attempts": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

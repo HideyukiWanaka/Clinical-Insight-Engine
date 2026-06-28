@@ -1,0 +1,284 @@
+# =============================================================================
+# Version: 2.0.0
+# Status: Draft
+# Purpose: Defines the regression evaluation harness for detecting unintended
+#          behavioral regressions across agent contracts, schema integrity,
+#          workflow consistency, and cross-version reproducibility.
+#          Implements AP-020 Long-Term Stability and AP-016 Architecture Before Code.
+#          Supports PROJECT_RULES.md section 17: Definition of Done.
+# =============================================================================
+
+schema_version: "1.0"
+evaluation_id: "regression"
+
+metadata:
+  name: "Regression & Behavioral Consistency Evaluation"
+  owner: "evaluation_team"
+  architecture_principles:
+    - "AP-005 Contract First"
+    - "AP-016 Architecture Before Code"
+    - "AP-017 Evaluation Driven Development"
+    - "AP-019 Extensibility"
+    - "AP-020 Long-Term Stability"
+  system_layer: "evaluation"
+  priority: 5
+  blocking: true
+  execution_trigger:
+    - "on_workflow_completion"
+    - "on_agent_definition_change"
+    - "on_schema_change"
+    - "on_workflow_definition_change"
+
+# -----------------------------------------------------------------------------
+# Scope
+# -----------------------------------------------------------------------------
+scope:
+  description: >
+    Evaluates whether the current execution is consistent with declared contracts,
+    schemas, and architectural rules. Also detects regressions introduced by
+    changes to agent definitions, schemas, or workflow definitions by comparing
+    against the pinned baseline. Does not evaluate scientific content
+    (handled by correctness.yaml and statistical.yaml).
+  artifacts_evaluated:
+    - "workflow_trace"
+    - "audit_log"
+    - "all_agent_output_payloads"
+    - "schema_validation_results"
+    - "execution_result"
+
+# -----------------------------------------------------------------------------
+# Passing Threshold
+# -----------------------------------------------------------------------------
+threshold:
+  minimum_score_pct: 90
+  reference: "spec/workflow.yaml quality_gate.evaluation_score.minimum"
+  on_failure: "block_pipeline_and_trigger_human_review"
+
+# -----------------------------------------------------------------------------
+# Evaluation Dimensions
+# -----------------------------------------------------------------------------
+dimensions:
+
+  - dimension_id: "REG-001"
+    name: "Schema Contract Compliance"
+    weight_pct: 25
+    description: >
+      All payloads crossing component boundaries must have passed schema
+      validation at both dispatch (input) and receipt (output).
+      Conforms to PROJECT_RULES.md section 13 and AP-005 Contract First.
+    checks:
+      - check_id: "REG-001-A"
+        statement: "Every task dispatch payload validated against task.schema.json with no errors."
+        severity: "critical"
+      - check_id: "REG-001-B"
+        statement: "Every agent output payload validated against its declared output schema_ref with no errors."
+        severity: "critical"
+      - check_id: "REG-001-C"
+        statement: "No additionalProperties violations exist in any payload (all schemas enforce additionalProperties: false)."
+        severity: "critical"
+      - check_id: "REG-001-D"
+        statement: "No required field was absent from any inter-agent payload."
+        severity: "critical"
+      - check_id: "REG-001-E"
+        statement: "dataset.schema.json metadata_type was appropriate for the receiving agent's permission level."
+        severity: "critical"
+
+  - dimension_id: "REG-002"
+    name: "Agent Responsibility Boundary Compliance"
+    weight_pct: 20
+    description: >
+      No agent may have executed operations listed in its strictly_forbidden
+      section. Cross-agent responsibility violations are detected by comparing
+      audit log tool_call_io entries against agent definitions.
+    checks:
+      - check_id: "REG-002-A"
+        statement: "No agent performed an operation listed in its strictly_forbidden list."
+        severity: "critical"
+      - check_id: "REG-002-B"
+        statement: "No agent modified a workflow definition during execution."
+        severity: "critical"
+      - check_id: "REG-002-C"
+        statement: "No agent accessed raw patient data rows (inject_raw_data_rows remained false for all context loads)."
+        severity: "critical"
+      - check_id: "REG-002-D"
+        statement: "Statistics Agent did not perform execution (runtime.invoke_execution not in its granted scopes)."
+        severity: "critical"
+      - check_id: "REG-002-E"
+        statement: "Reviewer Agent did not modify any artifact under review."
+        severity: "critical"
+
+  - dimension_id: "REG-003"
+    name: "Workflow DAG Integrity"
+    weight_pct: 20
+    description: >
+      The workflow execution must have followed the declared DAG structure in
+      spec/workflow.yaml without unauthorized branching, skipped dependencies,
+      or undocumented node additions.
+    checks:
+      - check_id: "REG-003-A"
+        statement: "Every executed node exists in the declared workflow definition."
+        severity: "critical"
+      - check_id: "REG-003-B"
+        statement: "Every node's depends_on preconditions were satisfied before execution."
+        severity: "critical"
+      - check_id: "REG-003-C"
+        statement: "No node was skipped without a documented decision_branch_taken entry."
+        severity: "critical"
+      - check_id: "REG-003-D"
+        statement: "Decision node branches taken correspond to declared branch options in workflow definition."
+        severity: "critical"
+      - check_id: "REG-003-E"
+        statement: "No circular dependency was introduced during execution."
+        severity: "critical"
+
+  - dimension_id: "REG-004"
+    name: "Baseline Behavioral Consistency"
+    weight_pct: 20
+    description: >
+      When a pinned baseline execution exists, the current execution must produce
+      statistically equivalent results from the same inputs. Detects regressions
+      introduced by agent, schema, or workflow changes. Implements AP-020 Long-Term Stability.
+    checks:
+      - check_id: "REG-004-A"
+        statement: "When baseline exists: same input dataset hash produces results within floating_point_delta tolerance."
+        severity: "critical"
+        condition: "baseline_exists"
+      - check_id: "REG-004-B"
+        statement: "When baseline exists: same statistical method is selected for the same intent_object."
+        severity: "critical"
+        condition: "baseline_exists"
+      - check_id: "REG-004-C"
+        statement: "When baseline exists: workflow node execution order matches baseline trace."
+        severity: "advisory"
+        condition: "baseline_exists"
+      - check_id: "REG-004-D"
+        statement: "Agent definitions have not changed since the last ADR-recorded architecture review."
+        severity: "advisory"
+
+  - dimension_id: "REG-005"
+    name: "Definition of Done Compliance"
+    weight_pct: 15
+    description: >
+      The completed workflow must satisfy all conditions declared in
+      PROJECT_RULES.md section 17 Definition of Done and
+      MANIFEST.yaml completion_definition.
+    checks:
+      - check_id: "REG-005-A"
+        statement: "All required artifacts (validated_dataset, analysis_plan, r_script, execution_result, figures, report, review_report, evaluation_report) are present."
+        severity: "critical"
+      - check_id: "REG-005-B"
+        statement: "All artifacts have passed schema validation."
+        severity: "critical"
+      - check_id: "REG-005-C"
+        statement: "correctness evaluation score >= 90."
+        severity: "critical"
+      - check_id: "REG-005-D"
+        statement: "statistical evaluation score >= 90."
+        severity: "critical"
+      - check_id: "REG-005-E"
+        statement: "security evaluation score >= 90 with no breach events."
+        severity: "critical"
+      - check_id: "REG-005-F"
+        statement: "An ADR was created if any agent definition, schema, or workflow definition was changed during this execution cycle."
+        severity: "advisory"
+
+# -----------------------------------------------------------------------------
+# Skill Performance Monitoring (ADR-0002)
+# Tracks Skill execution results across workflow runs to detect degradation
+# and trigger meta/skill-evaluator when thresholds are breached.
+# -----------------------------------------------------------------------------
+skill_performance_monitoring:
+  enabled: true
+  reference: "decisions/ADR-0002.md"
+
+  record_per_execution:
+    target: "skill_performance_records"
+    storage: "cie_database.db"
+    fields:
+      - "skill_id"
+      - "skill_namespace"       # core | user
+      - "skill_version"
+      - "execution_id"
+      - "workflow_id"
+      - "test_results"          # passed / failed / total
+      - "reviewer_findings"     # finding_ids from review_report
+      - "correctness_dimension_score"
+      - "statistical_dimension_score"
+      - "timestamp"
+
+  degradation_thresholds:
+    recurring_finding_trigger:
+      description: "Trigger SE-001 when same finding appears ≥3 of last 5 executions"
+      window: 5
+      threshold: 3
+      action: "trigger_meta_skill_evaluator"
+
+    low_pass_rate_trigger:
+      description: "Trigger SE-002 when avg test pass rate < 80% over last 10 executions"
+      window: 10
+      threshold_pct: 80
+      action: "trigger_meta_skill_evaluator"
+
+  on_trigger:
+    action: "dispatch_meta_skill_evaluator"
+    target_skill: "meta/skill-evaluator"
+    requires_human_approval_for_subsequent_proposal: true   # ADR-0002 Principle 4
+
+# -----------------------------------------------------------------------------
+# Baseline Management
+# -----------------------------------------------------------------------------
+baseline:
+  storage_location: "evaluation/baselines/"
+  naming_convention: "baseline_{workflow_id}_{dataset_hash}_{workflow_version}.json"
+  update_policy:
+    requires_human_approval: true
+    requires_adr: true
+    description: >
+      Baselines may only be updated when a deliberate architectural change has
+      been reviewed and an ADR has been created. Automatic baseline updates
+      are forbidden.
+  tolerance:
+    floating_point_delta: 1.0e-10
+
+# -----------------------------------------------------------------------------
+# Scoring Rules
+# -----------------------------------------------------------------------------
+scoring:
+  method: "weighted_dimension_average"
+  critical_check_failure_policy:
+    any_critical_failure: "dimension_score_zero"
+  advisory_check_weight: 0.5
+  conditional_check_policy:
+    condition_not_met: "skip_check_and_exclude_from_scoring"
+  rounding: "floor"
+
+# -----------------------------------------------------------------------------
+# Output Schema
+# -----------------------------------------------------------------------------
+output:
+  schema_ref: "cie://schemas/report.schema.json"
+  report_type: "evaluation_report"
+  required_fields:
+    - "evaluation_score_pct"
+    - "dimension_scores"
+    - "reproducibility_verified"
+    - "completion_status"
+
+# -----------------------------------------------------------------------------
+# Failure Handling
+# -----------------------------------------------------------------------------
+exception_handling:
+  on_baseline_unavailable:
+    action: "skip_REG-004_and_log_advisory"
+    pipeline_continuation: true
+    severity: "advisory"
+    message: "No baseline found. REG-004 checks skipped. Consider pinning a baseline after first successful run."
+  on_schema_validation_failure:
+    action: "abort_evaluation"
+    error_code: "ARTIFACT_SCHEMA_INVALID"
+    pipeline_continuation: false
+  on_workflow_trace_missing:
+    action: "score_REG-003_zero"
+    log_finding: true
+    severity: "critical"
+    message: "Workflow trace is required for regression evaluation. Cannot verify DAG integrity."

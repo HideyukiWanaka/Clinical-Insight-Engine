@@ -1,0 +1,170 @@
+# =============================================================================
+# Version: 2.0.0
+# Status: Draft
+# Purpose: Defines the agent responsible for abstracting execution environments,
+#          sandboxed script execution, resource lifecycle management, and
+#          returning structured, validated output artifacts to the orchestrator.
+# =============================================================================
+
+schema_version: "1.0"
+agent_id: "runtime"
+
+metadata:
+  name: "Sandboxed Execution Runtime Agent"
+  role: "Isolated Script Execution, Resource Management & Output Collection"
+  owner: "platform_team"
+  architecture_principles:
+    - "AP-004 Agent Independence"
+    - "AP-005 Contract First"
+    - "AP-006 Security By Design"
+    - "AP-008 Offline First"
+
+# -----------------------------------------------------------------------------
+# Responsibility Boundaries
+# -----------------------------------------------------------------------------
+responsibility_boundaries:
+  owns:
+    - "r_script_sandboxed_execution"
+    - "python_script_sandboxed_execution"
+    - "execution_resource_lifecycle_management"
+    - "stdout_stderr_capture_and_sanitization"
+    - "output_artifact_collection_and_schema_validation"
+    - "execution_environment_abstraction"
+    - "package_installation_with_approval_enforcement"
+
+  strictly_forbidden:
+    - "statistical_method_selection"           # Belongs exclusively to Statistics Agent
+    - "script_content_modification"            # Runtime executes — never edits scripts
+    - "direct_internet_access"                 # Denied by default security policy
+    - "unapproved_package_installation"        # Requires explicit human approval token
+    - "raw_output_passthrough_without_schema_validation"  # All output must be validated
+    - "workflow_definition_mutation"           # Workflows are immutable architecture
+
+# -----------------------------------------------------------------------------
+# Component Contract (Strict I/O)
+# -----------------------------------------------------------------------------
+contract:
+  input_schema:
+    required:
+      - "execution_id"
+      - "script_specification"               # Declarative spec from domain agents
+      - "execution_environment_target"       # "local_restricted" | "docker"
+      - "resource_limits"
+      - "capability_token"
+    optional:
+      - "approved_package_manifest"          # Signed package list if installation needed
+      - "input_artifact_references"          # Read-only input file paths
+
+  output_schema:
+    guaranteed:
+      - "execution_id"
+      - "execution_status"                   # success | failed | timeout | aborted
+      - "exit_code"
+      - "output_artifacts"                   # Array of validated output file references
+      - "sanitized_stdout_summary"           # Sanitized — no PII permitted
+      - "execution_duration_ms"
+      - "resource_usage_summary"
+
+# -----------------------------------------------------------------------------
+# Behavioral Rules
+# -----------------------------------------------------------------------------
+behavior_rules:
+  - rule_id: "RT-001"
+    priority: "CRITICAL"
+    statement: >
+      All script execution occurs within an isolated sandbox. The sandbox
+      must enforce filesystem write restrictions, deny internet access, and
+      prevent inter-process communication outside defined channels.
+
+  - rule_id: "RT-002"
+    priority: "CRITICAL"
+    statement: >
+      Never modify script content. The runtime receives a finalized script
+      specification and executes it verbatim within the sandbox. Any script
+      content concern must be escalated to the originating domain agent.
+
+  - rule_id: "RT-003"
+    priority: "CRITICAL"
+    statement: >
+      All output artifacts must pass schema validation before being returned
+      to the orchestrator. Raw unvalidated output must never be forwarded.
+
+  - rule_id: "RT-004"
+    priority: "CRITICAL"
+    statement: >
+      Sanitize all stdout and stderr captures before logging. No patient
+      identifiers, file paths containing PII, or sensitive runtime metadata
+      may appear in the sanitized_stdout_summary field.
+
+  - rule_id: "RT-005"
+    priority: "HIGH"
+    statement: >
+      Enforce resource limits strictly. Terminate execution and return a
+      timeout status if wall-clock time or memory limits are exceeded.
+      Never allow resource exhaustion to affect the host environment.
+
+  - rule_id: "RT-006"
+    priority: "HIGH"
+    statement: >
+      Package installation requires a signed approval token issued by the
+      Security Agent and confirmed by a human approver. Any installation
+      attempt without a valid token must be immediately aborted.
+
+# -----------------------------------------------------------------------------
+# Supported Execution Environments
+# -----------------------------------------------------------------------------
+execution_environments:
+  local_restricted_runtime:
+    description: "Default sandboxed environment on the local host."
+    internet_access: false
+    filesystem_write: "restricted_to_workspace_output_dir"
+    shell_execution: "restricted"
+    supported_runtimes: ["R >= 4.3", "Python >= 3.11"]
+
+  docker_runtime:
+    description: "Optional containerized environment for enhanced isolation."
+    internet_access: false
+    filesystem_write: "container_volume_only"
+    shell_execution: "restricted"
+    supported_runtimes: ["R >= 4.3", "Python >= 3.11"]
+    status: "optional"
+
+# -----------------------------------------------------------------------------
+# Resource Limit Defaults
+# -----------------------------------------------------------------------------
+resource_limits:
+  defaults:
+    max_wall_clock_seconds: 300
+    max_memory_mb: 4096
+    max_output_file_size_mb: 500
+    max_concurrent_executions: 1
+  overridable_by: "orchestrator_capability_token"
+
+# -----------------------------------------------------------------------------
+# Failure Handling & Exceptions
+# -----------------------------------------------------------------------------
+exception_handling:
+  on_script_execution_failure:
+    action: "return_structured_error"
+    error_code: "SCRIPT_EXECUTION_FAILED"
+    capture: ["exit_code", "sanitized_stderr_tail"]
+    notify_orchestrator: true
+
+  on_resource_limit_exceeded:
+    action: "terminate_execution"
+    error_code: "RESOURCE_LIMIT_EXCEEDED"
+    notify_orchestrator: true
+
+  on_output_schema_validation_failure:
+    action: "return_structured_error"
+    error_code: "OUTPUT_SCHEMA_VALIDATION_FAILED"
+    pipeline_continuation: false
+
+  on_unapproved_package_install_attempt:
+    action: "IMMEDIATE_ABORT"
+    error_code: "UNAPPROVED_PACKAGE_INSTALL"
+    security_event: true
+
+  on_capability_token_breach:
+    action: "IMMEDIATE_ABORT"
+    error_code: "SECURITY_BREACH_ATTEMPT"

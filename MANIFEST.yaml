@@ -1,0 +1,319 @@
+manifest:
+  name: CIE Platform
+  codename: CIE
+  version: 2.1.0
+  specification_version: 1.1
+
+metadata:
+  description: >
+    AI-native software architecture specification repository
+    for the Clinical Intelligence Environment (CIE).
+
+  owner: Project Team
+  status: Draft
+  language: en
+  primary_format: markdown
+  machine_readable: true
+
+  changelog:
+    - version: "2.1.0"
+      date: "2025-06-27"
+      decisions:
+        - "ADR-0001: Orchestrator-Planner Responsibility Boundary"
+        - "ADR-0002: Meta-Skills and Self-Improving Skill Architecture"
+      changes:
+        - "skills/ namespace restructured into core/, meta/, user/"
+        - "skills/user/REGISTRY.yaml added as authoritative User Skill registry"
+        - "evaluation/regression.yaml extended with skill_performance_monitoring"
+        - "spec/workflow.yaml extended with 4 static workflow definitions"
+        - "spec/skill-lifecycle.md added"
+        - "decisions/ directory added with ADR-0001 and ADR-0002"
+
+principles:
+
+  architecture:
+    - Intent Driven
+    - Agent Oriented
+    - Workflow First
+    - Human In The Loop
+    - Offline First
+    - Security By Design
+    - Evaluation Driven
+    - Extensible
+
+loading_order:
+
+  - PROJECT_RULES.md
+  - decisions/
+
+  - architecture/vision.md
+  - architecture/principles.md
+  - architecture/component-model.md
+  - architecture/runtime-model.md
+  - architecture/security-model.md
+  - architecture/security-pii-filter.md
+  - architecture/ui-model.md
+
+  - spec/system.yaml
+  - spec/runtime.yaml
+  - spec/workflow.yaml
+  - spec/permissions.yaml
+  - spec/skill-lifecycle.md
+  - spec/ui/
+
+  - schemas/
+
+  - agents/
+
+  - skills/meta/
+  - skills/core/
+  - skills/user/
+
+  - knowledge/
+
+  - evaluation/
+
+  - decisions/
+
+repository:
+
+  architecture:
+
+    root: architecture/
+
+    required:
+      - vision.md
+      - principles.md
+      - component-model.md
+      - runtime-model.md
+      - security-model.md
+      - workflow-model.md
+      - security-pii-filter.md      # Added: PII detection filter (ADR-0002 reference)
+      - ui-model.md                 # Added: Presentation layer design
+
+  specification:
+
+    root: spec/
+
+    required:
+      - system.yaml
+      - workflow.yaml
+      - runtime.yaml
+      - permissions.yaml
+      - configuration.yaml
+      - skill-lifecycle.md          # Added: ADR-0002
+
+    subdirectories:
+      ui:
+        required:
+          - ui-principles.md
+          - screen-specifications.md
+          - component-library.md
+          - interaction-flow.md
+
+  schemas:
+
+    root: schemas/
+
+    required:
+      - dataset.schema.json
+      - workflow.schema.json
+      - report.schema.json
+      - agent.schema.json
+      - task.schema.json
+      - analysis-request.schema.json  # Added: Planner output schema
+
+  agents:
+
+    root: agents/
+
+    required:
+      - orchestrator.yaml
+      - planner.yaml
+      - data-quality.yaml
+      - statistics.yaml
+      - visualization.yaml
+      - reporting.yaml
+      - reviewer.yaml
+      - runtime.yaml
+      - security.yaml
+
+  skills:
+
+    root: skills/
+
+    # ADR-0002: 3-namespace structure
+    # Loading priority: user/ > core/ > (meta/ is infrastructure, not overridable)
+    namespaces:
+
+      core:
+        root: skills/core/
+        description: >
+          Official CIE Skills. Immutable without Human Authority approval
+          and SkillLifecycle process (spec/skill-lifecycle.md).
+          Never contains project-specific business logic (PROJECT_RULES.md Section 11).
+        update_requires: "skill_lifecycle_process + human_approval"
+        required:
+          - statistics/t-test/
+          - statistics/anova/
+          - statistics/regression/
+          - statistics/survival/
+          - statistics/correlation/
+          - visualization/group-comparison/
+          - visualization/survival/
+          - reporting/table-one/
+          - reporting/manuscript-section/
+        structure_per_skill:
+          - SKILL.md
+          - examples/
+          - tests/
+          - versions/               # Added: ADR-0002 version archive
+
+      meta:
+        root: skills/meta/
+        description: >
+          Meta-Skills for Skill evaluation, improvement proposal generation,
+          and User Skill scaffolding. Provided by CIE infrastructure.
+          Cannot be overridden by user/ namespace.
+        update_requires: "cie_team_only + human_approval"
+        required:
+          - skill-evaluator/
+          - skill-proposer/
+          - skill-scaffolder/
+        structure_per_skill:
+          - SKILL.md
+          - examples/
+          - tests/
+
+      user:
+        root: skills/user/
+        description: >
+          User-defined Skills. Can override core/ Skills with the same skill_id.
+          Added via meta/skill-scaffolder + Human Authority approval.
+          Must conform to the same SKILL.md interface standard as core/ Skills.
+        update_requires: "human_approval"
+        registry: skills/user/REGISTRY.yaml   # Authoritative list of registered User Skills
+        structure_per_skill:
+          - SKILL.md
+          - METADATA.yaml                     # Added: ADR-0002 metadata
+          - examples/
+          - tests/
+
+  knowledge:
+
+    root: knowledge/
+
+    domains:
+      - statistics
+      - clinical
+      - reporting
+      - R
+      - Python
+      - visualization
+
+  evaluation:
+
+    root: evaluation/
+
+    required:
+      - correctness.yaml
+      - statistical.yaml
+      - security.yaml
+      - usability.yaml
+      - regression.yaml             # Includes skill_performance_monitoring (ADR-0002)
+
+  decisions:
+
+    root: decisions/
+
+    naming: ADR-XXXX.md
+
+    required:
+      - ADR-0001.md   # Orchestrator-Planner Responsibility Boundary
+      - ADR-0002.md   # Meta-Skills and Self-Improving Skill Architecture
+
+runtime:
+
+  default:
+    provider: local_restricted_runtime
+
+  optional:
+    - docker_runtime
+
+  future:
+    - remote_runtime
+    - distributed_runtime
+
+security:
+
+  default_policy:
+    internet_access: deny
+    filesystem_write: restricted
+    shell_execution: restricted
+    pii_access: reviewed
+    approval_required:
+      - export
+      - external_api
+      - package_install
+      - skill_update              # Added: ADR-0002 — Skill file writes require approval
+      - user_skill_registration   # Added: ADR-0002
+
+development:
+
+  implementation_priority:
+    1:
+      - architecture
+    2:
+      - schemas
+    3:
+      - runtime
+    4:
+      - orchestrator
+    5:
+      - workflow
+    6:
+      - agents
+    7:
+      - ui
+    8:
+      - evaluation
+    9:
+      - skills/meta               # Added: ADR-0002 — Meta-Skills after core evaluation
+
+completion_definition:
+
+  repository_valid:
+    - architecture_complete
+    - schemas_valid
+    - specification_complete
+    - permissions_defined
+    - runtime_defined
+    - evaluation_defined
+    - skill_lifecycle_defined     # Added: ADR-0002
+    - tests_pass
+
+ai_behavior:
+
+  before_any_change:
+    - read_manifest
+    - read_project_rules
+    - read_relevant_adr           # Added: decisions/ must be consulted
+    - load_required_architecture
+    - load_related_specification
+    - validate_schema
+
+  before_skill_change:            # Added: ADR-0002
+    - check_skill_namespace       # core/ | meta/ | user/
+    - verify_human_approval_obtained
+    - verify_skill_lifecycle_process_followed
+    - archive_current_version_to_versions/
+
+  forbidden:
+    - modify_architecture_without_adr
+    - bypass_permissions
+    - skip_schema_validation
+    - skip_evaluation
+    - violate_project_rules
+    - modify_core_skill_without_human_approval       # Added: ADR-0002
+    - set_workflow_id_from_planner_agent             # Added: ADR-0001
+    - mutate_dag_nodes_at_runtime                    # Added: ADR-0001

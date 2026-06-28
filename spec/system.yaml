@@ -1,0 +1,249 @@
+# =============================================================================
+# File: spec/system.yaml
+# Version: 2.0.0
+# Status: Draft
+# =============================================================================
+
+system:
+  id: cie-platform
+  name: Clinical Intelligence Environment
+  version: 2.0.0
+  specification_version: 1.0
+  status: draft
+
+metadata:
+  owner: architecture
+  repository: CIE
+  architecture: agent-oriented
+  workflow_model: declarative
+  runtime_model: provider-based
+
+description: >
+  AI-native platform for clinical research,
+  statistical analysis,
+  visualization,
+  reporting,
+  and reproducible scientific workflows.
+
+design_principles:
+  - intent_driven
+  - workflow_first
+  - agent_oriented
+  - schema_first
+  - security_by_design
+  - evaluation_driven
+  - offline_first
+  - runtime_independent
+
+layers:
+  presentation:
+    responsibility:
+      - ui
+      - interaction
+      - authentication
+      - progress
+
+  intent:
+    responsibility:
+      - intent_detection
+      - objective_classification
+      - ambiguity_resolution
+
+  workflow:
+    responsibility:
+      - workflow_selection           # Orchestrator selects workflow_id (ADR-0001)
+      - task_graph
+      - dependency_management
+
+  orchestration:
+    responsibility:
+      - task_dispatch
+      - retries
+      - scheduling
+      - event_management
+      - workflow_id_determination    # Added: ADR-0001
+
+  agents:
+    responsibility:
+      - domain_execution
+
+  runtime:
+    responsibility:
+      - execution
+      - isolation
+      - resource_management
+
+  evaluation:
+    responsibility:
+      - correctness
+      - statistical_validation
+      - security_validation
+      - reproducibility
+      - skill_performance_monitoring # Added: ADR-0002
+
+  knowledge:
+    responsibility:
+      - domain_reference
+      - guidelines
+      - documentation
+
+  skills:                            # Added: ADR-0002 (3 namespaces)
+    responsibility:
+      - reusable_procedure_core      # skills/core/
+      - self_improvement_meta        # skills/meta/
+      - user_defined_procedures      # skills/user/
+
+components:
+  orchestrator:
+    enabled: true
+  workflow_engine:
+    enabled: true
+  runtime_provider:
+    enabled: true
+  policy_engine:
+    enabled: true
+  evaluation_harness:
+    enabled: true
+  audit_service:
+    enabled: true
+  configuration_service:
+    enabled: true
+  knowledge_repository:
+    enabled: true
+  skill_lifecycle_service:           # Added: ADR-0002
+    enabled: true
+
+agents:
+  required:
+    - orchestrator
+    - planner
+    - data_quality
+    - statistics
+    - visualization
+    - reporting
+    - reviewer
+    - runtime
+    - security
+
+workflows:                           # Added: ADR-0001 — static registry
+  registered:
+    - clinical_analysis_standard
+    - clinical_analysis_survival
+    - clinical_analysis_meta
+    - clinical_analysis_prediction
+  selection_belongs_to: orchestrator # Planner does NOT select workflow_id
+
+communication:
+  protocol:
+    schema_validation: required
+    versioned_messages: true
+    immutable_payloads: true
+
+contracts:
+  request:
+    schema_required: true
+  response:
+    schema_required: true
+  events:
+    schema_required: true
+
+workflow:
+  execution:
+    deterministic: true
+    observable: true
+    resumable: true
+    versioned: true
+    dag_immutable_at_runtime: true   # Added: ADR-0001
+
+runtime:
+  provider:
+    default: local_restricted_runtime
+    optional:
+      - docker_runtime
+    future:
+      - remote_runtime
+      - distributed_runtime
+
+security:
+  default_policy:
+    internet: deny
+    filesystem: restricted
+    shell: deny
+    package_installation: approval_required
+    external_api: approval_required
+    skill_update: approval_required          # Added: ADR-0002
+    user_skill_registration: approval_required # Added: ADR-0002
+  pii_detection: enabled
+  pii_detection_layers: 3                   # Added: Layer 1 regex + Layer 2 stats + Layer 3 ML
+  audit_logging: enabled
+
+evaluation:
+  mandatory:
+    - correctness
+    - schema_validation
+    - statistical_validity
+    - security
+    - reproducibility
+    - workflow_integrity
+  skill_performance_monitoring: enabled     # Added: ADR-0002
+
+observability:
+  execution_logs: enabled
+  workflow_trace: enabled
+  runtime_metrics: enabled
+  audit_logs: enabled
+  skill_performance_records: enabled        # Added: ADR-0002
+
+configuration:
+  externalized: true
+  versioned: true
+  schema_validated: true
+
+quality_attributes:
+  maintainability: high
+  extensibility: high
+  portability: high
+  reproducibility: high
+  explainability: high
+  reliability: high
+  security: high
+
+constraints:
+  no_vendor_lock_in: true
+  runtime_independent: true
+  schema_first: true
+  workflow_first: true
+  offline_capable: true
+  dag_static_definition: true        # Added: ADR-0001
+  skill_update_human_approval: true  # Added: ADR-0002
+
+architecture_rules:
+  - business_logic_outside_runtime
+  - business_logic_outside_ui
+  - workflows_are_declarative
+  - agents_are_single_responsibility
+  - schemas_are_source_of_truth
+  - evaluation_before_completion
+  - planner_does_not_select_workflow_id    # Added: ADR-0001
+  - skill_update_requires_lifecycle_process # Added: ADR-0002
+
+future_extensions:
+  supported:
+    - additional_agents
+    - additional_workflows               # Via ADR + spec/workflow.yaml
+    - additional_runtime_providers
+    - additional_llm_providers
+    - distributed_execution
+    - cloud_execution
+    - additional_user_skills             # Via skill-lifecycle.md
+
+definition_of_complete_system:
+  architecture_complete: true
+  workflow_engine_available: true
+  runtime_provider_available: true
+  evaluation_available: true
+  security_enforced: true
+  schemas_defined: true
+  audit_available: true
+  documentation_complete: true
+  skill_lifecycle_defined: true          # Added: ADR-0002

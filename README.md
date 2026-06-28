@@ -1,95 +1,167 @@
-# Clinical Insight Engine (CIE)
-
-臨床研究者向けのAIパワードデータ解析・レポート自動生成プラットフォーム。
-
-CSVデータのアップロードから、Rによる統計解析 → AI可視化 → Google Slidesへの自動差し込みまでをノーコードで実現。全ての解析はRStudioで完全再現可能。
+# CIE Platform — Claude Code 実装プロンプト集
+# File: prompts/README.md
+# Version: 1.0.0
 
 ---
 
-## アーキテクチャ
+## 概要
 
-| レイヤー | 技術スタック |
-|---------|------------|
-| **Frontend** | Next.js (App Router), TypeScript, TailwindCSS, Zustand |
-| **Backend** | Python 3.11+, FastAPI |
-| **Statistical Engine** | Dockerized R + Plumber（外部ネットワーク遮断） |
-| **AI Service** | Claude API（列名・型・欠損率のメタデータのみ送信） |
-| **Database** | PostgreSQL |
-| **Session Storage** | Redis（臨床データはTTL付きで揮発） |
-| **Integrations** | Google Workspace API, OAuth 2.0 |
+本ディレクトリはCIE PlatformをClaude Codeで実装するための
+プロンプト集です。Phase 1から順番に実行してください。
+
+**合計: 10 Phase / 27 プロンプト**
 
 ---
 
-## ローカル開発環境の起動
+## 実行前の準備
 
 ```bash
-# 環境変数の設定
-cp .env.example .env
-# .env を編集して各種APIキーを設定
+# 仕様書ルートをClaude Codeに読み込ませる
+# Claude Codeセッション開始時に以下を伝える:
 
-# 全サービスの起動
-docker-compose up --build
+"CIE Platformの実装を始めます。
+まず以下のファイルを読み込んでください:
+- MANIFEST.yaml
+- PROJECT_RULES.md
+- decisions/ADR-0001.md
+- decisions/ADR-0002.md
 
-# アクセス
-# Frontend: http://localhost:3000
-# Backend:  http://localhost:8000
-# API Docs: http://localhost:8000/docs
+その後、prompts/phase1_foundation.md のPROMPT 1-1から実装を開始します。"
 ```
 
 ---
 
-## プロジェクト構成
+## Phase一覧と実行順序
+
+| Phase | ファイル | プロンプト数 | 主な実装内容 | 依存 |
+|-------|---------|------------|------------|------|
+| 1 | phase1_foundation.md | 3 | プロジェクト初期化・DB・監査ログ | なし |
+| 2 | phase2_schema_pii.md | 3 | スキーマ検証・PII検出Layer1/2 | Phase 1 |
+| 3 | phase3_security.md | 3 | Capabilityトークン・ポリシーエンジン・var_nエイリアス | Phase 1-2 |
+| 4-6 | phase4_6_runtime_agents_workflow.md | 6 | Runtime・Agent基底・Planner/DataQuality・Orchestrator | Phase 1-3 |
+| 7 | phase7_evaluation.md | 3 | Correctness/Statistical/Security評価・回帰テスト | Phase 4-6 |
+| 8 | phase8_skills.md | 3 | Skillローダー・Lifecycleサービス・スキャフォールダー | Phase 1-3, 7 |
+| 9 | phase9_ui.md | 3 | Streamlit UI 7画面 | Phase 4-8 |
+| 10 | phase10_integration.md | 3 | E2Eテスト・セキュリティ境界テスト・DoD確認 | Phase 1-9 |
+
+---
+
+## 各プロンプトの使い方
+
+1. **プロンプトのコードブロック内テキストをそのままClaude Codeに貼り付ける**
+2. 実装完了後、以下を確認してから次のプロンプトへ進む：
+   - `pytest tests/unit/test_XXX.py` が全て通過すること
+   - 型エラーがないこと（`ruff check cie/` でチェック）
+3. Phase完了後は `python scripts/check_done.py` を実行
+
+---
+
+## プロンプト詳細索引
+
+### Phase 1 — Project Foundation (`phase1_foundation.md`)
+
+| # | プロンプト | 生成ファイル |
+|---|-----------|------------|
+| 1-1 | プロジェクト初期化 | `pyproject.toml`, `cie/core/exceptions.py`, `cie/core/config.py` |
+| 1-2 | データベース初期化 | `cie/core/database.py`, `tests/unit/test_database.py` |
+| 1-3 | 監査ログ基盤 | `cie/core/audit.py`, `tests/unit/test_audit.py` |
+
+### Phase 2 — Schema & PII (`phase2_schema_pii.md`)
+
+| # | プロンプト | 生成ファイル |
+|---|-----------|------------|
+| 2-1 | スキーマバリデーション | `cie/schemas/validator.py`, `cie/schemas/payloads.py` |
+| 2-2 | PII検出 Layer 1 | `cie/security/pii_patterns.py`, `cie/security/pii_detector.py` |
+| 2-3 | PII検出 Layer 2 | `cie/security/pii_detector_layer2.py`, `cie/security/pii_filter.py` |
+
+### Phase 3 — Security (`phase3_security.md`)
+
+| # | プロンプト | 生成ファイル |
+|---|-----------|------------|
+| 3-1 | Capabilityトークン | `cie/security/capability_token.py` |
+| 3-2 | ポリシーエンジン | `cie/security/policy_engine.py`, `cie/security/context_guard.py` |
+| 3-3 | var_nエイリアス | `cie/security/var_alias.py` |
+
+### Phase 4-6 — Runtime, Agents, Workflow (`phase4_6_runtime_agents_workflow.md`)
+
+| # | プロンプト | 生成ファイル |
+|---|-----------|------------|
+| 4-1 | Rスクリプト実行 | `cie/runtime/r_executor.py` |
+| 5-1 | Agent基底クラス | `cie/agents/base.py` |
+| 5-2 | Planner Agent | `cie/agents/planner.py` |
+| 5-3 | Data Quality Agent | `cie/agents/data_quality.py` |
+| 6-1 | Workflow状態機械 | `cie/workflow/states.py`, `cie/workflow/registry.py` |
+| 6-2 | Orchestrator | `cie/workflow/orchestrator.py` |
+
+### Phase 7 — Evaluation (`phase7_evaluation.md`)
+
+| # | プロンプト | 生成ファイル |
+|---|-----------|------------|
+| 7-1 | 基底クラス + Correctness評価 | `cie/evaluation/base.py`, `cie/evaluation/correctness.py` |
+| 7-2 | Statistical + Security評価 | `cie/evaluation/statistical.py`, `cie/evaluation/security.py` |
+| 7-3 | 統合サービス + 回帰テスト | `cie/evaluation/evaluator_service.py`, `cie/evaluation/regression.py` |
+
+### Phase 8 — Skills (`phase8_skills.md`)
+
+| # | プロンプト | 生成ファイル |
+|---|-----------|------------|
+| 8-1 | Skillローダー | `cie/skills/loader.py`, `cie/skills/registry_manager.py` |
+| 8-2 | Skill Lifecycle | `cie/skills/lifecycle.py` + DB追加テーブル |
+| 8-3 | Skill Scaffolder | `cie/skills/scaffolder.py` |
+
+### Phase 9 — UI (`phase9_ui.md`)
+
+| # | プロンプト | 生成ファイル |
+|---|-----------|------------|
+| 9-1 | UIアプリ基盤 | `cie/ui/app.py`, `cie/ui/components/status_bar.py`, `cie/ui/components/right_pane.py` |
+| 9-2 | SCR-01/02/03 | `cie/ui/screens/dashboard.py`, `intent_entry.py`, `workflow_view.py` |
+| 9-3 | SCR-04/05/06/07 | `cie/ui/screens/quality_review.py`, `analysis_config.py`, `results.py`, `audit_log.py` |
+
+### Phase 10 — Integration (`phase10_integration.md`)
+
+| # | プロンプト | 生成ファイル |
+|---|-----------|------------|
+| 10-1 | E2Eテスト | `tests/integration/test_e2e_standard_workflow.py` |
+| 10-2 | セキュリティ境界テスト | `tests/integration/test_security_boundaries.py` |
+| 10-3 | Definition of Done確認 | `scripts/check_done.py`, `scripts/run_all_tests.sh` |
+
+---
+
+## 重要な設計制約（Claude Codeへの共通指示）
+
+各プロンプト実行時に以下を遵守してください:
 
 ```
-clinical-insight-engine/
-├── frontend/          # Next.js App Router
-├── backend/           # FastAPI
-├── r-engine/          # Dockerized R + Plumber
-│   └── skills/        # Analysis Skills（.Rファイル）
-├── docs/              # 仕様書・設計ドキュメント
-│   ├── SRD_完全版.md
-│   └── 実装プロンプト集.md
-├── docker-compose.yml
-└── .env.example
+1. ADR-0001: Planner AgentはworkflowId_idを出力に含めない
+   OrchestratorがWS-001〜WS-004ルールで選択する
+
+2. ADR-0002: 全Skill更新・登録に人間承認が必須
+   human_review_required は常にTrueにすること
+
+3. inject_raw_data_rows は常にFalse
+   agent.schema.json の const: false を実行時に強制すること
+
+4. PII検出は4タイミング全てで実行すること
+   Planner入力前・Context構築前・DataQuality処理時・レポート出力前
+
+5. Capability Tokenは各ノード完了後に即時失効すること
+   try/finally パターンで revoke を保証すること
 ```
 
 ---
 
-## Analysis Skills（v1）
+## トラブルシューティング
 
-| スキル | 用途 |
-|-------|------|
-| table1_generator | Table 1（記述統計表） |
-| chi_square_fisher | χ²検定 / Fisher正確検定 |
-| ttest_mannwhitney | t検定 / Mann-Whitney U検定 |
-| normality_check | 正規性検定 + 分布確認 |
-| logistic_regression | ロジスティック回帰 |
-| linear_regression | 線形回帰 |
-| kaplan_meier | Kaplan-Meier曲線 |
-| cox_regression | Cox比例ハザード回帰 |
-| correlation_analysis | 相関分析 |
-| roc_auc | ROC曲線・AUC |
-| forest_plot | フォレストプロット |
-| sample_size_calc | サンプルサイズ計算 |
+**Q: 依存関係エラーが出る**
+→ 前のPhaseのプロンプトが全て完了しているか確認してください
 
----
+**Q: テストが失敗する**
+→ 各プロンプトの「制約事項」セクションを再確認してください
 
-## セキュリティポリシー（Zero Trust）
+**Q: スキーマ検証エラーが出る**
+→ `schemas/` 配下のJSONファイルを直接編集せず、
+  `cie/schemas/payloads.py` のPydanticモデルを修正してください
 
-- 臨床データ（CSV/Excel）はRedisにのみ保存（TTL: 24h、解析完了後即削除）
-- LLM APIには列名・型・欠損率のメタデータのみ送信（生データ行は絶対に送信しない）
-- Rコンテナはインターネットアクセス遮断
-- 全解析はreproducible_script.Rとして出力（RStudioで完全再現可能）
-
----
-
-## ドキュメント
-
-- [SRD（完全版仕様書）](./docs/SRD_完全版.md)
-- [実装プロンプト集](./docs/実装プロンプト集.md)
-
----
-
-## License
-
-Private Repository — All Rights Reserved
+**Q: PII検出が正常に動作しない**
+→ `architecture/security-pii-filter.md` の正規表現パターンが
+  `cie/security/pii_patterns.py` と一致しているか確認してください

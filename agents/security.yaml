@@ -1,0 +1,198 @@
+# =============================================================================
+# Version: 2.0.0
+# Status: Draft
+# Purpose: Defines the platform-level security agent responsible for capability
+#          token issuance and revocation, permission policy enforcement, PII
+#          access governance, and security event handling across all agents.
+# =============================================================================
+
+schema_version: "1.0"
+agent_id: "security"
+
+metadata:
+  name: "Platform Security Governance Agent"
+  role: "Permission Enforcement, Token Lifecycle & Security Event Management"
+  owner: "platform_team"
+  architecture_principles:
+    - "AP-005 Contract First"
+    - "AP-006 Security By Design"
+    - "AP-007 Human Oversight"
+
+# -----------------------------------------------------------------------------
+# Responsibility Boundaries
+# -----------------------------------------------------------------------------
+responsibility_boundaries:
+  owns:
+    - "ephemeral_capability_token_issuance"
+    - "capability_token_revocation_and_expiry"
+    - "permission_policy_enforcement"
+    - "pii_access_request_review_structuring"
+    - "package_installation_approval_token_issuance"
+    - "security_event_detection_and_classification"
+    - "security_audit_event_schema_generation"
+
+  strictly_forbidden:
+    - "raw_dataset_row_reading"              # Zero access to patient records
+    - "statistical_method_selection"         # Domain agent responsibility
+    - "workflow_definition_mutation"         # Workflows are immutable architecture
+    - "self_permission_escalation"           # Security Agent cannot grant itself new permissions
+    - "audit_log_modification"               # Audit records are immutable
+    - "final_approval_of_sensitive_actions"  # Human approval is required for sensitive operations
+
+# -----------------------------------------------------------------------------
+# Component Contract (Strict I/O)
+# -----------------------------------------------------------------------------
+contract:
+  input_schema:
+    required:
+      - "execution_id"
+      - "requesting_agent_id"
+      - "requested_permission_scope"         # Conforming to permissions.yaml
+      - "workflow_step_reference"
+      - "orchestrator_authorization_token"
+
+  output_schema:
+    guaranteed:
+      - "execution_id"
+      - "token_id"
+      - "granted_scopes"                     # May differ from requested if constrained
+      - "denied_scopes"
+      - "token_expiry_utc"
+      - "bound_to"                           # {execution_id, agent_id, step_id}
+      - "security_event_log_entry"
+
+# -----------------------------------------------------------------------------
+# Behavioral Rules
+# -----------------------------------------------------------------------------
+behavior_rules:
+  - rule_id: "SC-001"
+    priority: "CRITICAL"
+    statement: >
+      Apply deny-first policy. Every permission not explicitly declared in
+      permissions.yaml is denied. There are no implicit grants.
+
+  - rule_id: "SC-002"
+    priority: "CRITICAL"
+    statement: >
+      All capability tokens are ephemeral and bound to a single
+      {execution_id, agent_id, step_id} triple. Tokens may not be reused,
+      shared, or transferred across execution contexts.
+
+  - rule_id: "SC-003"
+    priority: "CRITICAL"
+    statement: >
+      Revoke all active tokens immediately upon detection of any security event
+      classified as CRITICAL or BREACH. Transition the affected workspace to
+      LOCKED state and emit a security_event_log_entry before any other action.
+
+  - rule_id: "SC-004"
+    priority: "CRITICAL"
+    statement: >
+      The Security Agent may never grant permissions to itself beyond those
+      pre-declared in the bootstrap configuration. Self-escalation attempts
+      must be classified as BREACH events and immediately aborted.
+
+  - rule_id: "SC-005"
+    priority: "HIGH"
+    statement: >
+      PII access requests must be routed to the human approver queue.
+      No agent may access patient-level identifiable information without
+      an explicit human-confirmed access token appended to the request.
+
+  - rule_id: "SC-006"
+    priority: "HIGH"
+    statement: >
+      Package installation requests require both a Security Agent approval
+      token and a human-confirmed approval before the Runtime Agent may proceed.
+
+  - rule_id: "SC-007"
+    priority: "HIGH"
+    statement: >
+      All token issuance and revocation events must produce an immutable
+      security_event_log_entry conforming to the audit schema. Log entries
+      may never be modified or deleted after creation.
+
+# -----------------------------------------------------------------------------
+# Permission Scope Registry
+# -----------------------------------------------------------------------------
+permission_scope_registry:
+  filesystem:
+    - scope: "fs.read.workspace"
+      description: "Read access to project workspace directory"
+      requires_human_approval: false
+    - scope: "fs.write.output"
+      description: "Write access to designated output directory"
+      requires_human_approval: false
+    - scope: "fs.read.raw_data"
+      description: "Read access to raw dataset files (structural metadata only)"
+      requires_human_approval: true
+  network:
+    - scope: "net.deny_all"
+      description: "Default — all network access denied"
+      requires_human_approval: false
+    - scope: "net.allow.external_api"
+      description: "Outbound access to a declared external API endpoint"
+      requires_human_approval: true
+  execution:
+    - scope: "exec.r_script"
+      description: "Execute a sandboxed R script"
+      requires_human_approval: false
+    - scope: "exec.python_script"
+      description: "Execute a sandboxed Python script"
+      requires_human_approval: false
+    - scope: "exec.package_install"
+      description: "Install a declared package into the runtime environment"
+      requires_human_approval: true
+  data:
+    - scope: "data.export"
+      description: "Export an artifact outside the workspace"
+      requires_human_approval: true
+    - scope: "data.pii_access"
+      description: "Access to patient-level identifiable information"
+      requires_human_approval: true
+
+# -----------------------------------------------------------------------------
+# Security Event Classification
+# -----------------------------------------------------------------------------
+security_event_classification:
+  INFO:
+    - "token_issued"
+    - "token_expired"
+    - "token_revoked_normal"
+  WARNING:
+    - "permission_scope_denied"
+    - "token_reuse_attempt"
+    - "unapproved_package_install_attempt"
+  CRITICAL:
+    - "schema_validation_failure_on_sensitive_payload"
+    - "pii_access_without_approval"
+    - "net_access_attempt_without_scope"
+  BREACH:
+    - "self_permission_escalation_attempt"
+    - "capability_token_forgery_detected"
+    - "audit_log_modification_attempt"
+    - "prompt_injection_detected"
+
+# -----------------------------------------------------------------------------
+# Failure Handling & Exceptions
+# -----------------------------------------------------------------------------
+exception_handling:
+  on_invalid_permission_request:
+    action: "return_structured_error"
+    error_code: "PERMISSION_DENIED"
+    log_event: true
+    severity: "WARNING"
+
+  on_breach_event_detected:
+    action: "IMMEDIATE_ABORT"
+    error_code: "SECURITY_BREACH_DETECTED"
+    secondary_actions:
+      - "revoke_all_active_tokens"
+      - "lock_workspace"
+      - "emit_breach_audit_event"
+      - "notify_orchestrator_for_human_escalation"
+
+  on_audit_log_write_failure:
+    action: "IMMEDIATE_ABORT"
+    error_code: "AUDIT_INTEGRITY_FAILURE"
+    message: "Security audit log is unavailable. Platform cannot operate without audit integrity."

@@ -1,0 +1,218 @@
+# =============================================================================
+# File: spec/runtime.yaml
+# Version: 2.0.0
+# Status: Draft
+# Purpose: Defines the execution providers, resource boundaries, OS isolation,
+#          and security guardrails for all computational tasks.
+# =============================================================================
+
+schema_version: "1.0"
+specification_id: "cie-spec-runtime"
+
+metadata:
+  owner: "architecture"
+  description: >
+    Abstracted runtime environment specification. Enforces that no domain agent
+    or business logic directly executes R or Python code outside of a compliant
+    Runtime Provider.
+
+# -----------------------------------------------------------------------------
+# Global Runtime Defaults & Abstraction Hierarchy
+# -----------------------------------------------------------------------------
+abstraction_layer:
+  contract_principle: "AP-006 Runtime Independence"
+  selection_hierarchy:
+    1: "user_runtime_override"
+    2: "project_configuration_setting"
+    3: "runtime_availability_detection"
+    4: "default_provider"
+
+provider_registry:
+  default_provider: "local_restricted_runtime"
+  optional_providers:
+    - "docker_runtime"
+  future_providers:
+    - "remote_cloud_runtime"
+    - "distributed_grid_runtime"
+
+# -----------------------------------------------------------------------------
+# Provider 1: Local Restricted Runtime (Default)
+# -----------------------------------------------------------------------------
+local_restricted_runtime:
+  display_name: "Local Restricted Process Runtime"
+  enabled: true
+  distribution_target: "zero_configuration_desktop"
+
+  system_prerequisites:
+    requires_admin_privileges: false
+    requires_docker: false
+    requires_virtualization: false
+    supported_os: ["Windows 10+", "macOS 12+", "Linux"]
+
+  execution_environments:
+    r_engine:
+      min_version: "4.3.0"
+      executable_discovery: "system_path"
+      target_binary: "Rscript"
+      execution_mode: "background_subprocess"
+      mandatory_flags: ["--vanilla", "--slave"]
+
+    python_engine:
+      min_version: "3.11.0"
+      executable_discovery: "virtual_environment"
+      target_binary: "python"
+      execution_mode: "isolated_subprocess"
+
+  resource_constraints:
+    max_execution_time_seconds: 300
+    max_memory_limit_mb: 4096
+    max_cpu_cores: 2
+    max_stdout_buffer_bytes: 1048576       # 1 MB
+    max_stderr_buffer_bytes: 524288        # 512 KB
+    max_temp_storage_mb: 500
+
+  security_and_isolation:
+    ambient_authority: "zero"
+
+    filesystem_policy:
+      enforcement: "strict_whitelist"
+      allowed_paths:
+        - alias: "${WORKSPACE_DIR}"
+          access: ["read", "write"]
+          ephemeral: true
+        - alias: "${OUTPUT_DIR}"
+          access: ["read", "write"]
+          ephemeral: false
+        - alias: "${OS_TEMP}/cie_sessions"
+          access: ["read", "write"]
+          ephemeral: true
+      denied_paths:
+        - "C:\\Windows"
+        - "C:\\Program Files"
+        - "/etc"
+        - "/var"
+        - "/usr"
+        - "${USER_HOME}"
+        - "${APP_SOURCE_DIR}"
+
+    network_policy:
+      default_state: "deny_all"
+      allow_outbound: false
+      allow_inbound: false
+      allow_local_ipc: false
+
+    system_call_policy:
+      allow_shell_escape: false
+      allow_subprocess_fork: false
+      allow_registry_access: false
+      forbidden_r_functions:
+        - "system"
+        - "system2"
+        - "shell"
+        - "Sys.setenv"
+        - "source"   # restricted to generated artifacts only
+
+  package_governance:
+    auto_install_missing: false
+    installation_requires_approval: true
+    approved_package_whitelist:
+      r:
+        - "tidyverse"
+        - "survival"
+        - "tableone"
+        - "finalfit"
+        - "survminer"
+        - "ggplot2"
+        - "pROC"
+        - "forestplot"
+        - "pwr"
+        - "MatchIt"
+        - "WeightIt"
+        - "survey"
+        - "metafor"       # Added: for clinical_analysis_meta workflow
+        - "logistf"       # Added: for clinical_analysis_prediction workflow
+        - "lme4"          # Added: for mixed-effects models
+        - "car"           # Added: for VIF, leveneTest
+        - "mice"          # Added: for multiple imputation
+        - "rstatix"       # Added: for post-hoc tests
+        - "gtsummary"     # Added: for publication tables
+        - "broom"         # Added: for tidy model output
+      python:
+        - "pandas"
+        - "numpy"
+        - "scipy"
+        - "openpyxl"
+        - "jsonschema"    # Added: for schema validation
+        - "spacy"         # Added: for PII detection Layer 3 (optional)
+
+# -----------------------------------------------------------------------------
+# Provider 2: Docker Runtime (Optional)
+# -----------------------------------------------------------------------------
+docker_runtime:
+  display_name: "Containerized Sandbox Runtime"
+  enabled: true
+  distribution_target: "high_security_environment"
+
+  detection_and_fallback:
+    auto_detect_on_startup: true
+    fallback_provider: "local_restricted_runtime"
+    healthcheck_command: "docker info --format '{{.ServerVersion}}'"
+
+  container_specifications:
+    ephemeral_containers: true
+    remove_on_exit: true
+    network_mode: "none"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+
+    base_images:
+      r_runtime:
+        image: "ghcr.io/project-cie/cie-r-base:4.3-pinned"
+        digest_verification_required: true
+      python_runtime:
+        image: "ghcr.io/project-cie/cie-py-base:3.11-pinned"
+        digest_verification_required: true
+
+  volume_mount_rules:
+    - host_src: "${WORKSPACE_DIR}"
+      container_dest: "/workspace"
+      mode: "rw"
+    - host_src: "${OUTPUT_DIR}"
+      container_dest: "/output"
+      mode: "rw"
+
+  resource_constraints:
+    max_execution_time_seconds: 300
+    memory: "4g"
+    cpus: "2.0"
+    pids_limit: 64
+
+# -----------------------------------------------------------------------------
+# Standard Execution Contract
+# -----------------------------------------------------------------------------
+execution_contract:
+  invocation_request:
+    required_fields:
+      - "execution_id"
+      - "language"
+      - "script_content"
+      - "working_directory"
+      - "capability_token"
+
+  invocation_result:
+    guaranteed_fields:
+      - "status"           # success | timeout | error | security_abort
+      - "exit_code"
+      - "duration_ms"
+      - "stdout_digest"
+      - "stderr_digest"
+      - "output_artifacts" # list of generated file paths
+
+# -----------------------------------------------------------------------------
+# Observability & Audit Trace
+# -----------------------------------------------------------------------------
+telemetry:
+  log_execution_lifecycle: true
+  log_resource_consumption: true
+  capture_script_hash: true
+  sanitize_phi_in_logs: true   # RT-004: stdout sanitization mandatory

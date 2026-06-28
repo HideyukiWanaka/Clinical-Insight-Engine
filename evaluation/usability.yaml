@@ -1,0 +1,203 @@
+# =============================================================================
+# Version: 2.0.0
+# Status: Draft
+# Purpose: Defines the evaluation harness for output usability, explainability,
+#          and human-readiness of all artifacts delivered to the end user.
+#          Implements AP-008 Explainability and AP-010 Human Authority.
+#          Reflects PROJECT_RULES.md Priority 5: Explainability,
+#          Priority 6: Maintainability.
+# =============================================================================
+
+schema_version: "1.0"
+evaluation_id: "usability"
+
+metadata:
+  name: "Output Usability & Explainability Evaluation"
+  owner: "evaluation_team"
+  architecture_principles:
+    - "AP-008 Explainability"
+    - "AP-010 Human Authority"
+    - "AP-017 Evaluation Driven Development"
+    - "AP-018 Observable Systems"
+  system_layer: "evaluation"
+  priority: 4
+  blocking: false
+  note: >
+    Usability evaluation is non-blocking by default. A score below threshold
+    generates advisory findings and triggers human notification but does not
+    halt pipeline completion. Exceptions: USB-001-A and USB-003-A are
+    promoted to blocking if score < 70.
+
+# -----------------------------------------------------------------------------
+# Scope
+# -----------------------------------------------------------------------------
+scope:
+  description: >
+    Evaluates whether the outputs produced by the platform are interpretable,
+    explainable, and actionable by the target audience (clinical researchers
+    without deep statistical programming expertise).
+  artifacts_evaluated:
+    - "report"
+    - "figures"
+    - "review_report"
+    - "analysis_plan"
+    - "workflow_trace"
+
+# -----------------------------------------------------------------------------
+# Passing Threshold
+# -----------------------------------------------------------------------------
+threshold:
+  minimum_score_pct: 90
+  reference: "spec/workflow.yaml quality_gate.evaluation_score.minimum"
+  on_failure: "generate_advisory_findings_and_notify_human"
+  hard_block_threshold_pct: 70
+  hard_block_condition: "USB-001-A or USB-003-A critical failure"
+
+# -----------------------------------------------------------------------------
+# Evaluation Dimensions
+# -----------------------------------------------------------------------------
+dimensions:
+
+  - dimension_id: "USB-001"
+    name: "Report Interpretability"
+    weight_pct: 30
+    description: >
+      The final report must be interpretable by a clinical researcher without
+      requiring statistical programming expertise. Methods and results must
+      be explained in accessible language with appropriate context.
+    checks:
+      - check_id: "USB-001-A"
+        statement: "Every statistical method in the report is accompanied by a plain-language explanation of what it measures."
+        severity: "critical"
+        blocking_override: true
+      - check_id: "USB-001-B"
+        statement: "Statistical notation (e.g. OR, HR, β, CI) is defined on first use."
+        severity: "advisory"
+      - check_id: "USB-001-C"
+        statement: "The clinical significance of key findings is addressed separately from statistical significance."
+        severity: "advisory"
+      - check_id: "USB-001-D"
+        statement: "Limitations of the analysis are explicitly stated."
+        severity: "advisory"
+      - check_id: "USB-001-E"
+        statement: "The report contains a structured summary section suitable for non-specialist readers."
+        severity: "advisory"
+
+  - dimension_id: "USB-002"
+    name: "Figure Clarity"
+    weight_pct: 20
+    description: >
+      All figures must be self-explanatory. A reader should be able to interpret
+      each figure without referring to the main text.
+    checks:
+      - check_id: "USB-002-A"
+        statement: "Every figure has a caption that includes: figure label, description, and statistical annotation references."
+        severity: "advisory"
+      - check_id: "USB-002-B"
+        statement: "All axis labels include units where applicable."
+        severity: "advisory"
+      - check_id: "USB-002-C"
+        statement: "Colorblind-safe palette (Okabe-Ito default) is applied per visualization.yaml rule VZ-003."
+        severity: "advisory"
+      - check_id: "USB-002-D"
+        statement: "Figure resolution meets minimum 300 DPI per visualization.yaml output_standards."
+        severity: "advisory"
+
+  - dimension_id: "USB-003"
+    name: "Decision Explainability"
+    weight_pct: 25
+    description: >
+      Every significant decision made by the platform (method selection,
+      assumption check outcome, data quality gate, human approval events)
+      must be explainable from the workflow_trace and analysis_plan.
+      Implements AP-008 Explainability.
+    checks:
+      - check_id: "USB-003-A"
+        statement: "The workflow_trace contains a decision_branch_taken entry for every decision node."
+        severity: "critical"
+        blocking_override: true
+      - check_id: "USB-003-B"
+        statement: "Every statistical method selection includes a justification field referencing intent_object properties."
+        severity: "advisory"
+      - check_id: "USB-003-C"
+        statement: "Assumption check outcomes and their effect on method selection are recorded in analysis_plan."
+        severity: "advisory"
+      - check_id: "USB-003-D"
+        statement: "Human approval events in the audit log include the approver action and timestamp."
+        severity: "advisory"
+
+  - dimension_id: "USB-004"
+    name: "Workflow Observability"
+    weight_pct: 15
+    description: >
+      The full execution trace must be available to the user for inspection.
+      No hidden execution paths are permitted per AP-018 Observable Systems.
+    checks:
+      - check_id: "USB-004-A"
+        statement: "workflow_trace covers all executed nodes with start_time, end_time, and duration_ms."
+        severity: "advisory"
+      - check_id: "USB-004-B"
+        statement: "All retry events are recorded with failure_reason in the workflow_trace."
+        severity: "advisory"
+      - check_id: "USB-004-C"
+        statement: "No workflow node executed without a corresponding trace entry."
+        severity: "advisory"
+
+  - dimension_id: "USB-005"
+    name: "Actionability of Findings"
+    weight_pct: 10
+    description: >
+      Advisory findings, unresolved items, and human review requests must be
+      presented to the user in a clear, actionable format that enables informed
+      decision-making.
+    checks:
+      - check_id: "USB-005-A"
+        statement: "All unresolved_items from Reporting Agent are surfaced in the final review summary with clear human action required."
+        severity: "advisory"
+      - check_id: "USB-005-B"
+        statement: "Data quality warnings (non-blocking) are presented to the user with recommended remediation steps."
+        severity: "advisory"
+      - check_id: "USB-005-C"
+        statement: "The review_report readiness_score is presented to the user before human approval is requested."
+        severity: "advisory"
+
+# -----------------------------------------------------------------------------
+# Scoring Rules
+# -----------------------------------------------------------------------------
+scoring:
+  method: "weighted_dimension_average"
+  critical_check_failure_policy:
+    any_critical_failure: "dimension_score_zero"
+  advisory_check_weight: 1.0
+  note: "All checks in this evaluation are advisory weight, except blocking_override items."
+  rounding: "floor"
+
+# -----------------------------------------------------------------------------
+# Output Schema
+# -----------------------------------------------------------------------------
+output:
+  schema_ref: "cie://schemas/report.schema.json"
+  report_type: "evaluation_report"
+  required_fields:
+    - "evaluation_score_pct"
+    - "dimension_scores"
+    - "reproducibility_verified"
+    - "completion_status"
+
+# -----------------------------------------------------------------------------
+# Failure Handling
+# -----------------------------------------------------------------------------
+exception_handling:
+  on_score_below_threshold:
+    action: "generate_advisory_report_and_notify"
+    pipeline_continuation: true
+    human_notification: true
+  on_hard_block_condition_met:
+    action: "block_pipeline"
+    error_code: "USABILITY_HARD_BLOCK"
+    pipeline_continuation: false
+    human_escalation: true
+  on_missing_artifact:
+    action: "score_dimension_zero"
+    log_finding: true
+    severity: "advisory"

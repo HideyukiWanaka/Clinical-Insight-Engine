@@ -1,0 +1,29 @@
+# User Skill Registry
+# File: skills/user/REGISTRY.yaml
+# Version: 1.0.0
+# Reference: decisions/ADR-0002.md, spec/skill-lifecycle.md
+
+# This file is the authoritative list of registered User Skills.
+# It is updated automatically by the skill registration process
+# after human approval. Manual edits require human approval.
+
+registry_version: "1.0"
+last_updated: null   # Populated on first registration
+
+# Namespace priority: user/ > core/
+# A User Skill with the same skill_id as a core Skill overrides it
+# in the current execution context.
+
+skills: []
+
+# Example entry (added after registration):
+#
+# skills:
+#   - skill_id: "my-hospital-table-format"
+#     namespace: "user"
+#     version: "1.0.0"
+#     overrides_core_skill_id: "reporting/table-one"
+#     status: "active"               # draft | pending_review | active | suspended | archived
+#     registered_at: "2025-06-27"
+#     approved_by: "human"           # Always "human"
+#     audit_event_id: "usr-skill-20250627-001"

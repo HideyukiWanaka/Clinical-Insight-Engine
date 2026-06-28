@@ -1,0 +1,210 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cie://schemas/task.schema.json",
+  "title": "CIE Task Dispatch Payload",
+  "description": "Schema for the task dispatch payload assembled and validated by the Orchestrator for each DAG node execution. Conforms to orchestrator.yaml task_dispatch_loop cycle_steps 3–6 and spec/permissions.yaml token_lifecycle.",
+  "version": "1.0.0",
+  "type": "object",
+  "required": [
+    "task_id",
+    "execution_id",
+    "workflow_instance_id",
+    "node_id",
+    "node_type",
+    "target_agent_id",
+    "capability_token",
+    "input_payload",
+    "created_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this task dispatch instance."
+    },
+    "execution_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Parent execution context. Bound to capability_token."
+    },
+    "workflow_instance_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Workflow instance this task belongs to."
+    },
+    "node_id": {
+      "type": "string",
+      "description": "DAG node identifier from workflow definition. e.g. 'validate_dataset', 'generate_r_script'."
+    },
+    "node_type": {
+      "type": "string",
+      "enum": ["task", "decision", "approval", "evaluation"],
+      "description": "Node type from spec/workflow.yaml."
+    },
+    "target_agent_id": {
+      "type": "string",
+      "enum": [
+        "orchestrator",
+        "planner",
+        "data-quality",
+        "statistics",
+        "visualization",
+        "reporting",
+        "reviewer",
+        "runtime",
+        "security"
+      ],
+      "description": "Agent receiving this task. Must match agent_id in agents/ and permissions.yaml matrix."
+    },
+    "capability_token": {
+      "$ref": "#/$defs/CapabilityToken"
+    },
+    "input_payload": {
+      "$ref": "#/$defs/TaskInputPayload"
+    },
+    "retry_context": {
+      "$ref": "#/$defs/RetryContext"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC timestamp when the Orchestrator assembled this task."
+    },
+    "dispatched_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    }
+  },
+  "$defs": {
+    "CapabilityToken": {
+      "type": "object",
+      "required": [
+        "token_id",
+        "bound_execution_id",
+        "bound_agent_id",
+        "bound_step_id",
+        "granted_scopes",
+        "issued_at",
+        "expires_at"
+      ],
+      "additionalProperties": false,
+      "description": "Ephemeral Cryptographic Capability Token (CCT). Conforms to spec/permissions.yaml token_lifecycle. Expires after 300 seconds or node completion, whichever comes first.",
+      "properties": {
+        "token_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "bound_execution_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Must equal parent task execution_id."
+        },
+        "bound_agent_id": {
+          "type": "string",
+          "description": "Must equal parent task target_agent_id."
+        },
+        "bound_step_id": {
+          "type": "string",
+          "description": "Must equal parent task node_id."
+        },
+        "granted_scopes": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Permission scopes granted. Must be a subset of agent's allow list in permissions.yaml.",
+          "items": {
+            "type": "string",
+            "description": "Capability scope ID. e.g. 'dataset.proxy_metadata', 'runtime.invoke_execution'."
+          }
+        },
+        "denied_scopes": {
+          "type": "array",
+          "description": "Explicitly denied scopes for auditability.",
+          "items": { "type": "string" }
+        },
+        "issued_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Hard expiry. Maximum 300 seconds after issued_at per spec/permissions.yaml."
+        },
+        "revoked": {
+          "type": "boolean",
+          "default": false,
+          "description": "Set to true immediately upon node completion or failure."
+        },
+        "revoked_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        }
+      }
+    },
+    "TaskInputPayload": {
+      "type": "object",
+      "required": ["schema_ref", "data"],
+      "additionalProperties": false,
+      "description": "Isolated context payload assembled by the Orchestrator. Contains only fields required for the target node. Conforms to orchestrator.yaml cycle_step 4: inject_only.",
+      "properties": {
+        "schema_ref": {
+          "type": "string",
+          "description": "Schema URI validating the data payload. e.g. 'cie://schemas/dataset.schema.json'."
+        },
+        "data": {
+          "type": "object",
+          "description": "Node-specific input fields. Validated against schema_ref before dispatch.",
+          "additionalProperties": true
+        },
+        "context_artifacts": {
+          "type": "array",
+          "description": "References to upstream artifact outputs required by this node.",
+          "items": {
+            "type": "object",
+            "required": ["artifact_id", "artifact_type", "schema_ref"],
+            "additionalProperties": false,
+            "properties": {
+              "artifact_id": { "type": "string", "format": "uuid" },
+              "artifact_type": { "type": "string" },
+              "schema_ref": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "RetryContext": {
+      "type": "object",
+      "required": ["attempt_number", "max_attempts", "failure_reason"],
+      "additionalProperties": false,
+      "description": "Present only when this task is a retry. Conforms to spec/workflow.yaml failure_policy.",
+      "properties": {
+        "attempt_number": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "Current attempt number. 1 = original dispatch (no RetryContext). 2+ = retry."
+        },
+        "max_attempts": {
+          "type": "integer",
+          "const": 3,
+          "description": "Maximum attempts per spec/workflow.yaml failure_policy.retry.maximum_attempts."
+        },
+        "failure_reason": {
+          "type": "string",
+          "enum": ["runtime_timeout", "temporary_io_failure", "runtime_busy"],
+          "description": "Must be a recoverable failure type per spec/workflow.yaml failure_policy.recoverable."
+        },
+        "previous_task_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "task_id of the previous failed attempt for audit traceability."
+        },
+        "backoff_delay_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Exponential backoff delay applied before this retry."
+        }
+      }
+    }
+  }
+}

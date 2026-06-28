@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cie://schemas/dataset.schema.json",
+  "title": "CIE Dataset Structural Metadata",
+  "description": "Schema for dataset structural metadata passed between agents. Raw patient record content is never included. Conforms to permissions.yaml capability: dataset.proxy_metadata and dataset.read_validated.",
+  "version": "1.0.0",
+  "type": "object",
+  "required": [
+    "dataset_id",
+    "execution_id",
+    "metadata_type",
+    "row_count",
+    "column_count",
+    "columns",
+    "created_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "dataset_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this dataset registration."
+    },
+    "execution_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Execution context this metadata belongs to."
+    },
+    "metadata_type": {
+      "type": "string",
+      "enum": ["proxy_metadata", "validated_structural"],
+      "description": "proxy_metadata: column names, types, counts only (dataset.proxy_metadata). validated_structural: post-quality-gate confirmed structure (dataset.read_validated)."
+    },
+    "source_file_hash": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "description": "SHA-256 hash of the source file for reproducibility audit. Never contains file content."
+    },
+    "row_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Total number of rows in the dataset."
+    },
+    "column_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Total number of columns in the dataset."
+    },
+    "columns": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Structural metadata for each column. No row-level content permitted.",
+      "items": {
+        "$ref": "#/$defs/ColumnMetadata"
+      }
+    },
+    "var_n_alias_map": {
+      "type": "object",
+      "description": "Mapping of var_n alias keys to original column names. Populated only after Security Agent r_code.restore_variables permission is granted.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "quality_gate_passed": {
+      "type": ["boolean", "null"],
+      "description": "Null until Data Quality Agent evaluation completes. True enables downstream agent access."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp of metadata extraction."
+    }
+  },
+  "$defs": {
+    "ColumnMetadata": {
+      "type": "object",
+      "required": ["var_n", "inferred_type", "missing_count", "missing_rate_pct"],
+      "additionalProperties": false,
+      "properties": {
+        "var_n": {
+          "type": "string",
+          "pattern": "^var_[0-9]+$",
+          "description": "Anonymized column alias (e.g. var_1, var_2). Original column name is never stored here."
+        },
+        "inferred_type": {
+          "type": "string",
+          "enum": ["continuous", "categorical_binary", "categorical_ordinal", "categorical_nominal", "date", "text", "unknown"],
+          "description": "Inferred statistical data type."
+        },
+        "missing_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Absolute count of missing values in this column."
+        },
+        "missing_rate_pct": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 100.0,
+          "description": "Percentage of missing values. Used by Data Quality Agent thresholds."
+        },
+        "summary_stats": {
+          "$ref": "#/$defs/SummaryStats"
+        },
+        "clinical_range_violation": {
+          "type": "boolean",
+          "description": "True if any value exceeds declared clinical plausibility range."
+        }
+      }
+    },
+    "SummaryStats": {
+      "type": "object",
+      "description": "Aggregated statistical profile only. No individual row values.",
+      "additionalProperties": false,
+      "properties": {
+        "min": { "type": ["number", "null"] },
+        "max": { "type": ["number", "null"] },
+        "mean": { "type": ["number", "null"] },
+        "median": { "type": ["number", "null"] },
+        "std_dev": { "type": ["number", "null"] },
+        "unique_count": { "type": ["integer", "null"], "minimum": 0 },
+        "top_categories": {
+          "type": "array",
+          "description": "For categorical columns: top category labels and counts only.",
+          "maxItems": 10,
+          "items": {
+            "type": "object",
+            "required": ["label", "count"],
+            "properties": {
+              "label": { "type": "string" },
+              "count": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,213 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cie://schemas/workflow.schema.json",
+  "title": "CIE Workflow Instance",
+  "description": "Schema for a workflow execution instance. Conforms to spec/workflow.yaml state machine definition and orchestrator.yaml state_machine contract.",
+  "version": "1.0.0",
+  "type": "object",
+  "required": [
+    "workflow_instance_id",
+    "execution_id",
+    "workflow_definition_id",
+    "workflow_version",
+    "current_state",
+    "created_at",
+    "updated_at",
+    "nodes"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "workflow_instance_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this workflow execution instance."
+    },
+    "execution_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Bound execution context. All agents share this ID within a single run."
+    },
+    "workflow_definition_id": {
+      "type": "string",
+      "description": "Reference to the workflow definition. e.g. 'clinical_analysis'."
+    },
+    "workflow_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$",
+      "description": "Semantic version of the workflow definition in use."
+    },
+    "current_state": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "validated",
+        "planned",
+        "running",
+        "waiting_for_human",
+        "retrying",
+        "completed",
+        "failed",
+        "cancelled",
+        "archived"
+      ],
+      "description": "Current state machine state. Conforms to spec/workflow.yaml states and orchestrator.yaml valid_states."
+    },
+    "entrypoint_node_id": {
+      "type": "string",
+      "description": "ID of the first DAG node to execute. Defaults to 'intake'."
+    },
+    "active_node_id": {
+      "type": ["string", "null"],
+      "description": "Currently executing node ID. Null when not running."
+    },
+    "retry_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3,
+      "description": "Number of retry attempts consumed. Max 3 per spec/workflow.yaml failure_policy."
+    },
+    "human_approval_pending": {
+      "type": "boolean",
+      "description": "True when workflow is suspended at a human_approval node."
+    },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Execution records for each DAG node in this workflow instance.",
+      "items": {
+        "$ref": "#/$defs/NodeExecutionRecord"
+      }
+    },
+    "artifact_manifest": {
+      "type": "array",
+      "description": "All artifacts produced during this workflow execution.",
+      "items": {
+        "$ref": "#/$defs/ArtifactReference"
+      }
+    },
+    "audit_log_reference": {
+      "type": "string",
+      "description": "Reference key to the immutable audit log entries for this workflow instance."
+    },
+    "evaluation_report_reference": {
+      "type": ["string", "null"],
+      "description": "Reference to the evaluation report produced at the evaluation node."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    }
+  },
+  "$defs": {
+    "NodeExecutionRecord": {
+      "type": "object",
+      "required": ["node_id", "node_type", "agent_id", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "node_id": {
+          "type": "string",
+          "description": "Node identifier matching workflow definition. e.g. 'validate_dataset'."
+        },
+        "node_type": {
+          "type": "string",
+          "enum": ["task", "decision", "approval", "evaluation"],
+          "description": "Node type as defined in spec/workflow.yaml."
+        },
+        "agent_id": {
+          "type": "string",
+          "description": "Agent responsible for this node. Matches agents/ agent_id values."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "running", "completed", "failed", "skipped", "waiting_for_human"]
+        },
+        "depends_on": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Node IDs that must complete before this node executes."
+        },
+        "capability_token_id": {
+          "type": ["string", "null"],
+          "description": "ID of the ephemeral capability token issued for this node."
+        },
+        "input_artifact_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "output_artifact_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "decision_branch_taken": {
+          "type": ["string", "null"],
+          "description": "For decision nodes: which branch was selected and why."
+        },
+        "retry_attempt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "started_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "completed_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "duration_ms": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        }
+      }
+    },
+    "ArtifactReference": {
+      "type": "object",
+      "required": ["artifact_id", "artifact_type", "produced_by_node_id", "schema_ref"],
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "artifact_type": {
+          "type": "string",
+          "enum": [
+            "analysis_request",
+            "quality_report",
+            "analysis_plan",
+            "r_script",
+            "execution_result",
+            "figures",
+            "report",
+            "review_report",
+            "evaluation_report"
+          ],
+          "description": "Conforms to spec/workflow.yaml artifacts.required list."
+        },
+        "produced_by_node_id": {
+          "type": "string"
+        },
+        "schema_ref": {
+          "type": "string",
+          "description": "Reference to the validating schema. e.g. 'cie://schemas/report.schema.json'."
+        },
+        "file_path": {
+          "type": ["string", "null"],
+          "description": "Relative path within OUTPUT_DIR. Null for in-memory artifacts."
+        },
+        "content_hash": {
+          "type": ["string", "null"],
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,580 @@
+version: 2.1
+# Changelog v2.1 (ADR-0001):
+#   - Added workflow_registry with 4 static workflow definitions
+#   - clinical_analysis_standard (default)
+#   - clinical_analysis_survival
+#   - clinical_analysis_meta
+#   - clinical_analysis_prediction
+#   - workflow_id_selection is Orchestrator's responsibility (not Planner's)
+#   - DAG definitions are always static; no runtime mutation permitted
+
+workflow_engine:
+  type: declarative
+  execution_model: directed_acyclic_graph
+  scheduler: orchestrator
+  state_machine: enabled
+  schema_validation: required
+  evaluation_required: true
+
+principles:
+  workflow_is_business_logic: true
+  agents_are_execution_units: true
+  runtime_is_execution_provider: true
+  workflow_is_versioned: true
+  # ADR-0001 additions:
+  workflow_selection_belongs_to_orchestrator: true   # Planner produces intent_object only
+  dag_structure_is_immutable_at_runtime: true        # No agent may add/remove nodes
+
+# -----------------------------------------------------------------------------
+# Workflow Registry
+# ADR-0001: Orchestrator selects workflow_id from this registry using
+# workflow_selection_rules (WS-001 to WS-004). Planner does NOT set workflow_id.
+# -----------------------------------------------------------------------------
+workflow_registry:
+
+  - id: clinical_analysis_standard
+    version: "1.0"
+    category: statistics
+    selected_by_rule: "WS-004 (default)"
+    description: >
+      Standard workflow for between-group comparison, correlation analysis,
+      regression analysis, and descriptive studies.
+      Applies to: objective ∈ {between_group_comparison, correlation_analysis,
+      regression_analysis, paired_comparison, descriptive_only}.
+    entrypoint: intake
+
+  - id: clinical_analysis_survival
+    version: "1.0"
+    category: survival
+    selected_by_rule: "WS-001"
+    description: >
+      Survival analysis workflow for time-to-event outcomes.
+      Applies to: outcome_type = "survival".
+      Includes Kaplan-Meier, log-rank test, and Cox proportional hazards nodes.
+    entrypoint: intake
+
+  - id: clinical_analysis_meta
+    version: "1.0"
+    category: meta_analysis
+    selected_by_rule: "WS-002"
+    description: >
+      Systematic review and meta-analysis workflow.
+      Applies to: objective = "systematic_review".
+      Includes effect size pooling, heterogeneity assessment,
+      and publication bias evaluation nodes.
+    entrypoint: intake
+
+  - id: clinical_analysis_prediction
+    version: "1.0"
+    category: prediction_model
+    selected_by_rule: "WS-003"
+    description: >
+      Prediction model development and/or validation workflow.
+      Applies to: objective = "prediction_model".
+      Aligns with TRIPOD+AI 2024 reporting checklist.
+    entrypoint: intake
+
+# -----------------------------------------------------------------------------
+# Shared State Machine (applies to all workflows)
+# -----------------------------------------------------------------------------
+states:
+  - draft
+  - validated
+  - planned
+  - running
+  - waiting_for_human
+  - retrying
+  - completed
+  - failed
+  - cancelled
+  - archived
+
+# -----------------------------------------------------------------------------
+# Workflow DAG Definitions
+# Each workflow's nodes are defined below.
+# Node structure is identical across workflows where applicable;
+# workflow-specific nodes are added as needed.
+# -----------------------------------------------------------------------------
+
+# ─── WORKFLOW 1: clinical_analysis_standard ───────────────────────────────────
+workflows:
+  clinical_analysis_standard:
+    start: intake
+    completion: evaluation
+
+    nodes:
+      intake:
+        type: task
+        agent: planner
+        description: "Extract intent_object from natural language prompt."
+        outputs:
+          - analysis_request
+          - project_metadata
+
+      validate_dataset:
+        type: task
+        depends_on: [intake]
+        agent: data_quality
+        description: "Validate dataset integrity; generate quality_report."
+        outputs:
+          - validated_dataset
+          - quality_report
+
+      classify_variables:
+        type: task
+        depends_on: [validate_dataset]
+        agent: data_quality
+        outputs:
+          - variable_metadata
+
+      detect_missing_values:
+        type: task
+        depends_on: [classify_variables]
+        agent: data_quality
+        outputs:
+          - missing_value_report
+
+      detect_outliers:
+        type: task
+        depends_on: [detect_missing_values]
+        agent: data_quality
+        outputs:
+          - outlier_report
+
+      select_analysis:
+        type: decision
+        depends_on: [detect_outliers]
+        agent: statistics
+        description: "Select statistical method from intent_object via method_selection_guide."
+        outputs:
+          - analysis_plan
+          - statistical_method
+
+      assumption_check:
+        type: task
+        depends_on: [select_analysis]
+        agent: statistics
+        outputs:
+          - assumption_report
+
+      decision_assumption:
+        type: decision
+        depends_on: [assumption_check]
+        rules:
+          normality:
+            true: generate_r_script
+            false: select_nonparametric
+
+      select_nonparametric:
+        type: task
+        depends_on: [decision_assumption]
+        agent: statistics
+        outputs:
+          - updated_analysis_plan
+
+      generate_r_script:
+        type: task
+        depends_on: [decision_assumption]
+        agent: statistics
+        outputs:
+          - r_script
+
+      security_review:
+        type: approval
+        depends_on: [generate_r_script]
+        agent: security
+        description: "Human approval required before R script execution."
+        outputs:
+          - execution_permission
+
+      runtime_execution:
+        type: task
+        depends_on: [security_review]
+        agent: runtime
+        outputs:
+          - execution_result
+          - generated_files
+
+      visualization:
+        type: task
+        depends_on: [runtime_execution]
+        agent: visualization
+        outputs:
+          - figures
+
+      reporting:
+        type: task
+        depends_on: [visualization]
+        agent: reporting
+        outputs:
+          - report
+
+      reviewer:
+        type: task
+        depends_on: [reporting]
+        agent: reviewer
+        outputs:
+          - review_result
+          - quality_score
+
+      evaluation:
+        type: evaluation
+        depends_on: [reviewer]
+        outputs:
+          - evaluation_report
+          - reproducibility_report
+          - completion_status
+
+  # ─── WORKFLOW 2: clinical_analysis_survival ─────────────────────────────────
+  clinical_analysis_survival:
+    start: intake
+    completion: evaluation
+    description: >
+      Extends standard workflow with survival-specific nodes:
+      Kaplan-Meier estimation, log-rank test, and Cox PH assumption check.
+
+    nodes:
+      intake:
+        type: task
+        agent: planner
+        outputs: [analysis_request, project_metadata]
+
+      validate_dataset:
+        type: task
+        depends_on: [intake]
+        agent: data_quality
+        outputs: [validated_dataset, quality_report]
+
+      classify_variables:
+        type: task
+        depends_on: [validate_dataset]
+        agent: data_quality
+        outputs: [variable_metadata]
+
+      detect_missing_values:
+        type: task
+        depends_on: [classify_variables]
+        agent: data_quality
+        outputs: [missing_value_report]
+
+      detect_outliers:
+        type: task
+        depends_on: [detect_missing_values]
+        agent: data_quality
+        outputs: [outlier_report]
+
+      validate_survival_vars:
+        type: task
+        depends_on: [detect_outliers]
+        agent: data_quality
+        description: "Validate time_var > 0 and event_var ∈ {0,1}. Survival-specific check."
+        outputs: [survival_var_validation_report]
+
+      select_survival_method:
+        type: task
+        depends_on: [validate_survival_vars]
+        agent: statistics
+        description: "Determine KM + log-rank + Cox structure from intent_object."
+        outputs: [analysis_plan, statistical_method]
+
+      ph_assumption_check:
+        type: task
+        depends_on: [select_survival_method]
+        agent: statistics
+        description: "Schoenfeld residuals test (cox.zph). Required before Cox execution."
+        outputs: [ph_assumption_report]
+
+      generate_r_script:
+        type: task
+        depends_on: [ph_assumption_check]
+        agent: statistics
+        outputs: [r_script]
+
+      security_review:
+        type: approval
+        depends_on: [generate_r_script]
+        agent: security
+        outputs: [execution_permission]
+
+      runtime_execution:
+        type: task
+        depends_on: [security_review]
+        agent: runtime
+        outputs: [execution_result, generated_files]
+
+      visualization:
+        type: task
+        depends_on: [runtime_execution]
+        agent: visualization
+        description: "Kaplan-Meier curves with risk table (visualization/survival skill)."
+        outputs: [figures]
+
+      reporting:
+        type: task
+        depends_on: [visualization]
+        agent: reporting
+        outputs: [report]
+
+      reviewer:
+        type: task
+        depends_on: [reporting]
+        agent: reviewer
+        outputs: [review_result, quality_score]
+
+      evaluation:
+        type: evaluation
+        depends_on: [reviewer]
+        outputs: [evaluation_report, reproducibility_report, completion_status]
+
+  # ─── WORKFLOW 3: clinical_analysis_meta ─────────────────────────────────────
+  clinical_analysis_meta:
+    start: intake
+    completion: evaluation
+    description: >
+      Meta-analysis workflow. Uses metafor package (meta_analysis_reference.md).
+      Includes effect size pooling, heterogeneity assessment (I², Q-test),
+      publication bias evaluation (Egger's test, funnel plot), and
+      PRISMA 2020 checklist compliance.
+
+    nodes:
+      intake:
+        type: task
+        agent: planner
+        outputs: [analysis_request, project_metadata]
+
+      validate_study_data:
+        type: task
+        depends_on: [intake]
+        agent: data_quality
+        description: "Validate study-level data: n per arm, events, effect sizes."
+        outputs: [validated_dataset, quality_report]
+
+      select_effect_measure:
+        type: decision
+        depends_on: [validate_study_data]
+        agent: statistics
+        description: "Select escalc() measure (OR, RR, MD, SMD, HR) from intent_object."
+        outputs: [analysis_plan, effect_measure]
+
+      select_model_type:
+        type: decision
+        depends_on: [select_effect_measure]
+        agent: statistics
+        description: "Fixed (EE) vs Random (REML) effects model selection."
+        rules:
+          heterogeneity_expected:
+            true: random_effects
+            false: fixed_effects
+        outputs: [model_type]
+
+      generate_r_script:
+        type: task
+        depends_on: [select_model_type]
+        agent: statistics
+        description: "Generate metafor escalc() → rma() → forest() → funnel() script."
+        outputs: [r_script]
+
+      security_review:
+        type: approval
+        depends_on: [generate_r_script]
+        agent: security
+        outputs: [execution_permission]
+
+      runtime_execution:
+        type: task
+        depends_on: [security_review]
+        agent: runtime
+        outputs: [execution_result, generated_files]
+
+      visualization:
+        type: task
+        depends_on: [runtime_execution]
+        agent: visualization
+        description: "Forest plot + funnel plot generation."
+        outputs: [figures]
+
+      reporting:
+        type: task
+        depends_on: [visualization]
+        agent: reporting
+        description: "PRISMA 2020 checklist compliance enforced."
+        outputs: [report]
+
+      reviewer:
+        type: task
+        depends_on: [reporting]
+        agent: reviewer
+        outputs: [review_result, quality_score]
+
+      evaluation:
+        type: evaluation
+        depends_on: [reviewer]
+        outputs: [evaluation_report, reproducibility_report, completion_status]
+
+  # ─── WORKFLOW 4: clinical_analysis_prediction ────────────────────────────────
+  clinical_analysis_prediction:
+    start: intake
+    completion: evaluation
+    description: >
+      Prediction model development and/or validation workflow.
+      Includes EPP check (events-per-predictor), Firth logistic fallback,
+      discrimination (AUC/C-statistic), calibration, and TRIPOD+AI 2024 compliance.
+
+    nodes:
+      intake:
+        type: task
+        agent: planner
+        outputs: [analysis_request, project_metadata]
+
+      validate_dataset:
+        type: task
+        depends_on: [intake]
+        agent: data_quality
+        outputs: [validated_dataset, quality_report]
+
+      classify_variables:
+        type: task
+        depends_on: [validate_dataset]
+        agent: data_quality
+        outputs: [variable_metadata]
+
+      detect_missing_values:
+        type: task
+        depends_on: [classify_variables]
+        agent: data_quality
+        outputs: [missing_value_report]
+
+      epp_check:
+        type: task
+        depends_on: [detect_missing_values]
+        agent: statistics
+        description: >
+          Events-per-predictor check. EPP < 10 triggers Firth penalized
+          logistic regression (regression SKILL.md). Documented in analysis_plan.
+        outputs: [epp_report]
+
+      select_prediction_method:
+        type: decision
+        depends_on: [epp_check]
+        agent: statistics
+        rules:
+          epp_sufficient:
+            true: generate_standard_logistic
+            false: generate_firth_logistic
+        outputs: [analysis_plan, statistical_method]
+
+      generate_standard_logistic:
+        type: task
+        depends_on: [select_prediction_method]
+        agent: statistics
+        outputs: [r_script]
+
+      generate_firth_logistic:
+        type: task
+        depends_on: [select_prediction_method]
+        agent: statistics
+        description: "Firth penalized logistic via logistf package."
+        outputs: [r_script]
+
+      security_review:
+        type: approval
+        depends_on: [generate_standard_logistic, generate_firth_logistic]
+        agent: security
+        outputs: [execution_permission]
+
+      runtime_execution:
+        type: task
+        depends_on: [security_review]
+        agent: runtime
+        outputs: [execution_result, generated_files]
+
+      discrimination_calibration:
+        type: task
+        depends_on: [runtime_execution]
+        agent: statistics
+        description: "AUC/C-statistic (pROC) and calibration curve generation."
+        outputs: [discrimination_calibration_result]
+
+      visualization:
+        type: task
+        depends_on: [discrimination_calibration]
+        agent: visualization
+        description: "ROC curve, calibration plot generation."
+        outputs: [figures]
+
+      reporting:
+        type: task
+        depends_on: [visualization]
+        agent: reporting
+        description: "TRIPOD+AI 2024 checklist compliance enforced."
+        outputs: [report]
+
+      reviewer:
+        type: task
+        depends_on: [reporting]
+        agent: reviewer
+        outputs: [review_result, quality_score]
+
+      evaluation:
+        type: evaluation
+        depends_on: [reviewer]
+        outputs: [evaluation_report, reproducibility_report, completion_status]
+
+# -----------------------------------------------------------------------------
+# Shared Policy (applies to all workflows)
+# -----------------------------------------------------------------------------
+failure_policy:
+  retry:
+    enabled: true
+    maximum_attempts: 3
+    strategy: exponential_backoff
+  recoverable:
+    - runtime_timeout
+    - temporary_io_failure
+    - runtime_busy
+  non_recoverable:
+    - schema_validation_failure
+    - permission_denied
+    - security_violation
+    - corrupted_dataset
+
+human_approval:
+  required:
+    - runtime_package_installation
+    - external_api_access
+    - report_export
+    - architecture_change
+    - workflow_change
+
+artifacts:
+  required:
+    - validated_dataset
+    - analysis_plan
+    - r_script
+    - execution_result
+    - figures
+    - report
+    - review_report
+    - evaluation_report
+
+audit:
+  workflow_trace: true
+  execution_trace: true
+  decision_log: true
+  security_log: true
+  evaluation_log: true
+  workflow_selection_log: true   # Added v2.1.0: log which WS-rule matched
+
+quality_gate:
+  schema_validation: required
+  security_validation: required
+  statistical_validation: required
+  reviewer_approval: required
+  evaluation_score:
+    minimum: 90
+
+extensibility:
+  workflow_plugins: false         # New workflows require ADR + static definition; no runtime plugins
+  conditional_branches: true
+  parallel_execution: future
+  distributed_execution: future

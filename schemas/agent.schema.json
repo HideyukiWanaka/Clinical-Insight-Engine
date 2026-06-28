@@ -1,0 +1,234 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cie://schemas/agent.schema.json",
+  "title": "CIE Agent Definition",
+  "description": "Validation schema for all agent YAML definitions under agents/. Every agent file must conform to this schema. Conforms to PROJECT_RULES.md section 9 (Agent Rules) and component-model.md Domain Agents definition.",
+  "version": "1.0.0",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "agent_id",
+    "metadata",
+    "responsibility_boundaries",
+    "contract",
+    "behavior_rules",
+    "exception_handling"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$",
+      "description": "Version of this agent schema specification."
+    },
+    "agent_id": {
+      "type": "string",
+      "enum": [
+        "orchestrator",
+        "planner",
+        "data-quality",
+        "statistics",
+        "visualization",
+        "reporting",
+        "reviewer",
+        "runtime",
+        "security"
+      ],
+      "description": "Canonical agent identifier. Must match MANIFEST.yaml agents.required list and permissions.yaml agent_permission_matrix keys."
+    },
+    "metadata": {
+      "$ref": "#/$defs/AgentMetadata"
+    },
+    "responsibility_boundaries": {
+      "$ref": "#/$defs/ResponsibilityBoundaries"
+    },
+    "contract": {
+      "$ref": "#/$defs/AgentContract"
+    },
+    "behavior_rules": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Ordered behavioral rules. At least one CRITICAL rule is required per PROJECT_RULES.md.",
+      "items": { "$ref": "#/$defs/BehaviorRule" }
+    },
+    "context_loading": {
+      "$ref": "#/$defs/ContextLoading"
+    },
+    "exception_handling": {
+      "type": "object",
+      "description": "Structured failure handling declarations. Must include on_capability_token_breach per security policy.",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/ExceptionHandler"
+      }
+    }
+  },
+  "$defs": {
+    "AgentMetadata": {
+      "type": "object",
+      "required": ["name", "role", "owner", "architecture_principles"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Human-readable agent name."
+        },
+        "role": {
+          "type": "string",
+          "description": "One-line role summary. Must be single-responsibility per PROJECT_RULES.md section 4."
+        },
+        "owner": {
+          "type": "string",
+          "description": "Owning team identifier."
+        },
+        "architecture_principles": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "description": "Architecture principle reference. e.g. 'AP-001 Intent First'."
+          }
+        }
+      }
+    },
+    "ResponsibilityBoundaries": {
+      "type": "object",
+      "required": ["owns", "strictly_forbidden"],
+      "additionalProperties": false,
+      "properties": {
+        "owns": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Capabilities this agent owns exclusively.",
+          "items": { "type": "string" }
+        },
+        "strictly_forbidden": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Capabilities explicitly prohibited for this agent. Must include items that belong to other agents to enforce separation of concerns.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "AgentContract": {
+      "type": "object",
+      "required": ["input_schema", "output_schema"],
+      "additionalProperties": false,
+      "properties": {
+        "input_schema": {
+          "type": "object",
+          "required": ["required"],
+          "additionalProperties": false,
+          "properties": {
+            "required": {
+              "type": "array",
+              "minItems": 1,
+              "description": "Fields that must be present in every invocation. capability_token is mandatory for all agents.",
+              "items": { "type": "string" }
+            },
+            "optional": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "output_schema": {
+          "type": "object",
+          "required": ["guaranteed"],
+          "additionalProperties": false,
+          "properties": {
+            "guaranteed": {
+              "type": "array",
+              "minItems": 1,
+              "description": "Fields guaranteed to be present in every response, including error responses.",
+              "items": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "BehaviorRule": {
+      "type": "object",
+      "required": ["rule_id", "priority", "statement"],
+      "additionalProperties": false,
+      "properties": {
+        "rule_id": {
+          "type": "string",
+          "pattern": "^[A-Z]{2,3}-[0-9]{3}$",
+          "description": "Rule identifier. Format: {AGENT_PREFIX}-{NNN}. e.g. DQ-001, ST-002."
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+          "description": "CRITICAL rules are enforced unconditionally. Violation triggers IMMEDIATE_ABORT."
+        },
+        "statement": {
+          "type": "string",
+          "minLength": 10,
+          "description": "Precise behavioral constraint statement."
+        }
+      }
+    },
+    "ContextLoading": {
+      "type": "object",
+      "required": ["inject_raw_data_rows"],
+      "additionalProperties": false,
+      "properties": {
+        "allowed_knowledge_sources": {
+          "type": "array",
+          "description": "Knowledge paths permitted for injection. Must be under knowledge/ directory.",
+          "items": {
+            "type": "string",
+            "pattern": "^knowledge/"
+          }
+        },
+        "maximum_context_tokens": {
+          "type": "integer",
+          "minimum": 256,
+          "description": "Maximum token budget for context injection."
+        },
+        "inject_raw_data_rows": {
+          "type": "boolean",
+          "const": false,
+          "description": "Must always be false. Raw patient data rows are never injected into agent context."
+        }
+      }
+    },
+    "ExceptionHandler": {
+      "type": "object",
+      "required": ["action", "error_code"],
+      "additionalProperties": true,
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "return_structured_error",
+            "return_structured_report",
+            "IMMEDIATE_ABORT",
+            "terminate_execution"
+          ]
+        },
+        "error_code": {
+          "type": "string",
+          "pattern": "^[A-Z_]+$",
+          "description": "Machine-readable error code in SCREAMING_SNAKE_CASE."
+        },
+        "message": {
+          "type": "string"
+        },
+        "pipeline_continuation": {
+          "type": "boolean"
+        },
+        "security_event": {
+          "type": "boolean"
+        },
+        "notify_orchestrator": {
+          "type": "boolean"
+        },
+        "trigger_human_review": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

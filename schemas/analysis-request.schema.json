@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cie://schemas/analysis-request.schema.json",
+  "title": "CIE Analysis Request (Intent Object)",
+  "description": "Schema for the structured Intent Object produced by the Planner Agent and consumed by the Statistics Agent. Conforms to planner.yaml output_schema.guaranteed.intent_object and component-model.md Intent Layer output example.",
+  "version": "1.0.0",
+  "type": "object",
+  "required": [
+    "execution_id",
+    "intent_object",
+    "confidence_score",
+    "requires_human_clarification",
+    "created_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "execution_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "intent_object": {
+      "$ref": "#/$defs/IntentObject"
+    },
+    "confidence_score": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Planner confidence in the extracted intent. Below 0.7 should trigger clarification."
+    },
+    "requires_human_clarification": {
+      "type": "boolean",
+      "description": "True when intent is ambiguous. Pipeline must pause for human input before Statistics Agent proceeds."
+    },
+    "clarification_options": {
+      "type": "array",
+      "description": "Mutually exclusive analytical paths presented to the human when requires_human_clarification=true. Conforms to planner.yaml rule PL-003.",
+      "items": {
+        "type": "object",
+        "required": ["option_id", "label", "intent_override"],
+        "additionalProperties": false,
+        "properties": {
+          "option_id": { "type": "string" },
+          "label": { "type": "string", "description": "Human-readable description of this analytical path." },
+          "intent_override": {
+            "type": "object",
+            "description": "Partial intent_object fields that would be applied if this option is selected.",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "$defs": {
+    "IntentObject": {
+      "type": "object",
+      "required": [
+        "objective",
+        "outcome_type",
+        "study_design"
+      ],
+      "additionalProperties": false,
+      "description": "Structured clinical research intent. Derived from natural language by Planner Agent per rule PL-002.",
+      "properties": {
+        "objective": {
+          "type": "string",
+          "enum": [
+            "between_group_comparison",
+            "paired_comparison",
+            "correlation_analysis",
+            "regression_analysis",
+            "survival_analysis",
+            "diagnostic_accuracy",
+            "prediction_model",
+            "descriptive_only",
+            "systematic_review"
+          ],
+          "description": "Primary analytical objective. Maps directly to statistics.yaml method_selection_framework."
+        },
+        "outcome_type": {
+          "type": "string",
+          "enum": ["continuous", "categorical_binary", "categorical_ordinal", "categorical_nominal", "survival", "unknown"],
+          "description": "Statistical type of the primary outcome variable."
+        },
+        "predictor_type": {
+          "type": ["string", "null"],
+          "enum": ["categorical_binary", "categorical_nominal", "categorical_ordinal", "continuous", "mixed", null],
+          "description": "Statistical type of the primary predictor or grouping variable."
+        },
+        "study_design": {
+          "type": "string",
+          "enum": [
+            "randomized_controlled_trial",
+            "observational",
+            "cohort",
+            "case_control",
+            "cross_sectional",
+            "prediction_model",
+            "systematic_review_or_meta_analysis",
+            "diagnostic_accuracy_study",
+            "unknown"
+          ],
+          "description": "Inferred clinical study design. Used by Reporting Agent for checklist selection."
+        },
+        "outcome_variables": {
+          "type": "array",
+          "minItems": 1,
+          "description": "var_n aliases for primary and secondary outcome variables.",
+          "items": {
+            "type": "object",
+            "required": ["var_n", "role"],
+            "additionalProperties": false,
+            "properties": {
+              "var_n": { "type": "string", "pattern": "^var_[0-9]+$" },
+              "role": { "type": "string", "enum": ["primary_outcome", "secondary_outcome", "time_to_event", "event_indicator"] }
+            }
+          }
+        },
+        "predictor_variables": {
+          "type": "array",
+          "description": "var_n aliases for predictor, grouping, or covariate variables.",
+          "items": {
+            "type": "object",
+            "required": ["var_n", "role"],
+            "additionalProperties": false,
+            "properties": {
+              "var_n": { "type": "string", "pattern": "^var_[0-9]+$" },
+              "role": { "type": "string", "enum": ["primary_predictor", "covariate", "grouping_variable", "matching_variable"] }
+            }
+          }
+        },
+        "sample_size_estimate": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "Estimated total sample size derived from dataset_structural_metadata row_count."
+        },
+        "distribution_assumptions": {
+          "type": "string",
+          "enum": ["assumed_normal", "assumed_non_normal", "unknown"],
+          "description": "Initial distribution assumption. Overridden by Statistics Agent assumption_check results."
+        },
+        "reporting_checklist_inference": {
+          "type": ["string", "null"],
+          "enum": ["CONSORT", "STROBE", "TRIPOD", "PRISMA", "STARD", null],
+          "description": "Checklist inferred from study_design. Passed to Reporting Agent."
+        },
+        "natural_language_summary": {
+          "type": "string",
+          "description": "One-sentence plain-language summary of the interpreted research objective for human review."
+        }
+      }
+    }
+  }
+}

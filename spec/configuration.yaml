@@ -1,0 +1,144 @@
+# =============================================================================
+# File: spec/configuration.yaml
+# Version: 2.0.0
+# Status: Draft
+# Purpose: Defines global platform settings, AI provider abstractions, retry
+#          gateways, evaluation score thresholds, and system feature flags.
+# =============================================================================
+
+schema_version: "1.0"
+specification_id: "cie-spec-configuration"
+
+metadata:
+  owner: "architecture"
+  architecture_principles:
+    - "AP-007 AI Provider Independence"
+    - "AP-012 Offline Capability"
+    - "AP-017 Evaluation Driven Development"
+
+# -----------------------------------------------------------------------------
+# Core Platform Environment Settings
+# -----------------------------------------------------------------------------
+platform_environment:
+  target_deployment: "local_desktop_standalone"
+  offline_first_mode: true
+  default_ui_language: "ja"
+  system_timezone: "Asia/Tokyo"
+
+  storage_locations:
+    database_filepath: "${USER_DOCUMENTS}/CIE/cie_database.db"
+    workspace_directory: "${USER_DOCUMENTS}/CIE/workspace"
+    ephemeral_temp_directory: "${OS_TEMP}/cie_ephemeral_sessions"
+    archive_directory: "${USER_DOCUMENTS}/CIE/archives"
+    skill_performance_records: "${USER_DOCUMENTS}/CIE/cie_database.db"  # ADR-0002
+
+# -----------------------------------------------------------------------------
+# AI Provider Abstraction Layer (Zero Vendor Lock-in — AP-007)
+# -----------------------------------------------------------------------------
+ai_provider_abstraction:
+  routing_strategy: "dynamic_capability_match"
+  active_default_provider: "anthropic"
+
+  supported_providers:
+    anthropic:
+      enabled: true
+      endpoint_url: "https://api.anthropic.com/v1/messages"
+      auth_keyring_service: "CIE_Platform_Anthropic_OAuth_Key"
+      default_models:
+        reasoning_heavy: "claude-3-5-sonnet-latest"
+        fast_transform: "claude-3-5-haiku-latest"
+      request_limits:
+        timeout_seconds: 60
+        max_context_tokens: 128000
+
+    openai:
+      enabled: true
+      endpoint_url: "https://api.openai.com/v1/chat/completions"
+      auth_keyring_service: "CIE_Platform_OpenAI_API_Key"
+      default_models:
+        reasoning_heavy: "gpt-4o"
+        fast_transform: "gpt-4o-mini"
+      request_limits:
+        timeout_seconds: 60
+        max_context_tokens: 128000
+
+    google_gemini:
+      enabled: true
+      endpoint_url: "https://generativelanguage.googleapis.com/v1beta"
+      auth_keyring_service: "CIE_Platform_Google_API_Key"
+      default_models:
+        reasoning_heavy: "gemini-1.5-pro"
+        fast_transform: "gemini-1.5-flash"
+      request_limits:
+        timeout_seconds: 90
+        max_context_tokens: 256000
+
+    local_ollama:
+      enabled: false   # Optional offline LLM support (AP-012)
+      endpoint_url: "http://localhost:11434/api/generate"
+      auth_keyring_service: "none"
+      default_models:
+        reasoning_heavy: "llama3:70b"
+        fast_transform: "llama3:8b"
+      request_limits:
+        timeout_seconds: 300
+        max_context_tokens: 32000
+
+# -----------------------------------------------------------------------------
+# Global Resilience & Retry Gateways
+# -----------------------------------------------------------------------------
+resilience_policies:
+  llm_api_retry:
+    max_attempts: 3
+    initial_backoff_ms: 1000
+    backoff_multiplier: 2.0
+    retryable_http_codes: [408, 429, 500, 502, 503, 504]
+
+  r_syntax_self_correction:
+    enabled: true
+    max_auto_retries: 2
+    feed_stderr_to_llm: true
+
+# -----------------------------------------------------------------------------
+# Evaluation Gateways (Quality Assurance Thresholds — AP-017)
+# -----------------------------------------------------------------------------
+evaluation_gateways:
+  global_minimum_pass_score: 90    # Out of 100
+
+  mandatory_dimensions:
+    statistical_validity:
+      minimum_score: 95
+      block_on_failure: true
+    security_and_privacy:
+      minimum_score: 100            # Strict Zero Tolerance
+      block_on_failure: true
+    schema_compliance:
+      minimum_score: 100
+      block_on_failure: true
+    reproducibility_check:
+      minimum_score: 90
+      block_on_failure: true
+
+  # Added: ADR-0002 — Skill performance monitoring thresholds
+  skill_performance_gateways:
+    recurring_finding_trigger:
+      window: 5
+      threshold: 3                  # ≥3/5 executions → SE-001
+    low_pass_rate_trigger:
+      window: 10
+      threshold_pct: 80             # avg < 80% → SE-002
+
+# -----------------------------------------------------------------------------
+# System Feature Flags & Operational Modes
+# -----------------------------------------------------------------------------
+feature_flags:
+  enable_pii_regex_guardrail: true
+  enable_pii_statistical_detection: true    # Added: Layer 2
+  enable_pii_ml_detection: false            # Added: Layer 3 (optional, off by default)
+  enable_docker_auto_detection: true
+  enable_consort_flow_tracking: true
+  enable_immutable_audit_logging: true
+  enforce_column_anonymization_proxy: true
+  allow_skip_eda_step: false
+  enable_skill_performance_monitoring: true # Added: ADR-0002
+  enable_user_skill_registration: true      # Added: ADR-0002

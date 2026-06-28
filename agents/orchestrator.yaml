@@ -1,0 +1,255 @@
+# =============================================================================
+# Version: 2.1.0
+# Status: Draft
+# Purpose: Defines the central engine responsible for declarative workflow
+#          driving, task dispatching, token lifecycle, and immutable auditing.
+# Changelog v2.1.0:
+#   - Added workflow_selection_rules (ADR-0001: Orchestrator-Planner boundary)
+#   - Added WS-001 to WS-004 deterministic workflow selection logic
+#   - Clarified responsibility_boundaries: owns workflow_id_determination
+#   - Clarified strictly_forbidden: intent_object_mutation
+#   - Added on_requires_human_clarification handling in workflow selection
+# =============================================================================
+
+schema_version: "1.0"
+agent_id: "orchestrator"
+
+metadata:
+  name: "Platform Workflow Orchestrator Engine"
+  role: "System Coordination, Workflow Selection & State Machine Controller"
+  owner: "architecture"
+  architecture_principles:
+    - "AP-003 Workflow-Centric Architecture"
+    - "AP-005 Contract First"
+    - "AP-018 Observable Systems"
+
+# -----------------------------------------------------------------------------
+# Responsibility Boundaries (Strict Separation of Concerns)
+# -----------------------------------------------------------------------------
+# ADR-0001 Summary:
+#   Planner  → produces intent_object (WHAT the user wants)
+#   Orchestrator → selects workflow_id + executes DAG (HOW to fulfill it)
+#   Workflow definitions → always static, never mutated at runtime
+# -----------------------------------------------------------------------------
+responsibility_boundaries:
+  owns:
+    - "workflow_id_determination_from_intent_object"   # Added v2.1.0 (ADR-0001)
+    - "workflow_state_machine_management"
+    - "dag_task_scheduling_and_dispatch"
+    - "ephemeral_capability_token_management"
+    - "error_propagation_and_retry_routing"
+    - "human_in_the_loop_interrupt_handling"
+    - "immutable_audit_logging"
+
+  strictly_forbidden:
+    - "intent_object_mutation"                # Added v2.1.0 — intent_object is Planner's output; Orchestrator reads it only
+    - "workflow_dag_node_addition_or_removal" # Added v2.1.0 — DAG structure is always static (ADR-0001 Principle 1)
+    - "workflow_id_assignment_by_planner"     # Added v2.1.0 — Planner must NOT set workflow_id (ADR-0001 Principle 2)
+    - "raw_dataset_content_inspection"        # Zero Data Reading
+    - "statistical_methodology_selection"     # No Domain Decisions
+    - "r_or_python_code_generation"           # No Script Authoring
+    - "direct_runtime_invocation"             # No Subprocess Execution
+    - "prompt_engineering_or_mutation"        # No Prompt Modification
+
+# -----------------------------------------------------------------------------
+# Component Contract (Strict I/O Schemas)
+# -----------------------------------------------------------------------------
+contract:
+  input_schema:
+    required:
+      - "execution_id"
+      - "initial_user_intent_payload"      # analysis-request.schema.json (from Planner)
+      - "project_context_reference"
+    optional:
+      - "workflow_definition_reference"    # If omitted, Orchestrator resolves via workflow_selection_rules
+
+  output_schema:
+    guaranteed:
+      - "execution_id"
+      - "workflow_id_selected"             # Added v2.1.0 — which workflow was chosen and why
+      - "final_workflow_state"             # completed | failed | cancelled
+      - "task_execution_trace"
+      - "evaluation_report_reference"
+      - "audit_log_reference"
+
+# -----------------------------------------------------------------------------
+# Workflow Selection Engine (ADR-0001 Implementation)
+# -----------------------------------------------------------------------------
+# Orchestrator selects the workflow_id from spec/workflow.yaml's workflow_registry
+# using the deterministic rules below. This is the ONLY place where
+# intent_object fields are mapped to workflow definitions.
+#
+# Key invariants:
+#   - Same intent_object always produces same workflow_id (deterministic)
+#   - Rules are evaluated in priority order (lower number = higher priority)
+#   - Rule changes require a new ADR entry
+# -----------------------------------------------------------------------------
+workflow_selection:
+  source: "spec/workflow.yaml#workflow_registry"
+  policy:
+    deterministic: true
+    on_no_match: "use_default_workflow"
+    default_workflow_id: "clinical_analysis_standard"
+    on_requires_human_clarification_true:
+      action: "suspend_selection"
+      state_target: "waiting_for_human"
+      resume_trigger: "clarification_resolved"
+      message: "Workflow selection suspended: intent_object.requires_human_clarification=true. Awaiting human input."
+
+  rules:
+    - rule_id: "WS-001"
+      priority: 1
+      description: "Survival analysis — time-to-event outcome requires dedicated survival workflow"
+      condition:
+        intent_object.outcome_type: "survival"
+      workflow_id: "clinical_analysis_survival"
+      justification_template: "outcome_type=survival → clinical_analysis_survival (WS-001)"
+
+    - rule_id: "WS-002"
+      priority: 2
+      description: "Systematic review / meta-analysis — requires pooled effect size workflow"
+      condition:
+        intent_object.objective: "systematic_review"
+      workflow_id: "clinical_analysis_meta"
+      justification_template: "objective=systematic_review → clinical_analysis_meta (WS-002)"
+
+    - rule_id: "WS-003"
+      priority: 3
+      description: "Prediction model — development or validation requires TRIPOD-aligned workflow"
+      condition:
+        intent_object.objective: "prediction_model"
+      workflow_id: "clinical_analysis_prediction"
+      justification_template: "objective=prediction_model → clinical_analysis_prediction (WS-003)"
+
+    - rule_id: "WS-004"
+      priority: 99
+      description: >
+        Standard clinical analysis — default for between-group comparison,
+        correlation, regression, and descriptive analyses.
+      condition: {}   # matches all intent_objects not captured by WS-001 to WS-003
+      workflow_id: "clinical_analysis_standard"
+      justification_template: "no specific rule matched → clinical_analysis_standard (WS-004 default)"
+
+  audit_requirement:
+    log_selected_workflow_id: true
+    log_matched_rule_id: true
+    log_justification: true
+    log_intent_object_snapshot: true   # Snapshot of key fields used for selection
+
+# -----------------------------------------------------------------------------
+# Declarative State Machine Engine
+# -----------------------------------------------------------------------------
+state_machine:
+  valid_states:
+    - "draft"
+    - "validated"
+    - "planned"
+    - "running"
+    - "waiting_for_human"
+    - "retrying"
+    - "completed"
+    - "failed"
+    - "cancelled"
+    - "archived"
+
+  transition_rules:
+    enforce_deterministic_flow: true
+    on_any_transition:
+      action: "append_state_change_to_audit_db"
+      fields: ["timestamp", "execution_id", "from_state", "to_state", "trigger_event"]
+
+  # Workflow selection occurs in the draft → validated transition
+  # At this point Orchestrator has received intent_object and applies workflow_selection_rules
+  workflow_selection_transition:
+    from: "draft"
+    trigger: "intent_object_received_and_validated"
+    actions:
+      - "evaluate_requires_human_clarification"
+      - "apply_workflow_selection_rules"
+      - "load_workflow_dag_from_registry"
+      - "record_workflow_id_to_audit"
+    on_success_transition_to: "validated"
+    on_clarification_needed_transition_to: "waiting_for_human"
+
+# -----------------------------------------------------------------------------
+# Core Task Dispatch Loop (The Secure Execution Engine)
+# -----------------------------------------------------------------------------
+task_dispatch_loop:
+  description: >
+    Standard execution cycle executed for every node in the selected Workflow DAG.
+    The DAG structure is loaded from spec/workflow.yaml and is never modified
+    during execution (ADR-0001 Principle 1).
+
+  precondition: "workflow_id must be resolved before dispatch loop begins"
+
+  cycle_steps:
+    - step_id: 1
+      action: "resolve_next_executable_dag_node"
+      note: "Uses the static DAG definition from spec/workflow.yaml. No dynamic node generation."
+    - step_id: 2
+      action: "verify_node_dependencies_and_preconditions"
+    - step_id: 3
+      action: "issue_ephemeral_capability_token"
+      reference: "spec/permissions.yaml"
+      bind_to: ["execution_id", "target_agent_id", "current_step_id"]
+    - step_id: 4
+      action: "assemble_isolated_context_payload"
+      principle: "AP-013 Progressive Context Loading"
+      inject_only: ["node_inputs", "required_schemas", "assigned_capability_token"]
+      pii_filter: "applied_before_context_assembly"   # Added v2.1.0 reference
+    - step_id: 5
+      action: "dispatch_request_to_target_domain_agent"
+      enforce_contract: "contract.request"
+    - step_id: 6
+      action: "await_and_validate_agent_response"
+      enforce_contract: "contract.response"
+      on_validation_failure: "trigger_non_recoverable_failure"
+    - step_id: 7
+      action: "immediately_revoke_capability_token"
+    - step_id: 8
+      action: "record_decision_and_io_to_audit"
+    - step_id: 9
+      action: "advance_state_machine_or_handle_branching"
+
+# -----------------------------------------------------------------------------
+# Exception & Resilience Routing
+# -----------------------------------------------------------------------------
+resilience_routing:
+  on_recoverable_failure:
+    matches: ["runtime_timeout", "temporary_io_failure", "runtime_busy"]
+    action: "evaluate_workflow_retry_policy"
+    if_retries_remaining: "transition_to_retrying"
+    if_retries_exhausted: "transition_to_failed"
+
+  on_non_recoverable_failure:
+    matches: ["schema_validation_failure", "permission_denied", "security_violation"]
+    action: "IMMEDIATE_ABORT"
+    state_target: "failed"
+    security_event: "revoke_all_active_tokens_and_lock_workspace"
+
+  on_human_interrupt_required:
+    matches: ["approval_node_reached", "ambiguity_resolution_requested"]
+    action: "transition_to_waiting_for_human"
+    behavior: "suspend_dispatch_loop_and_save_checkpoint"
+
+  on_workflow_selection_failure:
+    matches: ["no_matching_workflow_rule", "workflow_registry_unavailable"]
+    action: "return_structured_error"
+    error_code: "WORKFLOW_SELECTION_FAILED"
+    state_target: "failed"
+    message: "Orchestrator could not determine an appropriate workflow for the provided intent_object."
+
+# -----------------------------------------------------------------------------
+# Audit & Telemetry Policy (Decision-Oriented Logging)
+# -----------------------------------------------------------------------------
+audit_policy:
+  storage_target: "cie_database.db -> audit_logs"
+  immutability: true
+
+  log_retention_rules:
+    capture_reasoning_spans: false        # NEVER log LLM internal thinking (Think spans)
+    capture_decision_nodes: true          # ALWAYS log branching choices
+    capture_tool_call_io: true            # ALWAYS log input/output payloads
+    capture_validation_status: true
+    capture_token_lifecycle: true
+    capture_workflow_selection: true      # Added v2.1.0 — log WS-rule matched + workflow_id
