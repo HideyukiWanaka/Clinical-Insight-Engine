@@ -1,7 +1,18 @@
 # CIE Platform — Claude Code Implementation Prompts
 # Phase 3: Security & Permission System
 # File: prompts/phase3_security.md
-# Version: 1.0.0
+# Version: 1.1.0
+
+---
+
+## PROMPT 3-0: ブランチ作成
+
+```
+# Phase 2 が main に merge 済みであることを確認してから実行してください。
+git checkout main
+git pull origin main
+git checkout -b feature/phase-3-security
+```
 
 ---
 
@@ -339,4 +350,29 @@ CIE Platformのvar_nエイリアス管理システムを実装してください
 - restore()はSecurity Agentのtokenがある場合のみ成功すること
   （CapabilityScope.R_CODE_RESTORE_VARIABLESチェックを省略しないこと）
 - dropされたexecution_idのmapはメモリから完全に削除されること
+```
+
+---
+
+## PROMPT 3-X: Phase 3 完了処理
+
+```
+Phase 3 の全実装（PROMPT 3-1〜3-3）が完了し、テストがすべてパスしたことを
+確認してから、以下の手順でブランチを main へ統合してください。
+
+### テスト確認
+pytest tests/unit/test_capability_token.py tests/unit/test_policy_engine.py \
+       tests/unit/test_context_guard.py -v
+
+### コミット
+git add -A
+git commit -m "feat(phase3): security & permission system — CCT, policy engine, context guard"
+
+### main へ merge
+git checkout main
+git merge --no-ff feature/phase-3-security \
+  -m "merge: phase-3-security into main"
+
+### 次フェーズのブランチを main から作成
+git checkout -b feature/phase-4-runtime
 ```

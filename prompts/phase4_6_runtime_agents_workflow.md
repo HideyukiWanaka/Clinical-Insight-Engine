@@ -3,13 +3,26 @@
 # Phase 5: Core Agents
 # Phase 6: Workflow Engine & Orchestrator
 # File: prompts/phase4_6_runtime_agents_workflow.md
-# Version: 1.0.0
+# Version: 1.1.0
 
 ---
 
 # ═══════════════════════════════════════
 # PHASE 4: RUNTIME PROVIDER
 # ═══════════════════════════════════════
+
+## PROMPT 4-0: ブランチ作成
+
+```
+# Phase 3 が main に merge 済みであることを確認してから実行してください。
+git checkout main
+git pull origin main
+git checkout -b feature/phase-4-runtime
+```
+
+---
+
+
 
 ## PROMPT 4-1: Rスクリプト実行エンジン
 
@@ -114,9 +127,41 @@ Rscriptをサブプロセスで安全に実行し、結果を収集します。
 
 ---
 
+## PROMPT 4-X: Phase 4 完了処理
+
+```
+Phase 4 の全実装（PROMPT 4-1〜4-2）が完了し、テストがすべてパスしたことを
+確認してから、以下の手順でブランチを main へ統合してください。
+
+### テスト確認
+pytest tests/unit/test_r_executor.py tests/unit/test_runtime_provider.py -v
+
+### コミット
+git add -A
+git commit -m "feat(phase4): local restricted runtime — R executor & runtime provider"
+
+### main へ merge
+git checkout main
+git merge --no-ff feature/phase-4-runtime \
+  -m "merge: phase-4-runtime into main"
+
+### 次フェーズのブランチを main から作成
+git checkout -b feature/phase-5-agents
+```
+
+---
+
 # ═══════════════════════════════════════
 # PHASE 5: CORE AGENTS
 # ═══════════════════════════════════════
+
+## PROMPT 5-0: ブランチチェック
+
+```
+# Phase 4 が main に merge 済みであることを確認し、
+# feature/phase-5-agents ブランチにいることを確認してから作業を開始してください。
+git branch   # 現在ブランチの確認
+```
 
 ## PROMPT 5-1: Agent基底クラス
 
@@ -379,9 +424,43 @@ CIE PlatformのData Quality Agentを実装してください。
 
 ---
 
+## PROMPT 5-X: Phase 5 完了処理
+
+```
+Phase 5 の全実装（PROMPT 5-1〜5-5）が完了し、テストがすべてパスしたことを
+確認してから、以下の手順でブランチを main へ統合してください。
+
+### テスト確認
+pytest tests/unit/test_base_agent.py tests/unit/test_statistics_agent.py \
+       tests/unit/test_visualization_agent.py tests/unit/test_reporting_agent.py \
+       tests/unit/test_data_quality_agent.py -v
+
+### コミット
+git add -A
+git commit -m "feat(phase5): core agents — base, statistics, visualization, reporting, data-quality"
+
+### main へ merge
+git checkout main
+git merge --no-ff feature/phase-5-agents \
+  -m "merge: phase-5-agents into main"
+
+### 次フェーズのブランチを main から作成
+git checkout -b feature/phase-6-workflow
+```
+
+---
+
 # ═══════════════════════════════════════
 # PHASE 6: WORKFLOW ENGINE & ORCHESTRATOR
 # ═══════════════════════════════════════
+
+## PROMPT 6-0: ブランチチェック
+
+```
+# Phase 5 が main に merge 済みであることを確認し、
+# feature/phase-6-workflow ブランチにいることを確認してから作業を開始してください。
+git branch   # 現在ブランチの確認
+```
 
 ## PROMPT 6-1: ワークフロー状態機械
 
@@ -620,4 +699,28 @@ workflow選択からDAGの順次実行まで、全体を統括します。
   （try/finally パターンで実装）
 - Orchestratorが統計分析・メソッド選択を行わないこと（全てAgentに委譲）
 - select_workflow()の結果はWorkflow Instance DBレコードのworkflow_selection_rule_idに保存すること
+```
+
+---
+
+## PROMPT 6-X: Phase 6 完了処理
+
+```
+Phase 6 の全実装（PROMPT 6-1〜6-2）が完了し、テストがすべてパスしたことを
+確認してから、以下の手順でブランチを main へ統合してください。
+
+### テスト確認
+pytest tests/unit/test_workflow_state.py tests/unit/test_orchestrator.py -v
+
+### コミット
+git add -A
+git commit -m "feat(phase6): workflow engine & orchestrator — state machine, ADR-0001 compliance"
+
+### main へ merge
+git checkout main
+git merge --no-ff feature/phase-6-workflow \
+  -m "merge: phase-6-workflow into main"
+
+### 次フェーズのブランチを main から作成
+git checkout -b feature/phase-7-evaluation
 ```
