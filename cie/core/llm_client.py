@@ -89,7 +89,9 @@ class LLMClient:
         self._endpoint = _ENDPOINTS[provider]
         self._timeout = timeout
         self._max_tokens = max_tokens
-        self._http = http_client or httpx.AsyncClient()
+        # None means create a fresh client per request (avoids "event loop is closed"
+        # when asyncio.run() is called multiple times across Streamlit rerenders).
+        self._http: httpx.AsyncClient | None = http_client
 
     # ------------------------------------------------------------------
     # Public interface
@@ -116,19 +118,25 @@ class LLMClient:
         Raises:
             LLMError: On HTTP errors or unexpected response shape.
         """
+        if self._http is not None:
+            return await self._dispatch(self._http, system, user)
+        async with httpx.AsyncClient() as http:
+            return await self._dispatch(http, system, user)
+
+    async def _dispatch(self, http: httpx.AsyncClient, system: str, user: str) -> str:
         if self._provider == "anthropic":
-            return await self._complete_anthropic(system, user)
+            return await self._complete_anthropic(http, system, user)
         else:
-            return await self._complete_openai_compat(system, user)
+            return await self._complete_openai_compat(http, system, user)
 
     # ------------------------------------------------------------------
     # Provider-specific implementations
     # ------------------------------------------------------------------
 
-    async def _complete_anthropic(self, system: str, user: str) -> str:
+    async def _complete_anthropic(self, http: httpx.AsyncClient, system: str, user: str) -> str:
         """Call the Anthropic Messages API."""
         try:
-            response = await self._http.post(
+            response = await http.post(
                 self._endpoint,
                 json={
                     "model": self._model,
@@ -156,14 +164,14 @@ class LLMClient:
         except Exception as exc:
             raise LLMError(str(exc), provider="anthropic") from exc
 
-    async def _complete_openai_compat(self, system: str, user: str) -> str:
+    async def _complete_openai_compat(self, http: httpx.AsyncClient, system: str, user: str) -> str:
         """Call an OpenAI-compatible Chat Completions endpoint.
 
         Works for both OpenAI and Google Gemini (which exposes an
         OpenAI-compatible REST endpoint at the configured URL).
         """
         try:
-            response = await self._http.post(
+            response = await http.post(
                 self._endpoint,
                 json={
                     "model": self._model,
@@ -197,8 +205,9 @@ class LLMClient:
     # ------------------------------------------------------------------
 
     async def aclose(self) -> None:
-        """Close the underlying HTTP client."""
-        await self._http.aclose()
+        """Close the underlying HTTP client (only relevant when http_client was injected)."""
+        if self._http is not None:
+            await self._http.aclose()
 
     async def __aenter__(self) -> "LLMClient":
         return self

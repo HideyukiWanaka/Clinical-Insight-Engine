@@ -21,6 +21,7 @@ import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import (
@@ -42,6 +43,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.pool import NullPool
 
 from cie.core.config import CIEConfig
 
@@ -455,11 +457,15 @@ async def get_engine(config: CIEConfig) -> AsyncEngine:
         >>> config = CIEConfig(database_filepath=":memory:")
         >>> engine = await get_engine(config)
     """
+    db_path = Path(config.database_filepath)
+    if db_path != Path(":memory:"):
+        db_path.parent.mkdir(parents=True, exist_ok=True)
     db_url = f"sqlite+aiosqlite:///{config.database_filepath}"
     engine: AsyncEngine = create_async_engine(
         db_url,
         echo=False,
         future=True,
+        poolclass=NullPool,
     )
     return engine
 

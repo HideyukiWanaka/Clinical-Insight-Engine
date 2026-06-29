@@ -30,7 +30,11 @@ _DEFAULT_BADGE  = "○ 準備中"
 _DEFAULT_BORDER = "#E5E7EB"   # --cie-gray-200
 
 
-def render_dashboard(projects: list[dict]) -> dict | None:
+def render_dashboard(
+    projects: list[dict],
+    csv_filename: str | None = None,
+    csv_size_bytes: int | None = None,
+) -> dict | None:
     """Render SCR-01 Project Dashboard.
 
     Projects with ``waiting_for_human`` state are sorted to the front.
@@ -46,6 +50,11 @@ def render_dashboard(projects: list[dict]) -> dict | None:
         st.write("")  # vertical alignment spacer
         if st.button("＋ 新規プロジェクト", type="primary", key="new_project_btn"):
             return {"__action__": "new_project"}
+
+    # Current dataset indicator
+    if csv_filename is not None:
+        size_label = f"{csv_size_bytes / 1024:.1f} KB" if csv_size_bytes else ""
+        st.info(f"📂 読み込み済みデータセット: **{csv_filename}**　{size_label}")
 
     # Waiting-for-human banner (SCR-01 spec: priority display)
     waiting = [p for p in projects if p.get("workflow_state") == "waiting_for_human"]

@@ -39,7 +39,9 @@ _FIELD_LABELS: dict[str, str] = {
 def render_intent_entry(
     on_submit: Callable[[str, bytes | None], None],
     intent_confirmed: bool = False,
-) -> bool:
+    existing_csv_filename: str | None = None,
+    existing_csv_bytes: bytes | None = None,
+) -> tuple[bool, bytes | None, str | None]:
     """Render SCR-02 Research Intent Entry (centre pane).
 
     Args:
@@ -48,10 +50,14 @@ def render_intent_entry(
                    in this callback, not in this component.
         intent_confirmed: Whether the intent_object has been reviewed and
                           confirmed by the user (controls the start button).
+        existing_csv_filename: Filename of a previously uploaded file stored in
+                               session_state, shown when the uploader is empty.
+        existing_csv_bytes: Bytes of a previously uploaded file, used to render
+                            the summary when the uploader widget is reset.
 
     Returns:
-        True when the user clicks「解析を開始する →」(app.py should then set
-        ``approval_pending=True`` in session_state).  False otherwise.
+        Tuple of (start_clicked, csv_bytes, csv_filename).
+        app.py saves bytes and filename to session_state on every render.
     """
     st.title("研究意図入力")
 
@@ -71,21 +77,28 @@ def render_intent_entry(
     )
 
     csv_bytes: bytes | None = None
+    csv_filename: str | None = None
     if uploaded is not None:
         csv_bytes = uploaded.read()
-        _render_upload_summary(uploaded.name, csv_bytes)
+        csv_filename = uploaded.name
+        _render_upload_summary(csv_filename, csv_bytes)
         st.info("🔒 このデータは安全に処理されます。raw dataはAIに送信されません。")
+    elif existing_csv_bytes is not None and existing_csv_filename is not None:
+        # Show previously uploaded file info after navigating back to this screen
+        st.caption("📂 読み込み済みファイル")
+        _render_upload_summary(existing_csv_filename, existing_csv_bytes)
 
     st.divider()
 
     # 3. Analyze button — explicitly triggered (no 500ms debounce in Streamlit)
+    active_bytes = csv_bytes if csv_bytes is not None else existing_csv_bytes
     analyze_disabled = not intent_text.strip()
     if st.button(
         "研究意図を解析",
         disabled=analyze_disabled,
         key="analyze_intent_btn",
     ):
-        on_submit(intent_text.strip(), csv_bytes)
+        on_submit(intent_text.strip(), active_bytes)
 
     # 4. Start analysis button (UP-002: disabled until intent confirmed)
     st.write("")  # spacer
@@ -97,7 +110,7 @@ def render_intent_entry(
         help="研究意図を解析・確認してから実行できます" if not intent_confirmed else None,
     )
 
-    return start_clicked
+    return start_clicked, csv_bytes, csv_filename
 
 
 def render_intent_preview(intent_object: dict) -> None:

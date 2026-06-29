@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cie://schemas/planner-input.schema.json",
+  "title": "CIE Planner Agent Input Payload",
+  "description": "Payload schema for the PlannerAgent _execute step. Validated against agent_input.payload before intent extraction.",
+  "version": "1.0.0",
+  "type": "object",
+  "required": ["user_natural_language_prompt", "inject_raw_data_rows"],
+  "additionalProperties": false,
+  "properties": {
+    "user_natural_language_prompt": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Natural language research objective provided by the user."
+    },
+    "dataset_structural_metadata": {
+      "type": "object",
+      "description": "Structural metadata using var_n column aliases only. Never contains raw data rows.",
+      "additionalProperties": true
+    },
+    "inject_raw_data_rows": {
+      "type": "boolean",
+      "const": false,
+      "description": "Must always be false. Injection of raw data rows is prohibited (PROJECT_RULES AP-012)."
+    }
+  }
+}

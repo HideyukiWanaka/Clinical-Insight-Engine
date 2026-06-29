@@ -21,6 +21,7 @@ from cie.ui.components.status_bar import render_status_bar
 from cie.ui.screens.analysis_config import render_analysis_config
 from cie.ui.screens.audit_log import render_audit_log
 from cie.ui.screens.dashboard import render_dashboard
+from cie.ui.screens.data_preview import render_data_preview
 from cie.ui.screens.intent_entry import render_intent_entry, render_intent_preview
 from cie.ui.screens.knowledge_management import render_knowledge_management
 from cie.ui.screens.quality_review import render_quality_review
@@ -204,12 +205,13 @@ def _unpack_workflow_result(result: dict) -> None:
     }
 
 
-_SCREENS = ("dashboard", "intent", "workflow", "quality", "analysis", "results", "audit", "knowledge", "settings")
+_SCREENS = ("dashboard", "intent", "data_preview", "workflow", "quality", "analysis", "results", "audit", "knowledge", "settings")
 
 _NAV_LABELS: dict[str, str] = {
-    "dashboard": "ダッシュボード",
-    "intent":    "研究意図入力",
-    "workflow":  "ワークフロー",
+    "dashboard":    "ダッシュボード",
+    "intent":       "研究意図入力",
+    "data_preview": "データプレビュー",
+    "workflow":     "ワークフロー",
     "quality":   "データ品質",
     "analysis":  "統計解析",
     "results":   "結果・レポート",
@@ -264,6 +266,7 @@ def _init_session_state() -> None:
         # Intent raw inputs (stored for external agent consumption)
         "intent_raw_text":            "",
         "intent_csv_bytes":           None,
+        "intent_csv_filename":        None,
         # Settings
         "settings_current_provider":  os.environ.get("CIE_ACTIVE_AI_PROVIDER", "anthropic"),
         "settings_key_status":        {},
@@ -383,6 +386,9 @@ def render_main_content() -> None:
     elif screen == "intent":
         _handle_intent()
 
+    elif screen == "data_preview":
+        _handle_data_preview()
+
     elif screen == "workflow":
         _handle_workflow()
 
@@ -406,7 +412,12 @@ def render_main_content() -> None:
 
 
 def _handle_dashboard() -> None:
-    selected = render_dashboard(st.session_state["projects"])
+    csv_bytes = st.session_state.get("intent_csv_bytes")
+    selected = render_dashboard(
+        projects=st.session_state["projects"],
+        csv_filename=st.session_state.get("intent_csv_filename"),
+        csv_size_bytes=len(csv_bytes) if csv_bytes else None,
+    )
 
     if selected is None:
         return
@@ -459,7 +470,7 @@ def _handle_intent() -> None:
                         "dataset_structural_metadata": {},
                         "inject_raw_data_rows": False,
                     },
-                    input_schema_ref="cie://schemas/task.schema.json",
+                    input_schema_ref="cie://schemas/planner-input.schema.json",
                 )
                 output = asyncio.run(services["planner"].run(agent_input))
 
@@ -499,10 +510,19 @@ def _handle_intent() -> None:
         finally:
             services["token_manager"].revoke(token)
 
-    start_requested = render_intent_entry(
+    start_requested, current_csv_bytes, current_csv_filename = render_intent_entry(
         on_submit=_on_submit,
         intent_confirmed=st.session_state.get("intent_object_confirmed", False),
+        existing_csv_filename=st.session_state.get("intent_csv_filename"),
+        existing_csv_bytes=st.session_state.get("intent_csv_bytes"),
     )
+
+    # Save uploaded bytes and filename on every render so data_preview and
+    # other screens can access them without requiring the user to submit first.
+    if current_csv_bytes is not None:
+        st.session_state["intent_csv_bytes"] = current_csv_bytes
+    if current_csv_filename is not None:
+        st.session_state["intent_csv_filename"] = current_csv_filename
 
     if start_requested:
         st.session_state["approval_pending"] = True
@@ -512,6 +532,10 @@ def _handle_intent() -> None:
             "action": "run_workflow",
         }
         st.rerun()
+
+
+def _handle_data_preview() -> None:
+    render_data_preview(st.session_state["intent_csv_bytes"])
 
 
 def _handle_workflow() -> None:

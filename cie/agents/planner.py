@@ -243,7 +243,7 @@ class PlannerAgent(BaseAgent):
 
     @property
     def input_schema_ref(self) -> str:
-        return "cie://schemas/task.schema.json"
+        return "cie://schemas/planner-input.schema.json"
 
     @property
     def output_schema_ref(self) -> str:
