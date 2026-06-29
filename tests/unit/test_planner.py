@@ -185,18 +185,22 @@ class TestPlannerIdentity:
         assert CapabilityScope.AUDIT_WRITE_ENTRY in scopes
 
     def test_httpx_only_no_requests_import(self) -> None:
-        """'requests' library must never be imported by planner (spec constraint)."""
+        """'requests' library must never be imported by planner (spec constraint).
+
+        httpx is now used inside LLMClient (cie.core.llm_client) rather than
+        imported directly in planner.py.  The constraint that matters is that
+        the synchronous 'requests' library is absent.
+        """
         import cie.agents.planner as planner_module
-        # Reload to ensure fresh check
         importlib.reload(planner_module)
         assert "requests" not in sys.modules.get("cie.agents.planner", sys).__dict__
 
-        # Also verify 'httpx' IS used (imported at module level)
         import cie.agents.planner
         import inspect
         src = inspect.getsource(cie.agents.planner)
-        assert "import httpx" in src
         assert "import requests" not in src
+        # LLM calls are delegated to LLMClient — httpx lives in cie.core.llm_client
+        assert "LLMClient" in src
 
 
 class TestSuccessPath:

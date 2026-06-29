@@ -8,6 +8,12 @@ Screen / component functions communicate via return values (see PROJECT_RULES).
 
 from __future__ import annotations
 
+import asyncio
+import os
+import tempfile
+import uuid
+from pathlib import Path
+
 import streamlit as st
 
 from cie.ui.components.right_pane import render_right_pane
@@ -18,6 +24,7 @@ from cie.ui.screens.dashboard import render_dashboard
 from cie.ui.screens.intent_entry import render_intent_entry, render_intent_preview
 from cie.ui.screens.knowledge_management import render_knowledge_management
 from cie.ui.screens.quality_review import render_quality_review
+from cie.ui.screens.settings import render_settings
 from cie.ui.screens.results import render_results
 from cie.ui.screens.workflow_view import render_workflow_view
 
@@ -40,7 +47,164 @@ _CSS_VARIABLES = """
 </style>
 """
 
-_SCREENS = ("dashboard", "intent", "workflow", "quality", "analysis", "results", "audit", "knowledge")
+# ---------------------------------------------------------------------------
+# Service container — initialised once per Streamlit server process
+# ---------------------------------------------------------------------------
+
+@st.cache_resource
+def _get_services() -> dict:
+    """Initialise and cache all backend services.
+
+    Called at most once per server process (Streamlit's cache_resource).
+    All async DB setup is executed synchronously here via asyncio.run().
+    """
+    from cie.agents.base import AgentInput  # noqa: F401 — re-exported for handlers
+    from cie.agents.data_quality import DataQualityAgent
+    from cie.agents.planner import PlannerAgent
+    from cie.agents.reporting import ReportingAgent
+    from cie.agents.reviewer import ReviewerAgent
+    from cie.agents.statistics import StatisticsAgent
+    from cie.agents.visualization import VisualizationAgent
+    from cie.core.audit import AuditService
+    from cie.core.config import CIEConfig
+    from cie.core.database import get_engine, get_session, init_db
+    from cie.core.llm_client import llm_client_from_env
+    from cie.knowledge.ingestion_agent import KnowledgeIngestionAgent
+    from cie.knowledge.ingestion_guard import IngestionGuard
+    from cie.knowledge.lifecycle import KnowledgeLifecycleService
+    from cie.knowledge.loader import KnowledgeLoader
+    from cie.knowledge.parsers.base import DocumentParserRegistry
+    from cie.knowledge.parsers.pymupdf_parser import PlainTextParser, PyMuPDFParser
+    from cie.schemas.validator import SchemaRegistry
+    from cie.security.capability_token import CapabilityTokenManager
+    from cie.security.context_guard import ContextGuard
+    from cie.security.pii_filter import PIIFilter
+    from cie.security.policy_engine import PolicyEngine
+    from cie.workflow.orchestrator import Orchestrator
+    from cie.workflow.registry import WorkflowRegistry
+    from cie.workflow.states import WorkflowStateMachine
+    from cie.workflow.system_registry import SystemWorkflowRegistry
+
+    config = CIEConfig()
+
+    # DB — create tables if missing (idempotent)
+    engine = asyncio.run(get_engine(config))
+    asyncio.run(init_db(engine))
+
+    # Core services
+    pii_filter = PIIFilter()
+    token_manager = CapabilityTokenManager()
+    audit = AuditService(session_factory=lambda: get_session(engine))
+    context_guard = ContextGuard(pii_filter, audit)
+    policy_engine = PolicyEngine(token_manager, audit)
+    schema_registry = SchemaRegistry(schema_dir=Path("schemas/"))
+
+    # LLM — provider selected via CIE_ACTIVE_AI_PROVIDER env var
+    llm_client = llm_client_from_env()
+
+    # Agents
+    planner = PlannerAgent(policy_engine, schema_registry, audit, context_guard, llm_client)
+
+    # Knowledge directories
+    knowledge_root = Path("knowledge")
+    workspace = Path(config.workspace_directory)
+    official_dir = knowledge_root / "official"
+    institutional_dir = knowledge_root / "institutional"
+    pending_dir = knowledge_root / "pending"
+    source_dir = workspace / "knowledge_sources"
+    source_dir.mkdir(parents=True, exist_ok=True)
+
+    parsers = [PyMuPDFParser(), PlainTextParser()]
+    parser_registry = DocumentParserRegistry(parsers)
+    ingestion_guard = IngestionGuard()
+
+    knowledge_ingestion = KnowledgeIngestionAgent(
+        ingestion_guard, parser_registry, pending_dir, source_dir
+    )
+    knowledge_lifecycle = KnowledgeLifecycleService(institutional_dir, pending_dir, audit)
+    knowledge_loader = KnowledgeLoader(official_dir, institutional_dir)
+
+    # Downstream analysis agents
+    data_quality  = DataQualityAgent(policy_engine, schema_registry, audit, pii_filter)
+    statistics    = StatisticsAgent(policy_engine, schema_registry, audit)
+    visualization = VisualizationAgent(policy_engine, schema_registry, audit)
+    reporting     = ReportingAgent(policy_engine, schema_registry, audit)
+    reviewer      = ReviewerAgent(policy_engine, schema_registry, audit)
+
+    agent_registry = {
+        "data-quality": data_quality,
+        "statistics":   statistics,
+        "visualization": visualization,
+        "reporting":    reporting,
+        "reviewer":     reviewer,
+    }
+
+    # Workflow engine
+    workflow_registry = WorkflowRegistry.load_from_yaml(Path("spec/workflow.yaml"))
+    system_registry   = SystemWorkflowRegistry(Path("spec/system-workflow.yaml"))
+    state_machine     = WorkflowStateMachine()
+
+    orchestrator = Orchestrator(
+        workflow_registry=workflow_registry,
+        state_machine=state_machine,
+        token_manager=token_manager,
+        policy_engine=policy_engine,
+        context_guard=context_guard,
+        audit_service=audit,
+        agent_registry=agent_registry,
+        system_registry=system_registry,
+        knowledge_loader=knowledge_loader,
+    )
+
+    return {
+        "token_manager": token_manager,
+        "audit": audit,
+        "planner": planner,
+        "knowledge_ingestion": knowledge_ingestion,
+        "knowledge_lifecycle": knowledge_lifecycle,
+        "knowledge_loader": knowledge_loader,
+        "orchestrator": orchestrator,
+    }
+
+
+def _reload_knowledge_state(services: dict) -> None:
+    """Pull the latest entries and expiry warnings into session_state."""
+    try:
+        frozen = services["knowledge_loader"].load_for_execution("ui-session")
+        entries = list(frozen.entries)
+        warnings = services["knowledge_loader"].check_expiry_warnings(entries)
+        st.session_state["knowledge_entries"] = entries
+        st.session_state["knowledge_expiry_warnings"] = warnings
+    except Exception:
+        pass  # keep existing session_state on failure
+
+
+def _unpack_workflow_result(result: dict) -> None:
+    """Expand Orchestrator node_results into per-screen session_state keys."""
+    node_results: list[dict] = result.get("node_results", [])
+    node_statuses: dict = {}
+    node_outputs: dict = {}
+    for nr in node_results:
+        nid = nr.get("node_id", "")
+        node_statuses[nid] = nr.get("status", "unknown")
+        node_outputs[nid] = nr.get("output_payload", {})
+        agent = nr.get("agent_id", "")
+        if agent == "data-quality":
+            st.session_state["quality_report"] = nr.get("output_payload", {})
+        elif agent == "statistics":
+            st.session_state["analysis_plan"] = nr.get("output_payload", {})
+        elif agent == "reviewer":
+            st.session_state["review_result"] = nr.get("output_payload", {})
+    st.session_state["node_statuses"] = node_statuses
+    st.session_state["node_outputs"] = node_outputs
+    st.session_state["workflow_definition"] = {
+        "workflow_id": result.get("workflow_id_selected"),
+        "rule_id": result.get("rule_id"),
+        "justification": result.get("justification"),
+    }
+
+
+_SCREENS = ("dashboard", "intent", "workflow", "quality", "analysis", "results", "audit", "knowledge", "settings")
 
 _NAV_LABELS: dict[str, str] = {
     "dashboard": "ダッシュボード",
@@ -51,6 +215,7 @@ _NAV_LABELS: dict[str, str] = {
     "results":   "結果・レポート",
     "audit":     "監査ログ",
     "knowledge": "知識管理",
+    "settings":  "設定",
 }
 
 
@@ -99,6 +264,11 @@ def _init_session_state() -> None:
         # Intent raw inputs (stored for external agent consumption)
         "intent_raw_text":            "",
         "intent_csv_bytes":           None,
+        # Settings
+        "settings_current_provider":  os.environ.get("CIE_ACTIVE_AI_PROVIDER", "anthropic"),
+        "settings_key_status":        {},
+        # Workflow execution result
+        "workflow_run_result": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -146,9 +316,41 @@ def _render_right_pane_content() -> None:
 
     # Handle approval / cancellation events from the right pane
     if pane_result.get("approved"):
+        action = (st.session_state.get("approval_context") or {}).get("action")
+
+        if action == "run_workflow":
+            intent_object = st.session_state.get("intent_object") or {}
+            execution_id = st.session_state.get("execution_id") or str(uuid.uuid4())
+            services = _get_services()
+            with st.spinner("ワークフローを実行中..."):
+                try:
+                    result = asyncio.run(
+                        services["orchestrator"].run_workflow(execution_id, intent_object)
+                    )
+                    st.session_state["workflow_run_result"] = result
+                    _unpack_workflow_result(result)
+                    st.session_state["current_screen"] = "workflow"
+                    _append_activity(
+                        agent_id="orchestrator",
+                        action="workflow_completed",
+                        summary=(
+                            f"ワークフロー実行完了: "
+                            f"{result.get('workflow_id_selected', 'unknown')} "
+                            f"({result.get('final_state', '')})"
+                        ),
+                        severity="INFO",
+                    )
+                except Exception as exc:
+                    st.error(f"ワークフロー実行エラー: {exc}")
+                    _append_activity(
+                        agent_id="orchestrator",
+                        action="run_failed",
+                        summary=str(exc)[:200],
+                        severity="CRITICAL",
+                    )
+
         st.session_state["approval_pending"] = False
         st.session_state["approval_context"] = None
-        # Log approval in activity feed
         _append_activity(
             agent_id="human",
             action="approved",
@@ -199,6 +401,9 @@ def render_main_content() -> None:
     elif screen == "knowledge":
         _handle_knowledge()
 
+    elif screen == "settings":
+        _handle_settings()
+
 
 def _handle_dashboard() -> None:
     selected = render_dashboard(st.session_state["projects"])
@@ -223,22 +428,76 @@ def _handle_dashboard() -> None:
 
 
 def _handle_intent() -> None:
+    from cie.agents.base import AgentInput
+    from cie.security.capability_token import CapabilityScope
+
+    services = _get_services()
+
     def _on_submit(prompt_text: str, csv_bytes: bytes | None) -> None:
-        # In a real app, this would call the Planner Agent.
-        # Here we store the raw text and let the agent be invoked externally.
         st.session_state["intent_raw_text"] = prompt_text
         st.session_state["intent_csv_bytes"] = csv_bytes
-        # Placeholder: set a mock intent_object so the UI can progress
-        st.session_state["intent_object"] = {
-            "objective": prompt_text[:120],
-            "confidence_score": 0.85,
-        }
-        _append_activity(
+
+        execution_id = str(uuid.uuid4())
+        token = services["token_manager"].issue(
+            execution_id=execution_id,
             agent_id="planner",
-            action="intent_submitted",
-            summary=f"テキスト長 {len(prompt_text)} 文字",
-            severity="INFO",
+            step_id="planner_ui",
+            requested_scopes={
+                CapabilityScope.DATASET_PROXY_METADATA,
+                CapabilityScope.WORKFLOW_STATE_READ,
+                CapabilityScope.AUDIT_WRITE_ENTRY,
+            },
         )
+        try:
+            with st.spinner("研究意図を解析中..."):
+                agent_input = AgentInput(
+                    execution_id=execution_id,
+                    node_id="planner_ui",
+                    capability_token=token,
+                    payload={
+                        "user_natural_language_prompt": prompt_text,
+                        "dataset_structural_metadata": {},
+                        "inject_raw_data_rows": False,
+                    },
+                    input_schema_ref="cie://schemas/task.schema.json",
+                )
+                output = asyncio.run(services["planner"].run(agent_input))
+
+            if output.status == "success":
+                st.session_state["intent_object"] = output.output_payload
+                st.session_state["execution_id"] = execution_id
+                _append_activity(
+                    agent_id="planner",
+                    action="intent_extracted",
+                    summary=f"意図解析完了 (id={execution_id[:8]})",
+                    severity="INFO",
+                )
+            elif output.status == "clarification_required":
+                st.session_state["intent_object"] = output.output_payload
+                _append_activity(
+                    agent_id="planner",
+                    action="clarification_required",
+                    summary=output.error_message or "追加情報が必要です",
+                    severity="WARNING",
+                )
+            else:
+                st.error(f"意図の解析に失敗しました: {output.error_message}")
+                _append_activity(
+                    agent_id="planner",
+                    action="intent_extraction_failed",
+                    summary=output.error_message or "不明なエラー",
+                    severity="CRITICAL",
+                )
+        except Exception as exc:
+            st.error(f"エラー: {exc}")
+            _append_activity(
+                agent_id="planner",
+                action="intent_extraction_error",
+                summary=str(exc)[:200],
+                severity="CRITICAL",
+            )
+        finally:
+            services["token_manager"].revoke(token)
 
     start_requested = render_intent_entry(
         on_submit=_on_submit,
@@ -250,6 +509,7 @@ def _handle_intent() -> None:
         st.session_state["approval_context"] = {
             "title": "この解釈で解析を開始します。内容を確認してください。",
             "is_irreversible": False,
+            "action": "run_workflow",
         }
         st.rerun()
 
@@ -340,6 +600,9 @@ def _handle_audit() -> None:
 
 
 def _handle_knowledge() -> None:
+    services = _get_services()
+    _reload_knowledge_state(services)
+
     event = render_knowledge_management(
         entries=st.session_state.get("knowledge_entries", []),
         draft=st.session_state.get("knowledge_draft"),
@@ -354,24 +617,70 @@ def _handle_knowledge() -> None:
     action = event.get("action")
 
     if action == "upload":
-        st.session_state["knowledge_pending_upload"] = event
-        _append_activity(
-            agent_id="knowledge_ingestion",
-            action="upload_received",
-            summary=f"ファイル受信: {event.get('filename')}",
-            severity="INFO",
-        )
+        filename = event.get("filename", "document")
+        file_bytes: bytes = event["file_bytes"]
+        try:
+            with st.spinner(f"「{filename}」を解析中..."):
+                suffix = Path(filename).suffix or ".txt"
+                with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                    tmp.write(file_bytes)
+                    tmp_path = Path(tmp.name)
+                draft = asyncio.run(
+                    services["knowledge_ingestion"].ingest(
+                        file_path=tmp_path,
+                        file_bytes=file_bytes,
+                        uploaded_by=st.session_state.get("current_user_id", "researcher"),
+                    )
+                )
+            st.session_state["knowledge_draft"] = draft
+            _append_activity(
+                agent_id="knowledge_ingestion",
+                action="ingested",
+                summary=f"{filename} → draft {draft.draft_id}",
+                severity="INFO",
+            )
+        except Exception as exc:
+            st.error(f"ドキュメント解析エラー: {exc}")
+            _append_activity(
+                agent_id="knowledge_ingestion",
+                action="ingest_failed",
+                summary=str(exc)[:200],
+                severity="CRITICAL",
+            )
         st.rerun()
 
     elif action == "draft_approved":
-        st.session_state["knowledge_approval_request"] = event
-        _append_activity(
-            agent_id="human",
-            action="draft_approved",
-            summary=f"ドラフト承認: {event.get('draft_id')} "
-                    f"(trust={event.get('trust_level')}, domain={event.get('domain')})",
-            severity="INFO",
-        )
+        draft = st.session_state.get("knowledge_draft")
+        if draft is not None:
+            try:
+                with st.spinner("知識ライブラリに登録中..."):
+                    asyncio.run(
+                        services["knowledge_lifecycle"].register_knowledge(
+                            draft=draft,
+                            approved_by=st.session_state.get("current_user_id", "researcher"),
+                            created_by=st.session_state.get("current_user_id", "researcher"),
+                            domain=event.get("domain", draft.extracted_domain),
+                            trust_level=event.get("trust_level", draft.extracted_trust_level),
+                            source_info=draft.extracted_metadata,
+                            knowledge_items=draft.extracted_knowledge_items,
+                        )
+                    )
+                st.session_state["knowledge_draft"] = None
+                _append_activity(
+                    agent_id="human",
+                    action="knowledge_registered",
+                    summary=f"登録完了: {draft.draft_id} "
+                            f"(trust={event.get('trust_level')}, domain={event.get('domain')})",
+                    severity="INFO",
+                )
+            except Exception as exc:
+                st.error(f"登録エラー: {exc}")
+                _append_activity(
+                    agent_id="knowledge_lifecycle",
+                    action="register_failed",
+                    summary=str(exc)[:200],
+                    severity="CRITICAL",
+                )
         st.rerun()
 
     elif action == "draft_rejected":
@@ -385,13 +694,132 @@ def _handle_knowledge() -> None:
         st.rerun()
 
     elif action == "archive":
-        st.session_state["knowledge_archive_request"] = event
-        _append_activity(
-            agent_id="human",
-            action="archive_requested",
-            summary=f"アーカイブ要求: {event.get('entry_id')}",
-            severity="WARNING",
-        )
+        entry_id = event["entry_id"]
+        try:
+            with st.spinner(f"「{entry_id}」をアーカイブ中..."):
+                asyncio.run(
+                    services["knowledge_lifecycle"].archive_entry(
+                        entry_id=entry_id,
+                        archived_by=st.session_state.get("current_user_id", "researcher"),
+                        current_user_id=st.session_state.get("current_user_id", "researcher"),
+                        current_user_role=st.session_state.get("current_user_role", "researcher"),
+                        reason="UIからのアーカイブ要求",
+                    )
+                )
+            _append_activity(
+                agent_id="human",
+                action="knowledge_archived",
+                summary=f"アーカイブ完了: {entry_id}",
+                severity="WARNING",
+            )
+        except Exception as exc:
+            st.error(f"アーカイブエラー: {exc}")
+        st.rerun()
+
+
+def _load_settings_state() -> None:
+    """Refresh provider key status from keyring into session_state."""
+    from cie.core.secrets_store import has_api_key
+    providers = ("anthropic", "openai", "google_gemini")
+    st.session_state["settings_key_status"] = {p: has_api_key(p) for p in providers}
+
+
+def _update_env_file_provider(provider: str) -> None:
+    """Update CIE_ACTIVE_AI_PROVIDER in .env, writing only the provider name."""
+    env_path = Path(".env")
+    if not env_path.exists():
+        return
+    lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    updated = []
+    found = False
+    for line in lines:
+        if line.startswith("CIE_ACTIVE_AI_PROVIDER="):
+            updated.append(f"CIE_ACTIVE_AI_PROVIDER={provider}\n")
+            found = True
+        else:
+            updated.append(line)
+    if not found:
+        updated.append(f"CIE_ACTIVE_AI_PROVIDER={provider}\n")
+    env_path.write_text("".join(updated), encoding="utf-8")
+
+
+def _handle_settings() -> None:
+    from cie.core.audit import AuditEvent, AuditEventSeverity
+    from cie.core.secrets_store import delete_api_key, save_api_key
+
+    _load_settings_state()
+
+    event = render_settings(
+        current_provider=st.session_state["settings_current_provider"],
+        provider_key_status=st.session_state["settings_key_status"],
+    )
+
+    if event is None:
+        return
+
+    action = event["action"]
+    services = _get_services()
+    audit = services["audit"]
+
+    if action == "save_key":
+        provider: str = event["provider"]
+        api_key: str = event["api_key"]
+        try:
+            save_api_key(provider, api_key)
+            asyncio.run(audit.write(AuditEvent(
+                execution_id="settings",
+                agent_id="ui:settings",
+                action="API_KEY_SAVED",
+                status="success",
+                severity=AuditEventSeverity.INFO,
+                payload={"provider": provider},
+            )))
+            st.cache_resource.clear()
+            _load_settings_state()
+            st.success(f"{provider} のAPIキーを保存しました。")
+        except Exception as exc:
+            st.error(f"APIキーの保存に失敗しました: {exc}")
+        finally:
+            del api_key
+        st.rerun()
+
+    elif action == "clear_key":
+        provider = event["provider"]
+        try:
+            delete_api_key(provider)
+            asyncio.run(audit.write(AuditEvent(
+                execution_id="settings",
+                agent_id="ui:settings",
+                action="API_KEY_DELETED",
+                status="success",
+                severity=AuditEventSeverity.WARNING,
+                payload={"provider": provider},
+            )))
+            st.cache_resource.clear()
+            _load_settings_state()
+            st.info(f"{provider} のAPIキーを削除しました。")
+        except Exception as exc:
+            st.error(f"APIキーの削除に失敗しました: {exc}")
+        st.rerun()
+
+    elif action == "change_provider":
+        new_provider: str = event["provider"]
+        try:
+            os.environ["CIE_ACTIVE_AI_PROVIDER"] = new_provider
+            _update_env_file_provider(new_provider)
+            st.session_state["settings_current_provider"] = new_provider
+            asyncio.run(audit.write(AuditEvent(
+                execution_id="settings",
+                agent_id="ui:settings",
+                action="PROVIDER_CHANGED",
+                status="success",
+                severity=AuditEventSeverity.INFO,
+                payload={"new_provider": new_provider},
+            )))
+            st.cache_resource.clear()
+            st.success(f"AIプロバイダーを {new_provider} に変更しました。")
+        except Exception as exc:
+            st.error(f"プロバイダー変更に失敗しました: {exc}")
         st.rerun()
 
 

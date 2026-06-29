@@ -33,6 +33,7 @@ from cie.evaluation.regression import (
 from cie.evaluation.security import SecurityEvaluator
 from cie.evaluation.statistical import StatisticalEvaluator
 from cie.evaluation.usability import UsabilityEvaluator
+from cie.core.database import SkillPerformanceRecord
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +164,7 @@ class TestAllDimensionsRun:
     def test_all_dimensions_run(self) -> None:
         """All 4 registered evaluators must produce a DimensionScore."""
         svc = _make_service()
-        report = asyncio.get_event_loop().run_until_complete(
+        report = asyncio.run(
             svc.run_full_evaluation("exec-001", _BASE_ARTIFACTS)
         )
         assert len(report.dimension_scores) == 4
@@ -191,7 +192,7 @@ class TestWeightedScore:
         expected = 100.0 * 0.40 + 80.0 * 0.35 + 60.0 * 0.15 + 50.0 * 0.10
 
         svc = _make_service(evaluators=evaluators)
-        report = asyncio.get_event_loop().run_until_complete(
+        report = asyncio.run(
             svc.run_full_evaluation("exec-002", _BASE_ARTIFACTS)
         )
         assert abs(report.weighted_total_score - expected) < 0.01
@@ -203,7 +204,7 @@ class TestWeightedScore:
             security_score=100.0,
             usability_score=100.0,
         ))
-        report = asyncio.get_event_loop().run_until_complete(
+        report = asyncio.run(
             svc.run_full_evaluation("exec-003", _BASE_ARTIFACTS)
         )
         assert report.weighted_total_score == 100.0
@@ -216,7 +217,7 @@ class TestWeightedScore:
             security_score=50.0,
             usability_score=50.0,
         ))
-        report = asyncio.get_event_loop().run_until_complete(
+        report = asyncio.run(
             svc.run_full_evaluation("exec-004", _BASE_ARTIFACTS)
         )
         assert report.weighted_total_score == 50.0
@@ -232,7 +233,7 @@ class TestCriticalFailure:
         """A single dimension with critical_failure=True sets passed=False."""
         evaluators = _stub_evaluators(security_critical=True, security_score=0.0)
         svc = _make_service(evaluators=evaluators)
-        report = asyncio.get_event_loop().run_until_complete(
+        report = asyncio.run(
             svc.run_full_evaluation("exec-005", _BASE_ARTIFACTS)
         )
         assert report.passed is False
@@ -240,7 +241,7 @@ class TestCriticalFailure:
 
     def test_no_critical_failure_with_high_scores_passes(self) -> None:
         svc = _make_service()
-        report = asyncio.get_event_loop().run_until_complete(
+        report = asyncio.run(
             svc.run_full_evaluation("exec-006", _BASE_ARTIFACTS)
         )
         assert report.passed is True
@@ -272,7 +273,7 @@ class TestSkillPerformanceRecord:
             audit_service=_make_mock_audit(),
             db_session_factory=capturing_session,
         )
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             svc.run_full_evaluation("exec-007", _BASE_ARTIFACTS)
         )
 
@@ -300,7 +301,7 @@ class TestSkillPerformanceRecord:
             db_session_factory=capturing_session,
         )
         artifacts_no_skill = {k: v for k, v in _BASE_ARTIFACTS.items() if k != "skill_id"}
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             svc.run_full_evaluation("exec-008", artifacts_no_skill)
         )
         assert len(added_records) == 0
@@ -308,7 +309,7 @@ class TestSkillPerformanceRecord:
     def test_audit_event_written(self) -> None:
         audit = _make_mock_audit()
         svc = _make_service(audit=audit)
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             svc.run_full_evaluation("exec-009", _BASE_ARTIFACTS)
         )
         audit.write.assert_called()
@@ -366,11 +367,11 @@ class TestRegressionCheckerSE001:
             _make_spr(reviewer_finding_ids=["CC-003"]),
         ]
 
-        async def factory():
+        def factory():
             return _session_with_records(records)
 
         checker = RegressionChecker(factory)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             checker.check_skill_triggers("statistics/t-test", "core")
         )
         assert "SE-001" in result
@@ -385,11 +386,11 @@ class TestRegressionCheckerSE001:
             _make_spr(reviewer_finding_ids=[]),
         ]
 
-        async def factory():
+        def factory():
             return _session_with_records(records)
 
         checker = RegressionChecker(factory)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             checker.check_skill_triggers("statistics/t-test", "core")
         )
         assert "SE-001" not in result
@@ -408,11 +409,11 @@ class TestRegressionCheckerSE002:
             for _ in range(PASS_RATE_WINDOW)
         ]
 
-        async def factory():
+        def factory():
             return _session_with_records(records)
 
         checker = RegressionChecker(factory)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             checker.check_skill_triggers("statistics/t-test", "core")
         )
         assert "SE-002" in result
@@ -424,11 +425,11 @@ class TestRegressionCheckerSE002:
             for _ in range(PASS_RATE_WINDOW)
         ]
 
-        async def factory():
+        def factory():
             return _session_with_records(records)
 
         checker = RegressionChecker(factory)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             checker.check_skill_triggers("statistics/t-test", "core")
         )
         assert "SE-002" not in result
@@ -445,11 +446,11 @@ class TestRegressionCheckerSE003:
             _make_spr(failed_test_ids=[]),
         ]
 
-        async def factory():
+        def factory():
             return _session_with_records(records)
 
         checker = RegressionChecker(factory)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             checker.check_skill_triggers("statistics/t-test", "core")
         )
         assert "SE-003" in result
@@ -459,21 +460,21 @@ class TestRegressionCheckerSE003:
             _make_spr(failed_test_ids=[]),  # latest
         ]
 
-        async def factory():
+        def factory():
             return _session_with_records(records)
 
         checker = RegressionChecker(factory)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             checker.check_skill_triggers("statistics/t-test", "core")
         )
         assert "SE-003" not in result
 
     def test_empty_records_returns_no_triggers(self) -> None:
-        async def factory():
+        def factory():
             return _session_with_records([])
 
         checker = RegressionChecker(factory)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             checker.check_skill_triggers("statistics/unknown", "core")
         )
         assert result == []

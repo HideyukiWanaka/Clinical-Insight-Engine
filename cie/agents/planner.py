@@ -23,10 +23,9 @@ import logging
 from datetime import datetime, timezone
 from typing import Literal
 
-import httpx
-
 from cie.agents.base import AgentInput, AgentOutput, BaseAgent
 from cie.core.exceptions import AgentError
+from cie.core.llm_client import LLMClient, LLMError
 from cie.schemas.validator import SchemaRegistry
 from cie.security.capability_token import CapabilityScope
 from cie.security.context_guard import ContextGuard
@@ -219,14 +218,8 @@ class PlannerAgent(BaseAgent):
         schema_registry: Validates input and output payloads against schemas.
         audit_service: Records execution outcomes.
         context_guard: PII check + inject_raw_data_rows structural enforcement.
-        llm_client: Async HTTP client for LLM API calls (httpx.AsyncClient).
-        llm_model: Claude model identifier.  Defaults to claude-haiku-4-5-20251001.
+        llm_client: Provider-agnostic LLM client (``LLMClient``).
     """
-
-    _LLM_MODEL: str = "claude-haiku-4-5-20251001"
-    _LLM_API_URL: str = "https://api.anthropic.com/v1/messages"
-    _LLM_MAX_TOKENS: int = 1024
-    _API_TIMEOUT_SECONDS: float = 30.0
 
     def __init__(
         self,
@@ -234,13 +227,11 @@ class PlannerAgent(BaseAgent):
         schema_registry: SchemaRegistry,
         audit_service: AuditService,
         context_guard: ContextGuard,
-        llm_client: httpx.AsyncClient,
-        llm_model: str | None = None,
+        llm_client: LLMClient,
     ) -> None:
         super().__init__(policy_engine, schema_registry, audit_service)
         self._context_guard = context_guard
         self._llm_client = llm_client
-        self._llm_model = llm_model or self._LLM_MODEL
 
     # ------------------------------------------------------------------
     # Abstract property implementations
@@ -360,43 +351,30 @@ class PlannerAgent(BaseAgent):
         )
 
     # ------------------------------------------------------------------
-    # LLM interface (httpx — no requests library)
+    # LLM interface
     # ------------------------------------------------------------------
 
     async def _call_llm(self, system_prompt: str, user_message: str) -> dict:
-        """POST a message to the Anthropic Messages API and parse the response.
+        """Call the LLM via LLMClient and parse the JSON response.
 
         Args:
             system_prompt: Rules and schema context for the LLM.
             user_message:  JSON-encoded research prompt + dataset metadata.
 
         Returns:
-            The parsed JSON dict from the LLM's first text block.
+            The parsed JSON dict from the LLM's text response.
 
         Raises:
-            AgentError: On any HTTP, parse, or structural failure.
+            AgentError: On any LLM, parse, or structural failure.
         """
         try:
-            response = await self._llm_client.post(
-                self._LLM_API_URL,
-                json={
-                    "model": self._llm_model,
-                    "max_tokens": self._LLM_MAX_TOKENS,
-                    "system": system_prompt,
-                    "messages": [{"role": "user", "content": user_message}],
-                },
-                headers={
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                timeout=self._API_TIMEOUT_SECONDS,
-            )
-            response.raise_for_status()
-            data = response.json()
-            raw_text: str = data["content"][0]["text"]
+            raw_text = await self._llm_client.complete(system_prompt, user_message)
             return json.loads(raw_text)
-        except AgentError:
-            raise
+        except LLMError as exc:
+            raise AgentError(
+                f"INTENT_EXTRACTION_FAILED: {exc}",
+                agent_id=self.agent_id,
+            ) from exc
         except Exception as exc:
             raise AgentError(
                 f"INTENT_EXTRACTION_FAILED: {exc}",

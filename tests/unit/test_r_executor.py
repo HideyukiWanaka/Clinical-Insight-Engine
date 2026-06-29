@@ -334,7 +334,7 @@ class TestLocalRExecutor:
             await executor.execute(EXEC_ID, clean_script, runtime_token)
 
         args, _ = mock_exec.call_args
-        assert args[0] == "Rscript"
+        assert Path(args[0]).name == "Rscript"
         assert "--vanilla" in args
         assert "--slave" in args
 
