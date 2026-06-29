@@ -371,8 +371,18 @@ class Orchestrator:
         completed_nodes: set[str] = set(skip_nodes or set())
         node_results: list[TaskDispatchResult] = []
 
-        # BFS queue: start from entrypoint
-        ready_queue: list[str] = [workflow_def.entrypoint]
+        # BFS queue: start from entrypoint normally; when resuming from a
+        # checkpoint (skip_nodes non-empty) compute the frontier directly so
+        # the BFS doesn't dead-end on a chain of already-completed nodes.
+        if skip_nodes:
+            ready_queue: list[str] = [
+                node.node_id
+                for node in workflow_def.nodes.values()
+                if node.node_id not in completed_nodes
+                and all(dep in completed_nodes for dep in node.depends_on)
+            ]
+        else:
+            ready_queue = [workflow_def.entrypoint]
 
         while ready_queue:
             node_id = ready_queue.pop(0)
@@ -405,10 +415,15 @@ class Orchestrator:
             node_results.append(result)
 
             if result.status == "waiting_for_human":
-                # Persist checkpoint for resume_workflow
+                # Persist checkpoint for resume_workflow.
+                # Approval nodes are considered "done" once the human approves,
+                # so include them in completed_nodes to skip on resume.
+                suspended_completed = set(completed_nodes)
+                if node_def.node_type == "approval":
+                    suspended_completed.add(node_id)
                 self._suspended[execution_id] = {
                     "workflow_def": workflow_def,
-                    "completed_nodes": set(completed_nodes),
+                    "completed_nodes": suspended_completed,
                     "context": dict(accumulated_context),
                 }
                 current_state = self._state_machine.transition(
