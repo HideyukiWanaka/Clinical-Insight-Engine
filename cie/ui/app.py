@@ -445,6 +445,13 @@ def _handle_intent() -> None:
     services = _get_services()
 
     def _on_submit(prompt_text: str, csv_bytes: bytes | None) -> None:
+        # Guard: Streamlit reruns the script after every interaction; without this
+        # flag a single button click triggers _on_submit twice, causing two LLM
+        # requests and a 429 quota error.
+        if st.session_state.get("_intent_processing"):
+            return
+        st.session_state["_intent_processing"] = True
+
         st.session_state["intent_raw_text"] = prompt_text
         st.session_state["intent_csv_bytes"] = csv_bytes
 
@@ -509,6 +516,7 @@ def _handle_intent() -> None:
             )
         finally:
             services["token_manager"].revoke(token)
+            st.session_state["_intent_processing"] = False
 
     start_requested, current_csv_bytes, current_csv_filename = render_intent_entry(
         on_submit=_on_submit,

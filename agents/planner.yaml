@@ -185,3 +185,50 @@ exception_handling:
   on_capability_token_breach:
     action: "IMMEDIATE_ABORT"
     error_code: "SECURITY_BREACH_ATTEMPT"
+
+# -----------------------------------------------------------------------------
+# Semantic Cache Rules（ADR-0004 / MVP後に実装）
+# -----------------------------------------------------------------------------
+semantic_cache:
+  status: "planned"  # not_implemented → 実装後に "active" に変更
+  adr_reference: "decisions/ADR-0004.md"
+  implementation_prompt: "prompts/phase_semantic_cache.md"
+
+  cache_governance_rules:
+    - rule_id: "CA-001"
+      priority: "HIGH"
+      statement: >
+        キャッシュヒット時も AuditLog に CACHE_HIT イベントを記録する。
+        キャッシュ経由の解析も完全な監査証跡を持つ必要がある。
+
+    - rule_id: "CA-002"
+      priority: "HIGH"
+      statement: >
+        confidence_score が 0.7 未満のエントリはキャッシュしない。
+        低確信度の分類を固定化するとエラーが蓄積するリスクがある。
+
+    - rule_id: "CA-003"
+      priority: "HIGH"
+      statement: >
+        requires_human_clarification=true の結果はキャッシュしない。
+        曖昧な入力は再入力のたびに再分類が必要であり、
+        固定化することで誤った選択肢を提示し続けるリスクがある。
+
+    - rule_id: "CA-004"
+      priority: "MEDIUM"
+      statement: >
+        キャッシュエントリの手動削除はUIから可能とする。
+        物理削除を許可する（FrozenKnowledgeSet とは異なりバックトレースは不要）。
+
+    - rule_id: "CA-005"
+      priority: "MEDIUM"
+      statement: >
+        キャッシュはLLMモデルをまたいで共有しない。
+        モデルが変わると出力の傾向が変わる可能性があるため、
+        (normalized_prompt, dataset_fingerprint, llm_model) を複合キーとする。
+
+    - rule_id: "CA-006"
+      priority: "HIGH"
+      statement: >
+        dataset_fingerprint（列構造の要約ハッシュ）が異なればキャッシュミス扱いとする。
+        同じ入力文でもデータセットが変わればIntentObjectの変数マッピングが変わるため。
