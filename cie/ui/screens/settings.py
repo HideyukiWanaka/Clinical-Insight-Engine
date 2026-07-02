@@ -29,6 +29,7 @@ _PROVIDER_LABELS = list(_PROVIDERS.values())
 def render_settings(
     current_provider: str,
     provider_key_status: dict[str, bool],
+    cache_stats: dict | None = None,
 ) -> dict | None:
     """Render the Settings screen and return a single action event or None.
 
@@ -37,6 +38,8 @@ def render_settings(
             (``"anthropic"``, ``"openai"``, or ``"google_gemini"``).
         provider_key_status: Mapping of provider → ``has_key`` boolean.
             Only presence information, never key values.
+        cache_stats: ``CacheStore.get_stats()`` payload for the semantic
+            cache section (ADR-0004), or ``None`` to hide the section.
 
     Returns:
         One of the following dicts, or ``None`` if no action was taken:
@@ -44,6 +47,8 @@ def render_settings(
         - ``{"action": "save_key",       "provider": str, "api_key": str}``
         - ``{"action": "clear_key",      "provider": str}``
         - ``{"action": "change_provider","provider": str}``
+        - ``{"action": "clear_cache"}``
+        - ``{"action": "delete_cache_entry", "key_hash": str}``
     """
     st.title("設定")
     st.caption("AIプロバイダーとAPIキーを管理します。")
@@ -116,5 +121,41 @@ def render_settings(
 
     if clear_clicked:
         return {"action": "clear_key", "provider": current_provider}
+
+    # ------------------------------------------------------------------
+    # Semantic cache statistics & management (ADR-0004 SC-3 / CA-004)
+    # ------------------------------------------------------------------
+    if cache_stats is not None:
+        st.divider()
+        st.subheader("セマンティックキャッシュ")
+        st.caption("Plannerの意図解析結果をキャッシュし、LLM API呼び出しを節約します。")
+
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("総リクエスト数", cache_stats.get("total_requests", 0))
+        col2.metric("キャッシュヒット", cache_stats.get("cache_hits", 0))
+        col3.metric("ヒット率", f"{cache_stats.get('hit_rate', 0.0):.0%}")
+        col4.metric("節約したAPI呼び出し", cache_stats.get("saved_api_calls", 0))
+
+        top_prompts = cache_stats.get("top_cached_prompts", [])
+        if top_prompts:
+            st.markdown("**よく使われるキャッシュエントリ**")
+            for item in top_prompts:
+                col_label, col_count, col_del = st.columns([5, 1, 1])
+                col_label.write(f"`{item['normalized_prompt']}`")
+                col_count.write(f"{item['use_count']}回")
+                if col_del.button(
+                    "削除",
+                    key=f"settings_cache_del_{item['key_hash']}",
+                    type="secondary",
+                ):
+                    return {
+                        "action": "delete_cache_entry",
+                        "key_hash": item["key_hash"],
+                    }
+        else:
+            st.info("キャッシュエントリはまだありません。")
+
+        if st.button("キャッシュをクリア", key="settings_cache_clear_btn"):
+            return {"action": "clear_cache"}
 
     return None

@@ -103,8 +103,15 @@ def _get_services() -> dict:
     # LLM — provider selected via CIE_ACTIVE_AI_PROVIDER env var
     llm_client = llm_client_from_env()
 
+    # Semantic cache (ADR-0004)
+    from cie.cache.store import CacheStore
+    cache_store = CacheStore()
+
     # Agents
-    planner = PlannerAgent(policy_engine, schema_registry, audit, context_guard, llm_client)
+    planner = PlannerAgent(
+        policy_engine, schema_registry, audit, context_guard, llm_client,
+        cache_store=cache_store,
+    )
 
     # Knowledge directories
     knowledge_root = Path("knowledge")
@@ -165,6 +172,7 @@ def _get_services() -> dict:
         "knowledge_lifecycle": knowledge_lifecycle,
         "knowledge_loader": knowledge_loader,
         "orchestrator": orchestrator,
+        "cache_store": cache_store,
     }
 
 
@@ -781,16 +789,19 @@ def _handle_settings() -> None:
 
     _load_settings_state()
 
+    services = _get_services()
+    cache_store = services["cache_store"]
+
     event = render_settings(
         current_provider=st.session_state["settings_current_provider"],
         provider_key_status=st.session_state["settings_key_status"],
+        cache_stats=cache_store.get_stats(),
     )
 
     if event is None:
         return
 
     action = event["action"]
-    services = _get_services()
     audit = services["audit"]
 
     if action == "save_key":
@@ -852,6 +863,33 @@ def _handle_settings() -> None:
             st.success(f"AIプロバイダーを {new_provider} に変更しました。")
         except Exception as exc:
             st.error(f"プロバイダー変更に失敗しました: {exc}")
+        st.rerun()
+
+    elif action == "delete_cache_entry":
+        # CA-004: manual physical deletion from the UI is permitted
+        cache_store.delete(event["key_hash"])
+        asyncio.run(audit.write(AuditEvent(
+            execution_id="settings",
+            agent_id="ui:settings",
+            action="CACHE_ENTRY_DELETED",
+            status="success",
+            severity=AuditEventSeverity.INFO,
+            payload={"key_hash": event["key_hash"]},
+        )))
+        st.success("キャッシュエントリを削除しました。")
+        st.rerun()
+
+    elif action == "clear_cache":
+        cache_store.clear_all()
+        asyncio.run(audit.write(AuditEvent(
+            execution_id="settings",
+            agent_id="ui:settings",
+            action="CACHE_CLEARED",
+            status="success",
+            severity=AuditEventSeverity.INFO,
+            payload={},
+        )))
+        st.success("キャッシュをクリアしました。")
         st.rerun()
 
 

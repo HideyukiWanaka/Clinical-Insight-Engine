@@ -115,3 +115,7 @@ logs/
 .Spotlight-V100
 .Trashes
 ehthumbs.db
+
+# ─── セマンティックキャッシュ（ADR-0004: 施設固有の運用データ）──────────────
+cie/cache/planner_cache.json
+cie/cache/cache_stats.json

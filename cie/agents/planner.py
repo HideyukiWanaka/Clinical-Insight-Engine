@@ -24,6 +24,9 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from cie.agents.base import AgentInput, AgentOutput, BaseAgent
+from cie.cache.models import CacheEntry, CacheKey
+from cie.cache.store import CacheStore
+from cie.core.audit import AuditEvent, AuditEventSeverity
 from cie.core.exceptions import AgentError
 from cie.core.llm_client import LLMClient, LLMError
 from cie.schemas.validator import SchemaRegistry
@@ -219,6 +222,7 @@ class PlannerAgent(BaseAgent):
         audit_service: Records execution outcomes.
         context_guard: PII check + inject_raw_data_rows structural enforcement.
         llm_client: Provider-agnostic LLM client (``LLMClient``).
+        cache_store: Semantic cache (ADR-0004). ``None`` disables caching.
     """
 
     def __init__(
@@ -228,10 +232,12 @@ class PlannerAgent(BaseAgent):
         audit_service: AuditService,
         context_guard: ContextGuard,
         llm_client: LLMClient,
+        cache_store: CacheStore | None = None,
     ) -> None:
         super().__init__(policy_engine, schema_registry, audit_service)
         self._context_guard = context_guard
         self._llm_client = llm_client
+        self._cache_store = cache_store
 
     # ------------------------------------------------------------------
     # Abstract property implementations
@@ -285,6 +291,24 @@ class PlannerAgent(BaseAgent):
         user_prompt: str = payload["user_natural_language_prompt"]
         dataset_metadata: dict = payload.get("dataset_structural_metadata", {})
 
+        # Step 1.5 — semantic cache lookup (ADR-0004; keyed per model, CA-005)
+        cache_key: CacheKey | None = None
+        if self._cache_store is not None:
+            cache_key = self._cache_store.make_key(user_prompt, dataset_metadata)
+            cached = self._cache_store.get(
+                cache_key,
+                llm_provider=self._llm_client.provider,
+                llm_model=self._llm_client.model,
+            )
+            if cached is not None:
+                self._cache_store.record_hit(
+                    cache_key,
+                    llm_provider=self._llm_client.provider,
+                    llm_model=self._llm_client.model,
+                )
+                await self._write_cache_hit_audit(agent_input, cache_key)
+                return self._build_output_from_cache(agent_input, cached)
+
         # Step 2 — build LLM request
         system_prompt = self._build_system_prompt()
         user_message = self._build_user_message(user_prompt, dataset_metadata)
@@ -336,6 +360,19 @@ class PlannerAgent(BaseAgent):
         # Secondary guard: strip workflow_id if it appears at the top level
         output_payload.pop("workflow_id", None)
 
+        # Step 5.5 — cache write on LLM success (CA-002 / CA-003 via should_cache)
+        if self._cache_store is not None and cache_key is not None:
+            confidence_score = float(output_payload["confidence_score"])
+            if self._cache_store.should_cache(confidence_score, requires_clarification):
+                self._cache_store.put(
+                    key=cache_key,
+                    original_prompt=user_prompt,
+                    intent_object=intent_obj,
+                    confidence_score=confidence_score,
+                    llm_provider=self._llm_client.provider,
+                    llm_model=self._llm_client.model,
+                )
+
         # Step 6 — return AgentOutput
         status: Literal["success", "failed", "clarification_required"] = (
             "clarification_required" if requires_clarification else "success"
@@ -348,6 +385,52 @@ class PlannerAgent(BaseAgent):
             output_schema_ref=self.output_schema_ref,
             requires_human_clarification=requires_clarification,
             clarification_options=clarification_options,
+        )
+
+    # ------------------------------------------------------------------
+    # Semantic cache (ADR-0004)
+    # ------------------------------------------------------------------
+
+    async def _write_cache_hit_audit(
+        self, agent_input: AgentInput, cache_key: CacheKey
+    ) -> None:
+        """CA-001: cache-served analyses keep a full audit trail."""
+        await self._audit_service.write(AuditEvent(
+            execution_id=agent_input.execution_id,
+            agent_id=self.agent_id,
+            action="CACHE_HIT",
+            status="success",
+            severity=AuditEventSeverity.INFO,
+            payload={
+                "normalized_prompt": cache_key.normalized_prompt,
+                "dataset_fingerprint": cache_key.dataset_fingerprint,
+            },
+        ))
+
+    def _build_output_from_cache(
+        self, agent_input: AgentInput, cached: CacheEntry
+    ) -> AgentOutput:
+        """Reconstruct an AgentOutput from a cache entry without calling the LLM.
+
+        Cached entries never require clarification (CA-003), so status is
+        always "success".
+        """
+        output_payload: dict = {
+            "execution_id": agent_input.execution_id,
+            "intent_object": dict(cached.intent_object),
+            "confidence_score": cached.confidence_score,
+            "requires_human_clarification": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        output_payload["intent_object"].pop("workflow_id", None)  # ADR-0001 guard
+        return AgentOutput(
+            execution_id=agent_input.execution_id,
+            agent_id=self.agent_id,
+            status="success",
+            output_payload=output_payload,
+            output_schema_ref=self.output_schema_ref,
+            requires_human_clarification=False,
+            clarification_options=[],
         )
 
     # ------------------------------------------------------------------

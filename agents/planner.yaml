@@ -190,7 +190,7 @@ exception_handling:
 # Semantic Cache Rules（ADR-0004 / MVP後に実装）
 # -----------------------------------------------------------------------------
 semantic_cache:
-  status: "planned"  # not_implemented → 実装後に "active" に変更
+  status: "active"
   adr_reference: "decisions/ADR-0004.md"
   implementation_prompt: "prompts/phase_semantic_cache.md"
 

@@ -490,3 +490,101 @@ class TestLLMFailure:
         assert "workflow_id" in captured["system"].lower()
         assert "user_natural_language_prompt" in captured["user"]
         assert "inject_raw_data_rows" in captured["user"]
+
+
+# ---------------------------------------------------------------------------
+# Semantic cache integration (ADR-0004 / prompts/phase_semantic_cache.md)
+# ---------------------------------------------------------------------------
+
+
+class TestSemanticCacheIntegration:
+
+    @pytest.fixture
+    def cached_planner(
+        self,
+        tmp_path,
+        mock_policy_engine: MagicMock,
+        mock_schema_registry: MagicMock,
+        mock_audit: MagicMock,
+        mock_context_guard: MagicMock,
+        mock_llm_client: MagicMock,
+    ) -> PlannerAgent:
+        from cie.cache.store import CacheStore
+
+        mock_llm_client.provider = "anthropic"
+        mock_llm_client.model = "model-x"
+        return PlannerAgent(
+            policy_engine=mock_policy_engine,
+            schema_registry=mock_schema_registry,
+            audit_service=mock_audit,
+            context_guard=mock_context_guard,
+            llm_client=mock_llm_client,
+            cache_store=CacheStore(cache_dir=tmp_path),
+        )
+
+    async def test_cache_hit_skips_llm_call(
+        self,
+        cached_planner: PlannerAgent,
+        agent_input: AgentInput,
+        mock_audit: MagicMock,
+    ) -> None:
+        """Second identical run must be served from cache without an LLM call."""
+        llm_mock = _llm_mock(_BASE_LLM_RESPONSE)
+        with patch.object(cached_planner, "_call_llm", new=llm_mock):
+            first = await cached_planner.run(agent_input)
+            second = await cached_planner.run(agent_input)
+
+        assert first.status == "success"
+        assert second.status == "success"
+        assert llm_mock.await_count == 1  # LLM called once only
+        assert second.output_payload["intent_object"] == \
+            first.output_payload["intent_object"]
+
+        # CA-001: CACHE_HIT audit event recorded
+        actions = [call.args[0].action for call in mock_audit.write.await_args_list]
+        assert "CACHE_HIT" in actions
+
+    async def test_cache_store_none_behaves_as_before(
+        self,
+        planner: PlannerAgent,
+        agent_input: AgentInput,
+    ) -> None:
+        """cache_store=None disables caching: every run calls the LLM."""
+        llm_mock = _llm_mock(_BASE_LLM_RESPONSE)
+        with patch.object(planner, "_call_llm", new=llm_mock):
+            await planner.run(agent_input)
+            await planner.run(agent_input)
+
+        assert llm_mock.await_count == 2
+
+    async def test_clarification_result_not_cached(
+        self,
+        cached_planner: PlannerAgent,
+        agent_input: AgentInput,
+    ) -> None:
+        """CA-003: clarification-required results must not populate the cache."""
+        ambiguous = dict(_BASE_LLM_RESPONSE)
+        ambiguous["paired"] = None  # PL-004 → requires clarification
+        llm_mock = _llm_mock(ambiguous)
+        with patch.object(cached_planner, "_call_llm", new=llm_mock):
+            first = await cached_planner.run(agent_input)
+            second = await cached_planner.run(agent_input)
+
+        assert first.status == "clarification_required"
+        assert second.status == "clarification_required"
+        assert llm_mock.await_count == 2  # no cache hit
+
+    async def test_low_confidence_result_not_cached(
+        self,
+        cached_planner: PlannerAgent,
+        agent_input: AgentInput,
+    ) -> None:
+        """CA-002: confidence < 0.7 must not populate the cache."""
+        low_conf = dict(_BASE_LLM_RESPONSE)
+        low_conf["confidence_score"] = 0.5
+        llm_mock = _llm_mock(low_conf)
+        with patch.object(cached_planner, "_call_llm", new=llm_mock):
+            await cached_planner.run(agent_input)
+            await cached_planner.run(agent_input)
+
+        assert llm_mock.await_count == 2
