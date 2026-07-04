@@ -67,8 +67,8 @@ ai_provider_abstraction:
       endpoint_url: "https://generativelanguage.googleapis.com/v1beta"
       auth_keyring_service: "CIE_Platform_Google_API_Key"
       default_models:
-        reasoning_heavy: "gemini-1.5-pro"
-        fast_transform: "gemini-1.5-flash"
+        reasoning_heavy: "gemini-3.5-flash"
+        fast_transform: "gemini-3.1-flash-lite"
       request_limits:
         timeout_seconds: 90
         max_context_tokens: 256000
