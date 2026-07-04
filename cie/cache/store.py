@@ -194,6 +194,10 @@ class CacheStore:
             if data["entries"].pop(key_hash, None) is not None:
                 self._save_cache(data)
 
+    def delete_by_key(self, key: CacheKey, llm_provider: str, llm_model: str) -> None:
+        """Physically remove one entry addressed by its logical cache key."""
+        self.delete(self._entry_hash(key, llm_provider, llm_model))
+
     def clear_all(self) -> None:
         with self._lock:
             self._save_cache({"version": _CACHE_VERSION, "entries": {}})

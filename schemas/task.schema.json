@@ -48,6 +48,7 @@
         "orchestrator",
         "planner",
         "data-quality",
+        "data_quality",
         "statistics",
         "visualization",
         "reporting",

@@ -23,16 +23,17 @@ _INTENT_PLACEHOLDER = (
     "    「介入前後の痛みスコアを同一患者で比較したい」"
 )
 
-# Human-readable labels for intent_object fields (SCR-02, right pane spec)
+# Human-readable labels for intent_object fields (SCR-02, right pane spec).
+# Keys match analysis-request.schema.json IntentObject properties.
 _FIELD_LABELS: dict[str, str] = {
-    "objective":         "研究目的",
-    "outcome_type":      "アウトカム種別",
-    "primary_variable":  "主要変数",
-    "comparison_groups": "比較群",
-    "paired":            "対応あり/なし",
-    "subject_id_var":    "患者ID変数",
-    "analysis_type":     "解析タイプ",
-    "study_design":      "研究デザイン",
+    "objective":                     "研究目的",
+    "outcome_type":                  "アウトカム種別",
+    "outcome_variables":             "主要変数",
+    "predictor_type":                "比較群/予測因子種別",
+    "predictor_variables":           "予測変数",
+    "study_design":                  "研究デザイン",
+    "distribution_assumptions":      "分布の仮定",
+    "reporting_checklist_inference": "報告チェックリスト",
 }
 
 
@@ -113,19 +114,24 @@ def render_intent_entry(
     return start_clicked, csv_bytes, csv_filename
 
 
-def render_intent_preview(intent_object: dict) -> None:
+def render_intent_preview(payload: dict) -> None:
     """Render the Planner Agent's intent interpretation (right pane / SCR-02).
 
-    Display-only — no session_state writes.
+    Accepts the Planner ``output_payload`` (which nests the actual intent under
+    the ``intent_object`` key). Display-only — no session_state writes.
     """
-    if not intent_object:
+    if not payload:
         st.caption("「研究意図を解析」をクリックすると解析結果がここに表示されます")
         return
+
+    # Unwrap: fields live under output_payload["intent_object"]; confidence and
+    # clarification flags live at the output_payload top level.
+    intent_object = payload.get("intent_object", payload)
 
     st.subheader("🤖 AI解釈結果")
 
     # Confidence score indicator (SCR-02 right pane spec)
-    confidence = intent_object.get("confidence_score")
+    confidence = payload.get("confidence_score", intent_object.get("confidence_score"))
     if confidence is not None:
         _render_confidence(float(confidence))
 
@@ -133,7 +139,7 @@ def render_intent_preview(intent_object: dict) -> None:
 
     # Field-by-field display with null / low-confidence highlighting
     for field, label in _FIELD_LABELS.items():
-        value = intent_object.get(field)
+        value = _format_field_value(intent_object.get(field))
         if value is None:
             # Yellow highlight for missing / ambiguous fields (interaction-flow.md §4)
             st.markdown(
@@ -142,14 +148,40 @@ def render_intent_preview(intent_object: dict) -> None:
                 f'<strong>{label}:</strong> 🟡 確認が必要</div>',
                 unsafe_allow_html=True,
             )
-        elif value is False or value == "false":
-            st.markdown(f"**{label}:** {value}")
         else:
             st.markdown(f"**{label}:** {value}")
 
+    # One-sentence summary if the Planner provided one
+    summary = intent_object.get("natural_language_summary")
+    if summary:
+        st.caption(summary)
+
     # Raw JSON in expander for level-3 detail (UP-003)
     with st.expander("▼ 詳細 (JSON)"):
-        st.json(intent_object)
+        st.json(payload)
+
+
+def _format_field_value(value: object) -> str | None:
+    """Format an intent_object field for display, or None if empty.
+
+    Handles var_n list fields (outcome_variables / predictor_variables) by
+    joining their var_n / role pairs into a readable string.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, list):
+        if not value:
+            return None
+        parts = []
+        for item in value:
+            if isinstance(item, dict):
+                var_n = item.get("var_n", "?")
+                role = item.get("role")
+                parts.append(f"{var_n} ({role})" if role else str(var_n))
+            else:
+                parts.append(str(item))
+        return ", ".join(parts)
+    return str(value)
 
 
 # ---------------------------------------------------------------------------

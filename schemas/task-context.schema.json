@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cie://schemas/task-context.schema.json",
+  "title": "CIE Orchestrator Task Context (Dispatch Payload)",
+  "description": "Permissive schema for the accumulated context payload the Orchestrator injects into each DAG node at dispatch time. Unlike task.schema.json (which describes the full task envelope), this validates the flat accumulated_context that agents read directly (intent_object, prior node outputs, frozen_knowledge, dataset artifacts). Internally assembled and trusted, so it only asserts object shape.",
+  "version": "1.0.0",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "execution_id": {
+      "type": "string",
+      "description": "Parent execution context, bound to the capability token."
+    },
+    "intent_object": {
+      "type": "object",
+      "description": "The validated Intent Object produced by the Planner. Read-only for all downstream agents (ADR-0001)."
+    }
+  }
+}

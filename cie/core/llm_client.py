@@ -31,7 +31,7 @@ _ENDPOINTS: dict[str, str] = {
 _DEFAULT_MODELS: dict[str, str] = {
     "anthropic":    "claude-haiku-4-5-20251001",
     "openai":       "gpt-4o-mini",
-    "google_gemini": "gemini-2.0-flash",
+    "google_gemini": "gemini-3.5-flash",
 }
 
 _ENV_KEY_NAMES: dict[str, str] = {

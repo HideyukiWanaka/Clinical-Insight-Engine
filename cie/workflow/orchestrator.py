@@ -133,6 +133,7 @@ class Orchestrator:
         self,
         execution_id: str,
         intent_object: dict,
+        dataset_context: dict | None = None,
     ) -> dict:
         """Select a workflow and execute it end-to-end.
 
@@ -234,11 +235,34 @@ class Orchestrator:
             "execution_id": execution_id,
             "frozen_knowledge": frozen_knowledge,  # immutable; None if loader not configured
         }
+        # Dataset context (column metadata, dataset path, etc.) supplied by the
+        # caller so downstream agents can read real data and reference real
+        # column names. Never overrides intent_object/execution_id.
+        if dataset_context:
+            for key, value in dataset_context.items():
+                if key not in ("intent_object", "execution_id"):
+                    initial_payload[key] = value
+
+        # The entrypoint node re-derives the intent via the Planner. When the
+        # caller already supplies a computed intent_object (the normal UI flow),
+        # skip that node and seed its declared outputs so the DAG starts at the
+        # first data node instead of re-invoking the LLM.
+        skip_nodes: set[str] | None = None
+        entry_node = workflow_def.get_node(workflow_def.entrypoint)
+        if entry_node.agent_id == "planner" and intent_object:
+            skip_nodes = {workflow_def.entrypoint}
+            initial_payload["analysis_request"] = intent_object
+            initial_payload["project_metadata"] = {
+                "execution_id": execution_id,
+                "seeded_from_precomputed_intent": True,
+            }
+
         loop_result = await self._task_dispatch_loop(
             execution_id=execution_id,
             workflow_def=workflow_def,
             initial_payload=initial_payload,
             current_state=current_state,
+            skip_nodes=skip_nodes,
         )
 
         return {
@@ -514,7 +538,7 @@ class Orchestrator:
                 action="AGENT_NOT_FOUND",
                 status="failure",
                 payload={"node_id": node_def.node_id, "agent_id": node_def.agent_id},
-                severity=AuditEventSeverity.ERROR,
+                severity=AuditEventSeverity.CRITICAL,
             )
             return TaskDispatchResult(
                 node_id=node_def.node_id,
@@ -544,13 +568,18 @@ class Orchestrator:
                 # Step 4 — build isolated context payload
                 context_payload = dict(accumulated_context)
 
-                # Step 5 — dispatch to agent
+                # Step 5 — dispatch to agent.
+                # The injected payload is the flat accumulated_context that agents
+                # read directly (intent_object + prior node outputs), validated
+                # against the permissive task-context schema. task.schema.json
+                # describes the full task *envelope* and does not match this
+                # internally-assembled, trusted context payload.
                 agent_input = AgentInput(
                     execution_id=execution_id,
                     node_id=node_def.node_id,
                     capability_token=token,
                     payload=context_payload,
-                    input_schema_ref="cie://schemas/task.schema.json",
+                    input_schema_ref="cie://schemas/task-context.schema.json",
                 )
                 output = await agent.run(agent_input)
 

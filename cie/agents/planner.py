@@ -138,6 +138,12 @@ You are a clinical research intent extraction agent for the CIE Platform.
 Your ONLY task: translate the user's research prompt + dataset metadata into a
 structured JSON payload. Never produce conversational text, markdown, or commentary.
 
+=== JSON OUTPUT REQUIREMENTS ===
+- Respond with ONLY valid JSON (RFC 8259 compliant).
+- Escape all special characters in string values: quotes (") as \", newlines as \n, backslashes as \\.
+- Use double quotes only (no single quotes).
+- Ensure all string values are properly closed with quotes.
+
 === BEHAVIORAL RULES ===
 
 PL-001 [CRITICAL]: Respond with a single, valid JSON object only. No prose. No code blocks.
@@ -300,6 +306,20 @@ class PlannerAgent(BaseAgent):
                 llm_provider=self._llm_client.provider,
                 llm_model=self._llm_client.model,
             )
+            if cached is not None and not cached.intent_object.get("outcome_variables"):
+                # Stale entry cached before schema validation ran (empty
+                # outcome_variables violates minItems=1). Drop it and fall
+                # through to a fresh LLM call.
+                _log.warning(
+                    "Discarding cached intent with empty outcome_variables "
+                    "(pre-validation poisoned entry)"
+                )
+                self._cache_store.delete_by_key(
+                    cache_key,
+                    llm_provider=self._llm_client.provider,
+                    llm_model=self._llm_client.model,
+                )
+                cached = None
             if cached is not None:
                 self._cache_store.record_hit(
                     cache_key,
@@ -346,6 +366,13 @@ class PlannerAgent(BaseAgent):
         intent_obj: dict = dict(llm_response.get("intent_object") or {})
         # Hard guard: workflow_id must never appear in output (ADR-0001)
         intent_obj.pop("workflow_id", None)
+
+        # outcome_variables requires minItems=1 per schema. If LLM returned
+        # empty or missing, infer from dataset metadata as a fallback.
+        if not intent_obj.get("outcome_variables"):
+            intent_obj["outcome_variables"] = self._infer_outcome_variables(
+                intent_obj, dataset_metadata
+            )
 
         output_payload: dict = {
             "execution_id": agent_input.execution_id,
@@ -452,17 +479,139 @@ class PlannerAgent(BaseAgent):
         """
         try:
             raw_text = await self._llm_client.complete(system_prompt, user_message)
-            return json.loads(raw_text)
+            _log.debug(f"LLM raw response (first 500 chars): {raw_text[:500]}")
+            json_text = self._extract_json_from_response(raw_text)
+            _log.debug(f"Extracted JSON (first 500 chars): {json_text[:500]}")
+            return json.loads(json_text)
         except LLMError as exc:
             raise AgentError(
                 f"INTENT_EXTRACTION_FAILED: {exc}",
                 agent_id=self.agent_id,
             ) from exc
+        except json.JSONDecodeError as exc:
+            # Log the problematic text around the error location
+            lines = json_text.split('\n')
+            if exc.lineno <= len(lines):
+                problem_line = lines[exc.lineno - 1]
+                context = problem_line[max(0, exc.colno-20):min(len(problem_line), exc.colno+20)]
+                _log.error(f"JSON parse error context: ...{context}...")
+            _log.error(f"Full extracted JSON:\n{json_text}")
+
+            # Try to detect and fix truncated JSON
+            fixed_json = self._attempt_fix_truncated_json(json_text)
+            if fixed_json and fixed_json != json_text:
+                _log.info("Attempting to parse with fixed JSON...")
+                try:
+                    return json.loads(fixed_json)
+                except json.JSONDecodeError:
+                    pass
+
+            raise AgentError(
+                f"INTENT_EXTRACTION_FAILED: Invalid JSON at line {exc.lineno} column {exc.colno}: {exc.msg}",
+                agent_id=self.agent_id,
+            ) from exc
         except Exception as exc:
+            _log.error(f"Unexpected error in _call_llm: {exc}", exc_info=True)
             raise AgentError(
                 f"INTENT_EXTRACTION_FAILED: {exc}",
                 agent_id=self.agent_id,
             ) from exc
+
+    def _extract_json_from_response(self, raw_text: str) -> str:
+        """Extract valid JSON from LLM response, handling markdown code blocks.
+
+        If the response contains a ```json ... ``` code block, extract it.
+        Otherwise, return the text as-is for parsing.
+        """
+        import re
+        # Try more flexible markdown extraction patterns
+        patterns = [
+            r'```json\s*\n(.*?)\n```',  # ```json\n{...}\n```
+            r'```(?:json)?\s*\n(.*?)```',  # ```\n{...}``` (no trailing newline)
+            r'```(?:json)?(.*?)```',  # ``${...}`` (minimal spacing)
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, raw_text, re.DOTALL)
+            if match:
+                candidate = match.group(1).strip()
+                if candidate and self._validate_json_structure(candidate):
+                    _log.debug(f"Extracted JSON from code block pattern: {pattern}")
+                    return candidate
+
+        # Try to find the first { and last } to extract just the JSON
+        text = raw_text.strip()
+        start = text.find('{')
+        end = text.rfind('}')
+        if start >= 0 and end > start:
+            candidate = text[start:end+1]
+            if self._validate_json_structure(candidate):
+                _log.debug("Extracted JSON using { } bracket matching")
+                return candidate
+
+        # Last resort: return as-is (might fail, but error will be informative)
+        _log.warning(f"Could not extract valid JSON from response. Raw text: {raw_text[:200]}")
+        return raw_text.strip()
+
+    def _attempt_fix_truncated_json(self, text: str) -> str | None:
+        """Attempt to fix truncated JSON by closing open structures.
+
+        If JSON appears to be cut off mid-string or mid-structure, try to
+        close it gracefully so it can at least be parsed.
+        """
+        # Count open/close braces and brackets
+        open_braces = text.count('{') - text.count('}')
+        open_brackets = text.count('[') - text.count(']')
+
+        if open_braces <= 0 and open_brackets <= 0:
+            return None  # Not truncated
+
+        # Try to close open structures
+        fixed = text.rstrip()
+
+        # Close any open strings by adding a quote if the last character suggests it
+        if fixed and fixed[-1] not in ('"', '}', ']', ','):
+            fixed += '"'
+
+        # Add closing brackets
+        fixed += ']' * open_brackets
+        # Add closing braces
+        fixed += '}' * open_braces
+
+        _log.info(f"Attempted to fix truncated JSON (open_braces={open_braces}, open_brackets={open_brackets})")
+        return fixed
+
+    def _validate_json_structure(self, text: str) -> bool:
+        """Quick validation that JSON structure looks complete."""
+        # Check for balanced braces and brackets
+        brace_count = text.count('{') - text.count('}')
+        bracket_count = text.count('[') - text.count(']')
+
+        if brace_count != 0 or bracket_count != 0:
+            _log.warning(f"Unbalanced JSON structure: braces={brace_count}, brackets={bracket_count}")
+            return False
+
+        # Check for unclosed strings (handle escaped backslashes)
+        i = 0
+        quote_count = 0
+        while i < len(text):
+            if text[i] == '"':
+                # Count preceding backslashes
+                num_backslashes = 0
+                j = i - 1
+                while j >= 0 and text[j] == '\\':
+                    num_backslashes += 1
+                    j -= 1
+                # Quote is only escaped if preceded by odd number of backslashes
+                if num_backslashes % 2 == 0:
+                    quote_count += 1
+            i += 1
+
+        if quote_count % 2 != 0:
+            _log.warning(f"Odd number of unescaped quotes ({quote_count}) detected - JSON may be truncated")
+            return False
+
+        return True
 
     # ------------------------------------------------------------------
     # Prompt construction
@@ -480,6 +629,38 @@ class PlannerAgent(BaseAgent):
             ensure_ascii=False,
         )
         return _SYSTEM_PROMPT_TEMPLATE.format(intent_object_schema=schema_text)
+
+    def _infer_outcome_variables(self, intent_obj: dict, dataset_metadata: dict) -> list[dict]:
+        """Fallback: infer outcome_variables from dataset metadata.
+
+        Called when the LLM returns an empty or missing outcome_variables list,
+        which would fail schema validation (minItems=1). We pick the first
+        continuous variable as primary_outcome, or var_1 if nothing fits.
+        """
+        outcome_type = intent_obj.get("outcome_type", "continuous")
+
+        # Prefer continuous vars for continuous outcomes, otherwise any var
+        candidates = [
+            var_n for var_n, meta in dataset_metadata.items()
+            if isinstance(meta, dict) and (
+                (outcome_type == "continuous" and meta.get("inferred_type") == "continuous")
+                or outcome_type != "continuous"
+            )
+        ]
+
+        # Fall back to all vars if no candidates matched
+        if not candidates:
+            candidates = list(dataset_metadata.keys())
+
+        if not candidates:
+            # Absolute fallback — schema will still validate with one entry
+            _log.warning("No dataset variables available; using var_1 as placeholder outcome")
+            return [{"var_n": "var_1", "role": "primary_outcome"}]
+
+        _log.warning(
+            f"LLM returned empty outcome_variables; inferred [{candidates[0]}] from metadata"
+        )
+        return [{"var_n": candidates[0], "role": "primary_outcome"}]
 
     def _build_user_message(self, user_prompt: str, dataset_metadata: dict) -> str:
         """Serialize the user prompt and metadata for LLM consumption.
