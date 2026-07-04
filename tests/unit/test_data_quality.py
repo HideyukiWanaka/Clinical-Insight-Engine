@@ -164,7 +164,7 @@ def dq_token() -> CapabilityToken:
     return CapabilityToken(
         token_id=str(uuid.uuid4()),
         bound_execution_id=EXEC_ID,
-        bound_agent_id="data-quality",
+        bound_agent_id="data_quality",
         bound_step_id=NODE_ID,
         granted_scopes=frozenset({
             CapabilityScope.DATASET_PROXY_METADATA,
@@ -198,8 +198,8 @@ def _make_input(
 class TestAgentIdentity:
 
     def test_agent_id_and_scopes(self, agent: DataQualityAgent) -> None:
-        """agent_id must be 'data-quality'; required scopes are PROXY_METADATA + AUDIT."""
-        assert agent.agent_id == "data-quality"
+        """agent_id must be 'data_quality'; required scopes are PROXY_METADATA + AUDIT."""
+        assert agent.agent_id == "data_quality"
         assert CapabilityScope.DATASET_PROXY_METADATA in agent.required_scopes
         assert CapabilityScope.AUDIT_WRITE_ENTRY in agent.required_scopes
 
@@ -545,7 +545,7 @@ class TestSchemaConformance:
             f"Schema validation failed: {result.error_message}"
         )
         assert result.output_payload["report_type"] == "quality_report"
-        assert result.output_payload["produced_by_agent_id"] == "data-quality"
+        assert result.output_payload["produced_by_agent_id"] == "data_quality"
 
     async def test_finding_ids_are_unique(
         self,

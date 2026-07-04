@@ -116,7 +116,10 @@ class DataQualityAgent(BaseAgent):
 
     @property
     def agent_id(self) -> str:
-        return "data-quality"
+        # Underscore form matches the orchestration layer end-to-end:
+        # spec/workflow.yaml (agent: data_quality), AGENT_ALLOWED_SCOPES,
+        # and the token binding issued by the Orchestrator.
+        return "data_quality"
 
     @property
     def input_schema_ref(self) -> str:
@@ -287,7 +290,7 @@ class DataQualityAgent(BaseAgent):
             "report_id": str(uuid4()),
             "execution_id": agent_input.execution_id,
             "report_type": "quality_report",
-            "produced_by_agent_id": "data-quality",
+            "produced_by_agent_id": "data_quality",
             "schema_version": "1.0",
             "gate_passed": quality_gate_passed,
             "critical_findings": critical_findings,

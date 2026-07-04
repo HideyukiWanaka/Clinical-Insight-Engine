@@ -25,6 +25,7 @@ def render_results(
     manuscript_sections: dict,
     review_result: dict,
     execution_id: str | None = None,
+    statistical_results_formatted: str | None = None,
 ) -> dict:
     """Render SCR-06 Results & Report.
 
@@ -52,6 +53,11 @@ def render_results(
     tab_results, tab_figures, tab_manuscript = st.tabs(["📊 結果", "🖼 図表", "📝 原稿"])
 
     with tab_results:
+        # Phase 1: show the R-computed statistical results (parsed from
+        # result.json) rendered by the neutral formatter, when available.
+        if statistical_results_formatted:
+            st.markdown(statistical_results_formatted)
+            st.divider()
         _render_results_tab(execution_result, execution_id)
 
     with tab_figures:

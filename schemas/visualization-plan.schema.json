@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cie://schemas/visualization-plan.schema.json",
+  "title": "CIE Visualization Plan (Visualization Agent output)",
+  "description": "Output of the Visualization Agent. Internal artifact chained forward via accumulated_context; validation asserts object shape but permits additional fields.",
+  "version": "1.0.0",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["execution_id"],
+  "properties": {
+    "execution_id": { "type": "string" },
+    "created_at": { "type": "string" }
+  }
+}

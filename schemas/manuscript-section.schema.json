@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cie://schemas/manuscript-section.schema.json",
+  "title": "CIE Manuscript Section (Reporting Agent output)",
+  "description": "Output of the Reporting Agent. Internal artifact chained forward via accumulated_context; validation asserts object shape but permits additional fields.",
+  "version": "1.0.0",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["execution_id"],
+  "properties": {
+    "execution_id": { "type": "string" },
+    "created_at": { "type": "string" }
+  }
+}

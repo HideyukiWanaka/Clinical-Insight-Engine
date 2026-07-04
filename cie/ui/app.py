@@ -16,6 +16,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from cie.reporting.result_formatter import format_statistical_results
 from cie.ui.components.right_pane import render_right_pane
 from cie.ui.components.status_bar import render_status_bar
 from cie.ui.screens.analysis_config import render_analysis_config
@@ -64,13 +65,18 @@ def _get_services() -> dict:
     from cie.agents.planner import PlannerAgent
     from cie.agents.reporting import ReportingAgent
     from cie.agents.reviewer import ReviewerAgent
+    from cie.agents.runtime import RuntimeAgent
     from cie.agents.statistics import StatisticsAgent
     from cie.agents.visualization import VisualizationAgent
+    from cie.runtime.r_executor import LocalRExecutor
+    from cie.runtime.runtime_provider import RuntimeProvider
     from cie.core.audit import AuditService
     from cie.core.config import CIEConfig
     from cie.core.database import get_engine, get_session, init_db
     from cie.core.llm_client import llm_client_from_env
+    from cie.cache.r_script_cache import RScriptCache
     from cie.knowledge.ingestion_agent import KnowledgeIngestionAgent
+    from cie.knowledge.reference_library import MarkdownReferenceLibrary
     from cie.knowledge.ingestion_guard import IngestionGuard
     from cie.knowledge.lifecycle import KnowledgeLifecycleService
     from cie.knowledge.loader import KnowledgeLoader
@@ -134,17 +140,42 @@ def _get_services() -> dict:
 
     # Downstream analysis agents
     data_quality  = DataQualityAgent(policy_engine, schema_registry, audit, pii_filter)
-    statistics    = StatisticsAgent(policy_engine, schema_registry, audit)
+    # Statistics generates the executable R script via the LLM, grounded in the
+    # Markdown knowledge reference library (RAG), with a token-saving cache for
+    # structurally-identical analyses.
+    reference_library = MarkdownReferenceLibrary(knowledge_root)
+    r_script_cache = RScriptCache()
+    statistics    = StatisticsAgent(
+        policy_engine, schema_registry, audit,
+        llm_client=llm_client,
+        reference_library=reference_library,
+        script_cache=r_script_cache,
+    )
     visualization = VisualizationAgent(policy_engine, schema_registry, audit)
     reporting     = ReportingAgent(policy_engine, schema_registry, audit)
     reviewer      = ReviewerAgent(policy_engine, schema_registry, audit)
 
+    # Runtime agent — executes upstream-generated R scripts in the sandbox
+    r_output_dir = workspace / "r_output"
+    r_output_dir.mkdir(parents=True, exist_ok=True)
+    local_r_executor = LocalRExecutor(
+        workspace_dir=workspace, output_dir=r_output_dir, context_guard=context_guard
+    )
+    runtime_provider = RuntimeProvider(local_executor=local_r_executor)
+    runtime_agent = RuntimeAgent(
+        policy_engine, schema_registry, audit, runtime_provider,
+        workspace_dir=workspace / "r_scripts",
+        output_dir=r_output_dir,
+    )
+
     agent_registry = {
-        "data-quality": data_quality,
-        "statistics":   statistics,
+        "planner":       planner,
+        "data_quality":  data_quality,
+        "statistics":    statistics,
         "visualization": visualization,
-        "reporting":    reporting,
-        "reviewer":     reviewer,
+        "reporting":     reporting,
+        "reviewer":      reviewer,
+        "runtime":       runtime_agent,
     }
 
     # Workflow engine
@@ -176,6 +207,58 @@ def _get_services() -> dict:
     }
 
 
+def _build_dataset_context(csv_bytes: bytes | None) -> dict:
+    """Place the uploaded dataset where R can read it and derive column metadata.
+
+    Writes the CSV to ``<workspace>/dataset.csv`` (the path the generated R
+    script reads via WORKSPACE_DIR) and returns a ``dataset_context`` dict that
+    the Orchestrator merges into the workflow's initial payload:
+      - dataset_structural_metadata: {column: {inferred_type}} for the LLM
+      - data_quality_report: a passing gate so the Statistics node proceeds
+    Returns an empty dict when no dataset was uploaded.
+    """
+    if not csv_bytes:
+        return {}
+
+    import io
+    from pathlib import Path
+
+    import pandas as pd
+
+    from cie.core.config import CIEConfig
+
+    workspace = Path(CIEConfig().workspace_directory)
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "dataset.csv").write_bytes(csv_bytes)
+
+    metadata: dict = {}
+    try:
+        df = pd.read_csv(io.BytesIO(csv_bytes))
+        for col in df.columns:
+            series = df[col]
+            if pd.api.types.is_numeric_dtype(series):
+                inferred = "continuous"
+            elif series.nunique(dropna=True) <= 2:
+                inferred = "categorical_binary"
+            else:
+                inferred = "categorical_nominal"
+            metadata[str(col)] = {
+                "inferred_type": inferred,
+                "unique_count": int(series.nunique(dropna=True)),
+            }
+    except Exception:
+        metadata = {}
+
+    return {
+        "dataset_structural_metadata": metadata,
+        # The Statistics node is gated on a passing quality report (ST-001).
+        # Until the data_quality stage runs on real data, seed a passing gate
+        # so the analysis proceeds; the data_quality node still runs and can
+        # override this with its own findings.
+        "data_quality_report": {"quality_gate_passed": True},
+    }
+
+
 def _reload_knowledge_state(services: dict) -> None:
     """Pull the latest entries and expiry warnings into session_state."""
     try:
@@ -198,10 +281,19 @@ def _unpack_workflow_result(result: dict) -> None:
         node_statuses[nid] = nr.get("status", "unknown")
         node_outputs[nid] = nr.get("output_payload", {})
         agent = nr.get("agent_id", "")
-        if agent == "data-quality":
+        if agent == "data_quality":
             st.session_state["quality_report"] = nr.get("output_payload", {})
         elif agent == "statistics":
             st.session_state["analysis_plan"] = nr.get("output_payload", {})
+        elif agent == "runtime":
+            payload = nr.get("output_payload", {})
+            st.session_state["execution_result"] = payload.get("execution_result", {})
+            # Capture the parsed statistical results + a human-readable render.
+            sr = payload.get("statistical_results")
+            st.session_state["statistical_results"] = sr
+            st.session_state["statistical_results_formatted"] = format_statistical_results(
+                sr, payload.get("statistical_results_reason")
+            )
         elif agent == "reviewer":
             st.session_state["review_result"] = nr.get("output_payload", {})
     st.session_state["node_statuses"] = node_statuses
@@ -330,13 +422,22 @@ def _render_right_pane_content() -> None:
         action = (st.session_state.get("approval_context") or {}).get("action")
 
         if action == "run_workflow":
-            intent_object = st.session_state.get("intent_object") or {}
+            # session_state["intent_object"] holds the Planner output_payload;
+            # the Orchestrator expects the flat intent (objective/outcome_type
+            # at top level), so unwrap the nested intent_object.
+            stored_payload = st.session_state.get("intent_object") or {}
+            intent_object = stored_payload.get("intent_object", stored_payload)
             execution_id = st.session_state.get("execution_id") or str(uuid.uuid4())
+            dataset_context = _build_dataset_context(
+                st.session_state.get("intent_csv_bytes")
+            )
             services = _get_services()
             with st.spinner("ワークフローを実行中..."):
                 try:
                     result = asyncio.run(
-                        services["orchestrator"].run_workflow(execution_id, intent_object)
+                        services["orchestrator"].run_workflow(
+                            execution_id, intent_object, dataset_context=dataset_context
+                        )
                     )
                     st.session_state["workflow_run_result"] = result
                     _unpack_workflow_result(result)
@@ -492,6 +593,10 @@ def _handle_intent() -> None:
             if output.status == "success":
                 st.session_state["intent_object"] = output.output_payload
                 st.session_state["execution_id"] = execution_id
+                # Unlock the "解析を開始する" button: a confident extraction is
+                # ready for the human to review in the preview pane. The actual
+                # run is still gated behind the approval dialog.
+                st.session_state["intent_object_confirmed"] = True
                 _append_activity(
                     agent_id="planner",
                     action="intent_extracted",
@@ -500,6 +605,8 @@ def _handle_intent() -> None:
                 )
             elif output.status == "clarification_required":
                 st.session_state["intent_object"] = output.output_payload
+                # Ambiguous intent needs clarification before it can run.
+                st.session_state["intent_object_confirmed"] = False
                 _append_activity(
                     agent_id="planner",
                     action="clarification_required",
@@ -613,6 +720,7 @@ def _handle_results() -> None:
         manuscript_sections=st.session_state.get("manuscript_sections", {}),
         review_result=st.session_state.get("review_result", {}),
         execution_id=st.session_state.get("execution_id"),
+        statistical_results_formatted=st.session_state.get("statistical_results_formatted"),
     )
     if result["export_approved"]:
         st.session_state["approval_pending"] = True

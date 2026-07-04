@@ -30,7 +30,7 @@
     },
     "produced_by_agent_id": {
       "type": "string",
-      "enum": ["data-quality", "reviewer", "security", "evaluation"],
+      "enum": ["data-quality", "data_quality", "reviewer", "security", "evaluation"],
       "description": "Agent that produced this report. Must match agent_id in agents/ definitions."
     },
     "schema_version": {
