@@ -235,6 +235,12 @@ def _get_services() -> dict:
         "orchestrator": orchestrator,
         "cache_store": cache_store,
         "skill_loader": skill_loader,
+        # Phase 7: exposed for continuation mini-pipeline
+        "statistics": statistics,
+        "runtime_agent": runtime_agent,
+        "visualization": visualization,
+        "r_output_dir": r_output_dir,
+        "viz_output_dir": viz_output_dir,
     }
 
 
@@ -358,6 +364,7 @@ def _unpack_workflow_result(result: dict) -> None:
             payload = nr.get("output_payload", {})
             st.session_state["execution_result"] = payload.get("execution_result", {})
             # Capture the parsed statistical results + a human-readable render.
+            # Also persisted as "statistical_results" for continuation flow.
             sr = payload.get("statistical_results")
             st.session_state["statistical_results"] = sr
             st.session_state["statistical_results_formatted"] = format_statistical_results(
@@ -456,6 +463,246 @@ def _maybe_request_security_approval(result: dict) -> None:
     }
 
 
+def _start_continuation_analysis(query: str, services: dict) -> None:
+    """Generate a follow-up R script via StatisticsAgent and queue for human review.
+
+    Runs StatisticsAgent in continuation mode: injects continuation_query +
+    prior_statistical_results into the payload.  The generated R script is
+    stored in session_state["continuation_pending_payload"] and an approval
+    dialog is surfaced so the human can review the R before execution.
+
+    Capability token is issued and revoked inside a try/finally (ADR rule).
+    """
+    from cie.agents.base import AgentInput
+    from cie.security.capability_token import CapabilityScope
+
+    statistics = services.get("statistics")
+    if statistics is None:
+        st.error("StatisticsAgent が初期化されていません。")
+        return
+
+    prior_sr = st.session_state.get("statistical_results")
+    prior_r_script: str | None = None
+    # Recover the last R script from the most recent continuation or primary run
+    for hist_entry in reversed(st.session_state.get("analysis_history", [])):
+        if hist_entry.get("r_script"):
+            prior_r_script = hist_entry["r_script"]
+            break
+
+    intent_obj = (st.session_state.get("intent_object") or {}).get(
+        "intent_object", {}
+    )
+    if not intent_obj:
+        intent_obj = {}
+
+    col_meta = {}
+    csv_bytes = st.session_state.get("intent_csv_bytes")
+    if csv_bytes:
+        dc = _build_dataset_context(csv_bytes)
+        col_meta = dc.get("dataset_structural_metadata", {})
+
+    execution_id = str(uuid.uuid4())
+    token = services["token_manager"].issue(
+        execution_id=execution_id,
+        agent_id="statistics",
+        step_id="continuation_statistics",
+        requested_scopes={
+            CapabilityScope.DATASET_READ_VALIDATED,
+            CapabilityScope.R_CODE_GENERATE_TEMPLATE,
+            CapabilityScope.AUDIT_WRITE_ENTRY,
+        },
+    )
+    try:
+        agent_input = AgentInput(
+            execution_id=execution_id,
+            node_id="continuation_statistics",
+            capability_token=token,
+            payload={
+                "data_quality_report": {"quality_gate_passed": True},
+                "intent_object": intent_obj,
+                "dataset_structural_metadata": col_meta,
+                "continuation_query": query,
+                "prior_statistical_results": prior_sr,
+                "prior_r_script": prior_r_script,
+                "inject_raw_data_rows": False,
+            },
+            input_schema_ref="cie://schemas/task-context.schema.json",
+        )
+        with st.spinner("追加解析のRスクリプトを生成中..."):
+            output = asyncio.run(statistics.run(agent_input))
+    finally:
+        services["token_manager"].revoke(token)
+
+    if output.status != "success":
+        st.error(f"StatisticsAgent エラー: {output.error_message}")
+        _append_activity("statistics", "continuation_failed",
+                         output.error_message or "不明なエラー", "CRITICAL")
+        return
+
+    r_script = output.output_payload.get("r_script")
+    if not r_script:
+        st.warning("Rスクリプトが生成されませんでした（LLMが未設定の可能性があります）。")
+        _append_activity("statistics", "continuation_no_script",
+                         "r_script=None", "WARNING")
+        return
+
+    # Store pending payload for execution after human approval
+    st.session_state["continuation_pending_payload"] = {
+        "execution_id": execution_id,
+        "query": query,
+        "r_script": r_script,
+        "analysis_plan": output.output_payload,
+    }
+
+    description = (
+        "追加解析のRスクリプトを確認し、問題がなければ「承認して実行」を押してください。\n\n"
+        f"**追加解析の内容:** {query}\n\n"
+        f"```r\n{r_script.strip()}\n```"
+    )
+    st.session_state["approval_pending"] = True
+    st.session_state["approval_context"] = {
+        "action": "execute_continuation",
+        "title": "追加解析 Rスクリプトの実行承認",
+        "description": description,
+        "is_irreversible": False,
+    }
+    _append_activity("statistics", "continuation_r_generated",
+                     f"継続Rスクリプト生成完了 (exec={execution_id[:8]})", "INFO")
+
+
+def _execute_continuation(services: dict) -> None:
+    """Execute the pending continuation R script through Runtime + Visualization.
+
+    Called after the human approves the generated R in the approval panel.
+    Runs RuntimeAgent and VisualizationAgent with the prior statistical context,
+    then appends the results to session_state["analysis_history"].
+
+    Capability tokens are issued and revoked inside try/finally blocks (ADR rule).
+    """
+    from cie.agents.base import AgentInput
+    from cie.security.capability_token import CapabilityScope
+    from cie.reporting.result_formatter import format_statistical_results
+
+    pending = st.session_state.get("continuation_pending_payload")
+    if not pending:
+        return
+
+    execution_id: str = pending["execution_id"]
+    query: str = pending["query"]
+    r_script: str = pending["r_script"]
+
+    runtime_agent = services.get("runtime_agent")
+    visualization = services.get("visualization")
+    if runtime_agent is None:
+        st.error("RuntimeAgent が初期化されていません。")
+        return
+
+    intent_obj = (st.session_state.get("intent_object") or {}).get("intent_object", {})
+    col_meta = {}
+    csv_bytes = st.session_state.get("intent_csv_bytes")
+    if csv_bytes:
+        dc = _build_dataset_context(csv_bytes)
+        col_meta = dc.get("dataset_structural_metadata", {})
+
+    # --- RuntimeAgent ---
+    rt_token = services["token_manager"].issue(
+        execution_id=execution_id,
+        agent_id="runtime",
+        step_id="continuation_runtime",
+        requested_scopes={
+            CapabilityScope.RUNTIME_INVOKE_EXECUTION,
+            CapabilityScope.AUDIT_WRITE_ENTRY,
+        },
+    )
+    try:
+        rt_input = AgentInput(
+            execution_id=execution_id,
+            node_id="continuation_runtime",
+            capability_token=rt_token,
+            payload={
+                "r_script": r_script,
+                "inject_raw_data_rows": False,
+            },
+            input_schema_ref="cie://schemas/task-context.schema.json",
+        )
+        with st.spinner("追加解析のRスクリプトを実行中..."):
+            rt_output = asyncio.run(runtime_agent.run(rt_input))
+    finally:
+        services["token_manager"].revoke(rt_token)
+
+    if rt_output.status != "success":
+        st.error(f"RuntimeAgent エラー: {rt_output.error_message}")
+        _append_activity("runtime", "continuation_runtime_failed",
+                         rt_output.error_message or "不明なエラー", "CRITICAL")
+        st.session_state["continuation_pending_payload"] = None
+        return
+
+    new_sr = rt_output.output_payload.get("statistical_results")
+
+    # --- VisualizationAgent (optional — skip if not configured) ---
+    new_figures: list[dict] = []
+    if visualization is not None and new_sr:
+        vz_token = services["token_manager"].issue(
+            execution_id=execution_id,
+            agent_id="visualization",
+            step_id="continuation_visualization",
+            requested_scopes={
+                CapabilityScope.DATASET_READ_VALIDATED,
+                CapabilityScope.R_CODE_GENERATE_TEMPLATE,
+                CapabilityScope.AUDIT_WRITE_ENTRY,
+                CapabilityScope.RUNTIME_INVOKE_EXECUTION,
+            },
+        )
+        try:
+            vz_input = AgentInput(
+                execution_id=execution_id,
+                node_id="continuation_visualization",
+                capability_token=vz_token,
+                payload={
+                    "statistical_results": new_sr,
+                    "intent_object": intent_obj,
+                    "dataset_structural_metadata": col_meta,
+                    "prior_statistical_results": st.session_state.get("statistical_results"),
+                    "continuation_query": query,
+                    "inject_raw_data_rows": False,
+                },
+                input_schema_ref="cie://schemas/task-context.schema.json",
+            )
+            with st.spinner("追加解析の図を生成中..."):
+                vz_output = asyncio.run(visualization.run(vz_input))
+        finally:
+            services["token_manager"].revoke(vz_token)
+
+        if vz_output.status == "success":
+            fig_manifest = vz_output.output_payload.get("figure_manifest") or []
+            new_figures = [
+                {"title": f.get("figure_id", "Figure"), "path": f.get("actual_path")}
+                for f in fig_manifest if isinstance(f, dict)
+            ]
+
+    # Append to analysis_history
+    from datetime import datetime, timezone
+    history_entry = {
+        "query": query,
+        "execution_id": execution_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "statistical_results": new_sr,
+        "statistical_results_formatted": format_statistical_results(new_sr, None),
+        "figures": new_figures,
+        "r_script": r_script,
+    }
+    history: list = st.session_state.setdefault("analysis_history", [])
+    history.append(history_entry)
+
+    # Update the "current" statistical_results so next continuation can reference it
+    if new_sr:
+        st.session_state["statistical_results"] = new_sr
+
+    st.session_state["continuation_pending_payload"] = None
+    _append_activity("runtime", "continuation_completed",
+                     f"追加解析完了 (p={new_sr.get('p_value') if new_sr else 'N/A'})", "INFO")
+
+
 _SCREENS = ("dashboard", "intent", "data_preview", "workflow", "quality", "analysis", "results", "audit", "knowledge", "settings")
 
 _NAV_LABELS: dict[str, str] = {
@@ -528,6 +775,10 @@ def _init_session_state() -> None:
         "format_checklist_id":   None,   # None = auto-infer from study_design
         "format_journal_style":  "APA",  # "APA" / "AMA" / "Vancouver"
         "format_skill_id":       None,   # None = use core reporting/manuscript-section
+        # Phase 7: continuation analysis loop
+        "analysis_history":              [],    # list of completed continuation entries
+        "continuation_pending_payload":  None,  # StatisticsAgent output awaiting human review
+        "statistical_results":           None,  # latest parsed statistical_results
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -630,6 +881,10 @@ def _render_right_pane_content() -> None:
                         summary=str(exc)[:200],
                         severity="CRITICAL",
                     )
+
+        elif action == "execute_continuation":
+            services = _get_services()
+            _execute_continuation(services)
 
         elif action == "resume_security_review":
             services = _get_services()
@@ -945,6 +1200,7 @@ def _handle_results() -> None:
         review_result=st.session_state.get("review_result", {}),
         execution_id=st.session_state.get("execution_id"),
         statistical_results_formatted=st.session_state.get("statistical_results_formatted"),
+        analysis_history=st.session_state.get("analysis_history", []),
     )
     if result["export_approved"]:
         st.session_state["approval_pending"] = True
@@ -958,6 +1214,13 @@ def _handle_results() -> None:
             summary=result["export_type"],
             severity="INFO",
         )
+        st.rerun()
+
+    # Phase 7: continuation analysis — user submitted a follow-up query
+    continuation_query: str | None = result.get("continuation_query")
+    if continuation_query:
+        services = _get_services()
+        _start_continuation_analysis(continuation_query, services)
         st.rerun()
 
 

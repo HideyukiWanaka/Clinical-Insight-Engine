@@ -34,6 +34,8 @@ from cie.core.exceptions import PermissionDeniedError, SkillError
 from cie.evaluation.regression import RegressionChecker
 from cie.security.capability_token import CapabilityScope, CapabilityToken, CapabilityTokenManager
 from cie.skills.loader import SkillLoader, SkillNotFoundError
+from cie.skills.meta.evaluator import SkillEvaluator, TriggerResult
+from cie.skills.meta.proposer import SkillProposer
 from cie.skills.registry_manager import RegistryManager
 
 logger = logging.getLogger(__name__)
@@ -88,24 +90,61 @@ class SkillImprovementProposal:
 # ---------------------------------------------------------------------------
 
 
-def _bump_version(version: str, bump: str = "MINOR") -> str:
-    """Return a new SemVer string with the requested component incremented."""
-    parts = version.split(".")
-    try:
-        major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
-    except (ValueError, IndexError):
-        return version
-    if bump == "MAJOR":
-        return f"{major + 1}.0.0"
-    if bump == "MINOR":
-        return f"{major}.{minor + 1}.0"
-    return f"{major}.{minor}.{patch + 1}"
-
-
 def _extract_version_from_content(content: str) -> str:
     """Scan the first 400 bytes of SKILL.md content for a version header."""
     match = re.search(r"#\s*Version:\s*(\S+)", content[:400])
     return match.group(1) if match else "0.0.0"
+
+
+def _apply_changes_to_content(content: str, proposed_changes: list[dict]) -> str:
+    """Splice each proposed change's diff block into its target SKILL.md section.
+
+    For every change carrying a non-empty ``diff``:
+      - if a ``## {section}`` header exists, the block is appended at the end of
+        that section (immediately before the next ``## `` header or EOF);
+      - otherwise a new ``## {section}`` section is appended at the end of the file.
+
+    Changes with ``diff = None`` (advisory) are skipped — they require a human to
+    author the fix. Idempotency guard: a block whose full text is already present
+    is not inserted again.
+
+    Returns the new content. The version header is *not* touched here; the caller
+    bumps it separately so the rollback bookkeeping stays in one place.
+    """
+    for change in proposed_changes:
+        diff = (change or {}).get("diff")
+        if not diff:
+            continue
+        section = str(change.get("section") or "").strip()
+        block = "\n" + diff.rstrip() + "\n"
+        if block.strip() in content:
+            continue  # already applied (idempotent)
+
+        header = f"## {section}"
+        lines = content.splitlines(keepends=True)
+        header_idx: int | None = None
+        for i, line in enumerate(lines):
+            if line.strip() == header:
+                header_idx = i
+                break
+
+        if header_idx is None:
+            # Section absent → append a fresh section at EOF.
+            suffix = "" if content.endswith("\n") else "\n"
+            content = f"{content}{suffix}\n{header}\n{block}"
+            continue
+
+        # Find the end of the section (next '## ' header or EOF).
+        end_idx = len(lines)
+        for j in range(header_idx + 1, len(lines)):
+            if lines[j].startswith("## "):
+                end_idx = j
+                break
+        insertion = block if block.startswith("\n") else "\n" + block
+        lines.insert(end_idx, insertion)
+        content = "".join(lines)
+
+    return content
 
 
 # ---------------------------------------------------------------------------
@@ -194,21 +233,38 @@ class SkillLifecycleService:
             current_version = "0.0.0"
             namespace = "core"
 
-        proposed_version = _bump_version(current_version, "MINOR")
         proposal_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
 
-        proposed_changes: list[dict] = [
-            {
-                "change_id": f"CHG-{proposal_id[:8]}",
-                "trigger_id": trigger_id,
-                "section": "Procedure",
-                "change_type": "advisory",
-                "description": f"Address {trigger_id}: {trigger_evidence}",
-                "diff": None,
-                "addresses_finding": trigger_id,
-            }
-        ]
+        # Meta-skill pipeline (ADR-0002 Phase 2): the SkillEvaluator localises
+        # the failing reviewer check_ids to SKILL.md sections, and the
+        # SkillProposer drafts concrete, insertable diffs. Both are read-only.
+        evaluator = SkillEvaluator()
+        proposer = SkillProposer()
+        trigger = TriggerResult(
+            trigger_id=trigger_id,
+            triggered=True,
+            evidence=dict(trigger_evidence),
+            description=f"{trigger_id}: {trigger_evidence}",
+        )
+        evaluation_report = evaluator.build_evaluation_report(
+            skill_id=skill_id,
+            namespace=namespace,
+            current_version=current_version,
+            trigger=trigger,
+        )
+        proposed_changes, impact = proposer.build_proposal_changes(
+            evaluation_report, current_version
+        )
+        proposed_version = impact.proposed_version
+
+        # Preserve the root-cause analysis alongside the raw trigger evidence so
+        # the human reviewer (and audit) can see how the diff was derived.
+        enriched_evidence = {
+            **trigger_evidence,
+            "root_cause": evaluation_report.to_dict()["root_cause"],
+            "impact": impact.to_dict(),
+        }
 
         proposal = SkillImprovementProposal(
             proposal_id=proposal_id,
@@ -218,7 +274,7 @@ class SkillLifecycleService:
             current_version=current_version,
             proposed_version=proposed_version,
             trigger_id=trigger_id,
-            trigger_evidence=trigger_evidence,
+            trigger_evidence=enriched_evidence,
             proposed_changes=proposed_changes,
             human_review_required=True,
             status=ProposalStatus.PENDING_HUMAN_REVIEW,
@@ -233,7 +289,7 @@ class SkillLifecycleService:
                 current_version=current_version,
                 proposed_version=proposed_version,
                 trigger_id=trigger_id,
-                trigger_evidence=trigger_evidence,
+                trigger_evidence=enriched_evidence,
                 proposed_changes=proposed_changes,
                 human_review_required=True,
                 status=ProposalStatus.PENDING_HUMAN_REVIEW.value,
@@ -348,14 +404,22 @@ class SkillLifecycleService:
             (archive_dir / "SKILL.md").write_text(original_content, encoding="utf-8")
             backup_created = True
 
-            # Step 4b/4c: Compute new content
+            # Step 4b/4c: Compute new content.
+            #   - If the human supplied verbatim `modifications`, use them as-is
+            #     (they authored the final SKILL.md).
+            #   - Otherwise splice each proposed change's concrete diff into its
+            #     target section and bump the version header. This is what makes
+            #     approval *actually improve* the skill rather than only bump it.
             modifications = human_decision.get("modifications")
             if modifications:
                 new_content = modifications
             else:
+                spliced = _apply_changes_to_content(
+                    original_content, row.proposed_changes or []
+                )
                 new_content = _VERSION_HEADER_RE.sub(
                     lambda m: m.group(1) + proposed_version,
-                    original_content,
+                    spliced,
                     count=1,
                 )
 

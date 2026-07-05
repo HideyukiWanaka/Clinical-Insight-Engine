@@ -265,6 +265,9 @@ class VisualizationAgent(BaseAgent):
             or payload.get("variable_metadata")
             or {}
         )
+        # Continuation mode: prior_statistical_results annotate the caption
+        prior_statistical_results: dict | None = payload.get("prior_statistical_results")
+        is_continuation: bool = bool(payload.get("continuation_query"))
 
         # Step 3 — chart type selection (VZ-002)
         chart_key = self._select_chart_type(objective, outcome_type, paired)
@@ -298,6 +301,11 @@ class VisualizationAgent(BaseAgent):
                     "n per group",
                 ],
                 "note": "Values are mean ± SD unless otherwise stated.",
+                "is_continuation": is_continuation,
+                "prior_method_id": (
+                    prior_statistical_results.get("method_id")
+                    if prior_statistical_results else None
+                ),
             },
         }
 

@@ -15,7 +15,7 @@
 | 3 | ユーザー指定フォーマット（target_journal_style 等）読まれず・選択UIなし | reporting.yaml | 未 |
 | 4 | ユーザー独自フォーマットSkill（skills/user/）を誰も適用しない | ADR-0002 | 未 |
 | 5 | Skill適用そのもの（core Skillも未使用、SkillLoader呼出しゼロ） | MANIFEST | 未 |
-| 6 | メタSkill/自己改善（SKILL.mdのみ、reviewer→提案→承認→更新 未接続） | ADR-0002 | 未 |
+| 6 | メタSkill/自己改善（SKILL.mdのみ、reviewer→提案→承認→更新 未接続） | ADR-0002 | ✅ フェーズ8 |
 | 7 | 評価ステージ（モジュールは在るがワークフロー未接続、evaluationノード素通り） | evaluation/ | 未 |
 | 8 | decisionノードのルーティング（rules評価なし） | workflow.yaml | 未 |
 | 9 | フルDAGのE2E（承認/再開・下流キー整合が未完） | workflow.yaml | 未 |
@@ -74,15 +74,26 @@
 - **検証済**: `scratchpad/harness_full_dag_exec.py` — 実Orchestrator＋実エージェント（LLMのみスタブ）で intake(スキップ)→data_quality×4→statistics×3→decision分岐→security_review停止→resume→**実R実行**（p=0.0141, d=0.653）→**実PNG**→原稿→reviewer→evaluation（4次元スコア）まで完走。回帰 670 passed / 15 failed（既存DB系のみ）
 - 既知の残課題: statistical 次元は assumption_report（実際の正規性検定）が未生成のため0点＝正直な評価（フェーズ7で実検定を積む）
 
-### ⬜ フェーズ7（C）: 継続解析ループ（AIアドバイザー核心）
-- statistics/visualization が前回 statistical_results＋前回スクリプトを受理
-- 継続プロンプト（前回結果を踏まえ次の解析を提案・生成）
-- 対話UI：結果の下で追加解析を相談、解析履歴を保持／リスク: 中
+### ✅ フェーズ7（C）: 継続解析ループ（AIアドバイザー核心）— 完了
+- **StatisticsAgent**: `continuation_query`＋`prior_statistical_results`＋`prior_r_script` を任意入力として受理。`_R_CONTINUATION_SYSTEM_PROMPT`（前回結果をコンテキストとして注入し新解析Rを生成）へ分岐。継続スクリプトはキャッシュしない（インタラクティブ文脈依存のため）。`provenance["continuation"]=True`でトレーサビリティ確保
+- **VisualizationAgent**: `prior_statistical_results`＋`continuation_query` を受理。`caption_draft.is_continuation`＋`prior_method_id` を記録して図キャプションに前回手法を引き継ぎ
+- **UI（results.py）**: 結果画面下部に「🤖 AIアドバイザーに追加解析を相談」パネルを追加。st.form でテキスト入力＋送信ボタン。解析履歴を expander でスレッド表示（統計結果・PNG図・実行Rスクリプト）
+- **app.py**: session_state に `analysis_history`・`continuation_pending_payload` を追加。`_start_continuation_analysis()` が StatisticsAgent を continuation モードで実行しRスクリプトを生成＋人間承認キューへ。`_execute_continuation()` が承認後に RuntimeAgent＋VisualizationAgent を実行し履歴に追記。Capabilityトークンはtry/finallyで確実に失効（ADR絶対ルール遵守）
+- **継続ミニパイプライン**: Orchestrator/security_review を経由せず StatisticsAgent→human review→RuntimeAgent→VisualizationAgent の3段構成。人間によるRスクリプト承認（approval_pending）を挟む
+- 新規テスト: `tests/unit/test_continuation_loop.py`（9件 PASSED）
+- **検証済**: `scratchpad/harness_continuation_exec.py`（実Rscript実行）— Primary t-test（p=0.0141, d=0.653）→ Continuation Mann-Whitney U（p=0.0241, effect=0.340）→ 実PNG生成 全項目 PASSED。回帰 679 passed / 15 failed（既存DB系のみ）
 
-### ⬜ フェーズ8: Skill自己改善ループ
-- メタSkillのpython実装（skill-evaluator/proposer）
-- reviewer 発見・評価スコア → Skill改善提案 → **必ず人間承認**（ADR-0002）→ SkillLifecycle で version更新・旧版archive
-- 更新後に出力/スコア改善を確認／リスク: 中〜高
+### ✅ フェーズ8: Skill自己改善ループ — 完了
+- **メタSkillのpython実装**（SKILL.md 仕様の実行可能版、いずれも read-only・ファイル書込ゼロ）:
+  - `cie/skills/meta/evaluator.py` — `SkillEvaluator`: reviewer check_id（CC-001…007）の再発検出（SE-001）・pass率（SE-002）・最新失敗（SE-003）・手動（SE-004）、`FINDING_TO_SECTION` で failing check_id → SKILL.md セクションを局所化し `SkillEvaluationReport` を生成。再発検出は「毎回付くランダム finding_id（`RV-CC006-xxxx`）」ではなく**安定した check_id**をキーにする
+  - `cie/skills/meta/proposer.py` — `SkillProposer`: `CHANGE_STRATEGIES` で check_id → **具体的な挿入可能 diff**（CC-006 は実行可能な CI方向整合チェックRブロック、CC-001/002/003 はトレーサビリティ規則）を生成、未知findingは advisory（diff=None）。`assess_impact` が SemVer バンプ（interface変更=MAJOR/add=MINOR/その他=PATCH）を決定
+- **SkillLifecycle 配線**（`cie/skills/lifecycle.py`）:
+  - `generate_proposal` が evaluator→proposer を用いて**具体diff付き** proposed_changes と proposed_version を生成、`trigger_evidence` に root_cause／impact を同梱
+  - `apply_approved_proposal` が承認時に `_apply_changes_to_content` で**各 diff を対象セクションへ実挿入**（human が `modifications` を渡した場合はそれを優先）→ 旧版 archive → version bump。**必ず人間承認**（ADR-0002 Principle 4）を維持
+- **スコープ正典整合**: `AGENT_ALLOWED_SCOPES` に `skill_lifecycle`（skill.update_core / register_user / read_performance / human.request_approval / audit.write_entry）を追加（spec/permissions.yaml が正典。Python 側に欠落＝ドリフトを解消）→ `token_manager.issue("skill_lifecycle", …)` で実トークン発行が可能に
+- 新規テスト: `tests/unit/test_meta_skills.py`（19件 PASSED — evaluator トリガー/局所化、proposer 具体diff/バンプ、`_apply_changes_to_content` の挿入/冪等/advisory скип）
+- **検証済**: `scratchpad/harness_skill_improvement_exec.py`（実DB/実AuditService/実RegressionChecker/実CapabilityToken）— CC-006 再発（3/5）→ SE-001 発火 → 具体提案 → **却下は無変更** → **承認で SKILL.md に実行可能チェックを挿入・2.0.0→2.1.0・旧版archive**・監査記録まで全 PASSED。回帰 **698 passed / 15 failed**（既存DB系のみ、新規失敗ゼロ）
+- 残課題: 提案生成のトリガー→承認UIパネル（app.py）は本フェーズ未配線（サービス層／ハーネスで実証済み。UI配線は次段）
 
 ## 全フェーズ共通の安全策
 - 各フェーズ末で `python3 -m pytest tests/unit/`（現状670件パス／既存失敗15件はDB系の元からの失敗で不変）

@@ -37,6 +37,31 @@ _log = logging.getLogger(__name__)
 # R-script generation system prompt (knowledge-grounded LLM codegen)
 # ---------------------------------------------------------------------------
 
+_R_CONTINUATION_SYSTEM_PROMPT = """\
+You are a biostatistics R programmer for the CIE Platform running a FOLLOW-UP
+analysis.  The user has reviewed a prior analysis and wants to extend it.
+
+STRICT REQUIREMENTS (same as primary analysis):
+1. Output ONLY R code inside one ```r ... ``` fenced block. No prose outside it.
+2. Re-read the dataset (it is always available):
+       data <- read.csv(file.path(Sys.getenv("WORKSPACE_DIR"), "dataset.csv"),
+                        stringsAsFactors = FALSE)
+   Never hard-code an absolute path and never fabricate data.
+3. Use the column names given in dataset_columns.
+4. set.seed(42) for reproducibility before any stochastic step.
+5. Ground your implementation in the provided KNOWLEDGE REFERENCE PATTERNS.
+6. Compute and print: test statistic, p-value, effect size (named), and 95% CI.
+7. Write machine-readable results as JSON to
+       file.path(Sys.getenv("OUTPUT_DIR"), "result.json")
+   using EXACTLY these keys:
+     method_id, test_name, test_statistic, df, p_value, effect_size,
+     effect_size_measure, ci_lower, ci_upper, sample_size, group_summaries
+8. The PRIOR RESULTS block gives context only — reference them in R comments but
+   output only the NEW analysis results in result.json.
+9. Wrap in tryCatch so failures print a clear message and quit(status=1).
+10. Never call install.packages(), system(), system2(), shell(), or source().
+"""
+
 _R_GEN_SYSTEM_PROMPT = """\
 You are a biostatistics R programmer for the CIE Platform. Produce a single,
 complete, runnable R script that performs the requested statistical analysis.
@@ -430,12 +455,25 @@ class StatisticsAgent(BaseAgent):
             "created_at": now_iso,
         }
 
-        # Step 6 — generate the executable R script via the LLM, grounded in the
-        # knowledge reference library (RAG). Falls back to specification-only
-        # (r_script=None) when no LLM client is configured.
-        r_script, provenance = await self._generate_r_script(
-            method=method, intent_obj=intent_obj, payload=payload
-        )
+        # Step 6 — generate the executable R script via the LLM.
+        # In continuation mode (continuation_query present) build a follow-up
+        # prompt that references the prior analysis; otherwise use the standard
+        # fresh-analysis prompt.  Falls back to specification-only (r_script=None)
+        # when no LLM client is configured.
+        continuation_query: str | None = payload.get("continuation_query")
+        if continuation_query:
+            r_script, provenance = await self._generate_continuation_r_script(
+                method=method,
+                intent_obj=intent_obj,
+                payload=payload,
+                continuation_query=continuation_query,
+                prior_statistical_results=payload.get("prior_statistical_results"),
+                prior_r_script=payload.get("prior_r_script"),
+            )
+        else:
+            r_script, provenance = await self._generate_r_script(
+                method=method, intent_obj=intent_obj, payload=payload
+            )
         output_payload["r_script"] = r_script
         output_payload["r_script_provenance"] = provenance
 
@@ -595,6 +633,167 @@ class StatisticsAgent(BaseAgent):
             return code or None
         text = raw_text.strip()
         return text or None
+
+    # ------------------------------------------------------------------
+    # Continuation (follow-up) R-script generation
+    # ------------------------------------------------------------------
+
+    async def _generate_continuation_r_script(
+        self,
+        method: dict,
+        intent_obj: dict,
+        payload: dict,
+        continuation_query: str,
+        prior_statistical_results: dict | None,
+        prior_r_script: str | None,
+    ) -> tuple[str | None, dict]:
+        """Generate a follow-up R script using the prior analysis as context.
+
+        Follows the same cache/RAG/LLM pattern as _generate_r_script but uses
+        _R_CONTINUATION_SYSTEM_PROMPT and includes prior results in the user
+        message.  Continuation analyses are NOT cached (they are highly
+        context-dependent and produced interactively).
+
+        Returns:
+            (r_script, provenance). r_script is None when no LLM is available.
+        """
+        provenance: dict = {
+            "llm_generated": False,
+            "from_cache": False,
+            "knowledge_references": [],
+            "continuation": True,
+        }
+
+        if self._llm_client is None:
+            provenance["reason"] = "no_llm_client_configured"
+            return None, provenance
+
+        column_metadata = (
+            payload.get("dataset_structural_metadata")
+            or payload.get("variable_metadata")
+            or {}
+        )
+
+        # RAG retrieval (same query terms as fresh analysis)
+        references: list = []
+        if self._reference_library is not None:
+            query_terms = [
+                method["method_id"],
+                method.get("r_function", ""),
+                intent_obj.get("objective", ""),
+                intent_obj.get("outcome_type", ""),
+            ]
+            references = self._reference_library.retrieve(query_terms, top_k=2)
+            provenance["knowledge_references"] = [r.title for r in references]
+
+        skill_id = _METHOD_TO_SKILL_ID.get(method["method_id"])
+        skill_block = (
+            self._skill_loader.get_skill_prompt_block(skill_id)
+            if self._skill_loader is not None and skill_id
+            else ""
+        )
+        system_prompt = _R_CONTINUATION_SYSTEM_PROMPT + skill_block
+        user_message = self._build_continuation_r_gen_user_message(
+            method=method,
+            intent_obj=intent_obj,
+            column_metadata=column_metadata,
+            references=references,
+            continuation_query=continuation_query,
+            prior_statistical_results=prior_statistical_results,
+            prior_r_script=prior_r_script,
+        )
+
+        try:
+            raw = await self._llm_client.complete(system_prompt, user_message)
+        except LLMError as exc:
+            _log.warning("Continuation R script LLM generation failed: %s", exc)
+            provenance["reason"] = f"llm_error: {exc}"
+            return None, provenance
+
+        r_script = self._extract_r_code(raw)
+        if not r_script:
+            provenance["reason"] = "empty_or_unparsable_llm_response"
+            return None, provenance
+
+        provenance["llm_generated"] = True
+        return r_script, provenance
+
+    @staticmethod
+    def _build_continuation_r_gen_user_message(
+        method: dict,
+        intent_obj: dict,
+        column_metadata: dict,
+        references: list,
+        continuation_query: str,
+        prior_statistical_results: dict | None,
+        prior_r_script: str | None,
+    ) -> str:
+        """Assemble the user turn for continuation R-script generation."""
+        reference_block = "\n\n".join(
+            f"### Reference: {r.title}\n{r.excerpt()}" for r in references
+        ) or "(no matching reference documents found)"
+
+        safe_prior: dict = {}
+        if prior_statistical_results:
+            safe_prior = {
+                k: v for k, v in prior_statistical_results.items()
+                if k in {
+                    "method_id", "test_name", "test_statistic", "p_value",
+                    "effect_size", "effect_size_measure", "ci_lower", "ci_upper",
+                    "sample_size", "group_summaries",
+                }
+            }
+
+        prior_script_excerpt = ""
+        if prior_r_script:
+            # Show only first 40 lines of prior script as reference
+            lines = prior_r_script.splitlines()[:40]
+            prior_script_excerpt = "\n".join(lines)
+            if len(prior_r_script.splitlines()) > 40:
+                prior_script_excerpt += "\n# ... (truncated)"
+
+        request = {
+            "follow_up_request": continuation_query,
+            "selected_method_for_followup": {
+                "method_id": method["method_id"],
+                "r_function": method.get("r_function"),
+                "r_packages": method.get("r_packages", []),
+                "effect_size_measure": method.get("effect_size_measure"),
+            },
+            "intent_object": {
+                "objective": intent_obj.get("objective"),
+                "outcome_type": intent_obj.get("outcome_type"),
+                "paired": intent_obj.get("paired"),
+                "outcome_variables": intent_obj.get("outcome_variables", []),
+                "predictor_variables": intent_obj.get("predictor_variables", []),
+            },
+            "dataset_columns": column_metadata,
+        }
+
+        parts = [
+            "Generate a follow-up R script based on the PRIOR RESULTS and USER REQUEST below.\n",
+            "=== USER FOLLOW-UP REQUEST ===",
+            continuation_query,
+            "",
+            "=== PRIOR ANALYSIS RESULTS (context only — do not re-output these) ===",
+            json.dumps(safe_prior, ensure_ascii=False, indent=2) if safe_prior
+            else "(no prior results provided)",
+        ]
+        if prior_script_excerpt:
+            parts += [
+                "",
+                "=== PRIOR R SCRIPT (reference only) ===",
+                f"```r\n{prior_script_excerpt}\n```",
+            ]
+        parts += [
+            "",
+            "=== NEW ANALYSIS REQUEST ===",
+            json.dumps(request, ensure_ascii=False, indent=2),
+            "",
+            "=== KNOWLEDGE REFERENCE PATTERNS (ground your script in these) ===",
+            reference_block,
+        ]
+        return "\n".join(parts)
 
     def _select_method(
         self,

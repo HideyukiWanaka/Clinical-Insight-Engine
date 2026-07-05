@@ -46,12 +46,12 @@ UI は Streamlit（`cie/ui/app.py`）。LLM は `cie/core/llm_client.py`（anthr
 - ナレッジ取り込みパイプライン＋UI、data_quality、スキーマ検証、Capabilityトークン/ポリシー、planner セマンティックキャッシュ
 
 ### 未実装／未配線（＝残タスク。詳細は IMPLEMENTATION_PLAN.md）
-- メタSkill／自己改善ループ（SKILL.md のみ、reviewer→提案→承認→更新 未接続）
+- ~~メタSkill／自己改善ループ~~→**フェーズ8完了**（`cie/skills/meta/evaluator.py`＋`proposer.py` の python 実装、reviewer check_id→局所化→具体diff→人間承認→SKILL.md 実挿入＋archive＋version bump。ハーネスで実DBまで実証）
 - ~~評価ステージ~~→**フェーズ6完了**（EvaluationAgent が evaluation ノードで4次元評価を実行）
 - ~~decisionノードのルーティング~~→**フェーズ6完了**（rules 評価＋ブランチ枝刈り）
 - ~~フルDAGのE2E~~→**フェーズ6完了**（承認/再開・下流キー整合、`scratchpad/harness_full_dag_exec.py`）
-- 継続解析（対話的リファインメント）← 次はフェーズ7
-- assumption_check ノードが実際の正規性検定（Shapiro-Wilk 等の実R実行）を行わない → evaluation の statistical 次元が0点（ST-002）。フェーズ7で実検定を積む
+- ~~継続解析（対話的リファインメント）~~→**フェーズ7完了**（continuation_query 分岐・継続ミニパイプライン・AIアドバイザーUI）
+- assumption_check ノードが実際の正規性検定（Shapiro-Wilk 等の実R実行）を行わない → evaluation の statistical 次元が0点（ST-002）。フェーズ8で対処予定
 
 ---
 
@@ -190,15 +190,24 @@ python3 -m py_compile <file>
 - 検証: `scratchpad/harness_full_dag_exec.py`（実Orchestrator/実エージェント/実R/実PNG、LLMのみスタブ）全項目 PASSED。回帰 670 passed / 15 failed（既存DB系のみ）
 - 残課題: assumption_check が実検定を実行しないため evaluation の statistical 次元は0点（正直な評価）。フェーズ7で実検定を積む
 
-### フェーズ7(C): 継続解析ループ ← 次はここ
-- statistics/visualization が `prior_statistical_results`＋`prior_r_script` を受理する任意入力を追加
-- 継続プロンプト分岐。前回 result.json/データを読み直して積み上げ
-- UI：結果の下に「この結果を踏まえ追加解析を相談」入力＋会話ループ、`session_state` に解析履歴保持
+### ✅ フェーズ7(C): 継続解析ループ — 完了
+- **StatisticsAgent**: `continuation_query`/`prior_statistical_results`/`prior_r_script` を任意入力として受理。`_R_CONTINUATION_SYSTEM_PROMPT`（前回結果コンテキスト付き）へ分岐。キャッシュしない（インタラクティブ文脈依存）。`provenance["continuation"]=True`
+- **VisualizationAgent**: `prior_statistical_results` を受理し `caption_draft.is_continuation`/`prior_method_id` を記録
+- **UI**: 結果画面下部「🤖 AIアドバイザー」パネル（st.form 入力＋解析履歴スレッド）
+- **app.py**: `_start_continuation_analysis()`（StatisticsAgent→人間承認）＋`_execute_continuation()`（RuntimeAgent→VisualizationAgent→history追記）。トークンはtry/finallyで必ず失効
+- 新規テスト: `tests/unit/test_continuation_loop.py`（9件）、ハーネス: `scratchpad/harness_continuation_exec.py`
+- 検証: Primary t-test（p=0.014, d=0.65）→ Continuation Mann-Whitney U（p=0.024, r=0.34）→ 実PNG 全 PASSED。回帰 679 passed / 15 failed（既存DB系）
 
-### フェーズ8: Skill自己改善
-- メタSkill python実装（`skills/meta/skill-evaluator`, `skill-proposer` は現状 SKILL.md のみ）
-- reviewer 発見・評価スコア → Skill改善提案 → **必ず人間承認**（ADR-0002）→ `cie/skills/lifecycle.py` の SkillLifecycleService で version 更新・旧版 archive
-- 検証: 更新後に同解析の出力/スコア改善
+### ✅ フェーズ8: Skill自己改善 — 完了
+- 対象/新規: `cie/skills/meta/evaluator.py`（`SkillEvaluator`）、`cie/skills/meta/proposer.py`（`SkillProposer`）、`cie/skills/meta/__init__.py`。両者とも **read-only・ファイル書込ゼロ**（ADR-0002 Principle 4）。SKILL.md 仕様（`skills/meta/skill-evaluator|proposer/SKILL.md`）の実行可能版
+- **SkillEvaluator**: `evaluate_triggers`（SE-001 再発 check_id / SE-002 pass率 / SE-003 最新失敗 / SE-004 手動）→ `analyze_root_cause`（`FINDING_TO_SECTION` で check_id→SKILL.md セクション）→ `build_evaluation_report`。**再発検出のキーは check_id（CC-006 等）**であって毎回変わる finding_id ではない（reviewer は `finding_id=RV-CC006-<hex>`／`check_id=CC-006` を両方持つ）。レコードは `SkillPerformanceRecord`（`reviewer_finding_ids`/`total_tests`/`passed_tests`/`failed_test_ids`）と SKILL.md の入れ子形の両方を許容
+- **SkillProposer**: `CHANGE_STRATEGIES`（check_id→(section, change_type, 具体diff)）。CC-006 は**実行可能な CI方向整合チェックRブロック**（`ci_excludes_null`）、CC-001/002/003 はトレーサビリティ規則。未知は advisory（diff=None）。`assess_impact` が SemVer バンプ（interface/remove=MAJOR、add=MINOR、他=PATCH）
+- **lifecycle 配線**（`cie/skills/lifecycle.py`）: `generate_proposal` が evaluator→proposer を呼び**具体diff付き** proposed_changes と proposed_version を生成、`trigger_evidence` に root_cause/impact を同梱。`apply_approved_proposal` は承認時に `_apply_changes_to_content`（module-level helper）で **diff を対象 `## Section` に実挿入**（見つからなければ末尾に新セクション追加、冪等ガード付き）→ 旧版 archive → version bump。human が `modifications` を渡した場合はそちら優先（既存挙動）
+- **スコープ整合**: `cie/security/capability_token.py` の `AGENT_ALLOWED_SCOPES` に `skill_lifecycle` を追加（spec/permissions.yaml が正典。Python 側に欠落していたドリフトを解消）→ `token_manager.issue(agent_id="skill_lifecycle", …, {SKILL_UPDATE_CORE})` で実トークン発行が可能に（従来テストは手組みトークンで回避していた）
+- 新規テスト: `tests/unit/test_meta_skills.py`（19件 PASSED、DB非依存の純粋ロジック）
+- 検証: `scratchpad/harness_skill_improvement_exec.py`（**実DB/実AuditService/実RegressionChecker/実CapabilityToken**、LLM不要）— CC-006 再発(3/5)→SE-001→具体提案→却下(無変更)→承認(実挿入・2.0.0→2.1.0・旧版archive・監査記録) 全 PASSED。回帰 **698 passed / 15 failed**（既存DB系のみ）
+- 落とし穴: 既存 `test_skill_lifecycle.py` の 5件は**元から**失敗（in-memory SQLite の `audit_log` テーブル未生成＝接続ごとに別DB になるフィクスチャの既知問題。本フェーズ変更とは無関係。ハーネスはファイルDBで回避）
+- 未配線（次段）: 提案トリガー→UI承認パネル（app.py）。サービス層とハーネスで実証済みだが Streamlit UI への配線は未実施
 
 ---
 

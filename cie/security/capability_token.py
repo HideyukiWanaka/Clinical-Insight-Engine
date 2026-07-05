@@ -195,6 +195,17 @@ class CapabilityTokenManager:
             CapabilityScope.AUDIT_WRITE_ENTRY,
             CapabilityScope.SKILL_READ_PERFORMANCE,
         },
+        # ADR-0002 — Skill self-improvement service. skill.update_core /
+        # skill.register_user are only ever exercised AFTER human approval
+        # (SkillLifecycleService gates every file write on human_decision).
+        # Mirrors spec/permissions.yaml agent_permission_matrix.skill_lifecycle.
+        "skill_lifecycle": {
+            CapabilityScope.SKILL_UPDATE_CORE,
+            CapabilityScope.SKILL_REGISTER_USER,
+            CapabilityScope.SKILL_READ_PERFORMANCE,
+            CapabilityScope.HUMAN_REQUEST_APPROVAL,
+            CapabilityScope.AUDIT_WRITE_ENTRY,
+        },
     }
 
     def issue(

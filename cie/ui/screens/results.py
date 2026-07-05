@@ -26,6 +26,7 @@ def render_results(
     review_result: dict,
     execution_id: str | None = None,
     statistical_results_formatted: str | None = None,
+    analysis_history: list[dict] | None = None,
 ) -> dict:
     """Render SCR-06 Results & Report.
 
@@ -68,7 +69,13 @@ def render_results(
 
     # Export panel — always visible, disabled when score < 90 (SCR-06 spec)
     st.divider()
-    return _render_export_panel(reviewer_score, review_result)
+    export_result = _render_export_panel(reviewer_score, review_result)
+
+    # Phase 7: AI advisor — follow-up analysis conversation
+    st.divider()
+    continuation_query = _render_advisor_panel(analysis_history or [])
+
+    return {**export_result, "continuation_query": continuation_query}
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +260,61 @@ def _render_export_panel(reviewer_score: int, review_result: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _render_advisor_panel(analysis_history: list[dict]) -> str | None:
+    """Render the AI-advisor follow-up analysis panel (Phase 7).
+
+    Shows past continuation analyses as a conversation thread, then a text
+    input for the next follow-up query.
+
+    Returns the submitted query string, or None if nothing was submitted this
+    render cycle.
+    """
+    st.markdown("### 🤖 AIアドバイザーに追加解析を相談")
+    st.caption(
+        "この解析結果を踏まえた追加解析を依頼できます。"
+        "依頼内容を入力してください（例: 「年齢で調整したロジスティック回帰を実施したい」）。"
+    )
+
+    # Render past continuation analyses as a thread
+    if analysis_history:
+        for idx, entry in enumerate(analysis_history, start=1):
+            with st.expander(f"🔁 追加解析 {idx}: {entry.get('query', '')[:60]}", expanded=False):
+                if entry.get("statistical_results_formatted"):
+                    st.markdown(entry["statistical_results_formatted"])
+                elif entry.get("statistical_results"):
+                    st.json(entry["statistical_results"])
+                else:
+                    st.info("解析結果がありません。")
+
+                if entry.get("figures"):
+                    for fig in entry["figures"]:
+                        path = fig.get("path")
+                        if path and os.path.exists(path):
+                            st.image(path, caption=fig.get("title", "Figure"))
+                        elif path:
+                            st.warning(f"図ファイルが見つかりません: `{path}`")
+
+                if entry.get("r_script"):
+                    with st.expander("実行したRスクリプト", expanded=False):
+                        st.code(entry["r_script"], language="r")
+
+    # Follow-up query input (Streamlit form prevents premature submission)
+    with st.form(key="advisor_follow_up_form", clear_on_submit=True):
+        query = st.text_area(
+            label="追加解析の内容を入力",
+            placeholder=(
+                "例: 「性別で層別化した解析を追加したい」\n"
+                "    「共変量としてBMIを調整した回帰分析を実施したい」\n"
+                "    「ノンパラメトリック検定に切り替えて比較したい」"
+            ),
+            height=100,
+            label_visibility="collapsed",
+        )
+        submitted = st.form_submit_button("📤 追加解析を依頼する", type="primary")
+
+    return query.strip() if submitted and query.strip() else None
+
 
 def _render_score_summary(reviewer_score: int, review_result: dict) -> None:
     total_steps = review_result.get("total_steps", 0)
