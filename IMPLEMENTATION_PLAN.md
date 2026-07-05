@@ -93,7 +93,7 @@
 - **スコープ正典整合**: `AGENT_ALLOWED_SCOPES` に `skill_lifecycle`（skill.update_core / register_user / read_performance / human.request_approval / audit.write_entry）を追加（spec/permissions.yaml が正典。Python 側に欠落＝ドリフトを解消）→ `token_manager.issue("skill_lifecycle", …)` で実トークン発行が可能に
 - 新規テスト: `tests/unit/test_meta_skills.py`（19件 PASSED — evaluator トリガー/局所化、proposer 具体diff/バンプ、`_apply_changes_to_content` の挿入/冪等/advisory скип）
 - **検証済**: `scratchpad/harness_skill_improvement_exec.py`（実DB/実AuditService/実RegressionChecker/実CapabilityToken）— CC-006 再発（3/5）→ SE-001 発火 → 具体提案 → **却下は無変更** → **承認で SKILL.md に実行可能チェックを挿入・2.0.0→2.1.0・旧版archive**・監査記録まで全 PASSED。回帰 **698 passed / 15 failed**（既存DB系のみ、新規失敗ゼロ）
-- 残課題: 提案生成のトリガー→承認UIパネル（app.py）は本フェーズ未配線（サービス層／ハーネスで実証済み。UI配線は次段）
+- ~~残課題: 提案生成のトリガー→承認UIパネル（app.py）未配線~~→**UI配線完了**（`cie/ui/screens/skill_improvement.py` 新規、ナビ「Skill改善」画面追加、却下=即時実行・承認=共通 approval パネル経由、手動 SE-004 トリガーUI付き）
 
 ## 全フェーズ共通の安全策
 - 各フェーズ末で `python3 -m pytest tests/unit/`（現状670件パス／既存失敗15件はDB系の元からの失敗で不変）

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m py_compile cie/ui/app.py cie/ui/screens/skill_improvement.py)",
+      "Bash(python3 -m pytest tests/unit/ -q)"
+    ]
+  }
+}

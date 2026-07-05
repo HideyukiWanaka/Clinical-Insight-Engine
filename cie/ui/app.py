@@ -30,6 +30,7 @@ from cie.ui.screens.quality_review import render_quality_review
 from cie.ui.screens.settings import render_settings
 from cie.ui.screens.format_selection import render_format_selection
 from cie.ui.screens.results import render_results
+from cie.ui.screens.skill_improvement import render_skill_improvement
 from cie.ui.screens.workflow_view import render_workflow_view
 
 _CSS_VARIABLES = """
@@ -225,6 +226,22 @@ def _get_services() -> dict:
         knowledge_loader=knowledge_loader,
     )
 
+    # Phase 8: Skill self-improvement service (ADR-0002)
+    from cie.skills.lifecycle import SkillLifecycleService
+    from cie.skills.registry_manager import RegistryManager
+    from cie.evaluation.regression import RegressionChecker
+
+    regression_checker = RegressionChecker(db_session_factory=lambda: get_session(engine))
+    registry_manager = RegistryManager(Path("REGISTRY.yaml"))
+    skill_lifecycle = SkillLifecycleService(
+        skill_loader=skill_loader,
+        registry_manager=registry_manager,
+        regression_checker=regression_checker,
+        token_manager=token_manager,
+        audit_service=audit,
+        db_session_factory=lambda: get_session(engine),
+    )
+
     return {
         "token_manager": token_manager,
         "audit": audit,
@@ -241,6 +258,9 @@ def _get_services() -> dict:
         "visualization": visualization,
         "r_output_dir": r_output_dir,
         "viz_output_dir": viz_output_dir,
+        # Phase 8: Skill self-improvement
+        "skill_lifecycle": skill_lifecycle,
+        "session_factory": lambda: get_session(engine),
     }
 
 
@@ -703,19 +723,20 @@ def _execute_continuation(services: dict) -> None:
                      f"追加解析完了 (p={new_sr.get('p_value') if new_sr else 'N/A'})", "INFO")
 
 
-_SCREENS = ("dashboard", "intent", "data_preview", "workflow", "quality", "analysis", "results", "audit", "knowledge", "settings")
+_SCREENS = ("dashboard", "intent", "data_preview", "workflow", "quality", "analysis", "results", "audit", "knowledge", "skill_improvement", "settings")
 
 _NAV_LABELS: dict[str, str] = {
-    "dashboard":    "ダッシュボード",
-    "intent":       "研究意図入力",
-    "data_preview": "データプレビュー",
-    "workflow":     "ワークフロー",
-    "quality":   "データ品質",
-    "analysis":  "統計解析",
-    "results":   "結果・レポート",
-    "audit":     "監査ログ",
-    "knowledge": "知識管理",
-    "settings":  "設定",
+    "dashboard":        "ダッシュボード",
+    "intent":           "研究意図入力",
+    "data_preview":     "データプレビュー",
+    "workflow":         "ワークフロー",
+    "quality":          "データ品質",
+    "analysis":         "統計解析",
+    "results":          "結果・レポート",
+    "audit":            "監査ログ",
+    "knowledge":        "知識管理",
+    "skill_improvement": "Skill改善",
+    "settings":         "設定",
 }
 
 
@@ -779,6 +800,8 @@ def _init_session_state() -> None:
         "analysis_history":              [],    # list of completed continuation entries
         "continuation_pending_payload":  None,  # StatisticsAgent output awaiting human review
         "statistical_results":           None,  # latest parsed statistical_results
+        # Phase 8: skill self-improvement
+        "skill_proposals":               [],    # cached list of proposals for the UI
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -886,6 +909,42 @@ def _render_right_pane_content() -> None:
             services = _get_services()
             _execute_continuation(services)
 
+        elif action == "apply_skill_proposal":
+            services = _get_services()
+            proposal_id = (st.session_state.get("approval_context") or {}).get(
+                "proposal_id", ""
+            )
+            from cie.security.capability_token import CapabilityScope
+            token = services["token_manager"].issue(
+                execution_id=str(uuid.uuid4()),
+                agent_id="skill_lifecycle",
+                step_id="skill_proposal_approve",
+                requested_scopes={CapabilityScope.SKILL_UPDATE_CORE},
+            )
+            try:
+                with st.spinner("Skillを更新中..."):
+                    asyncio.run(
+                        services["skill_lifecycle"].apply_approved_proposal(
+                            proposal_id, token, {"action": "approved"}
+                        )
+                    )
+                st.success("Skill が更新されました（バージョンアップ・旧版アーカイブ完了）")
+                st.session_state["skill_proposals"] = []  # force refresh on next render
+                _append_activity(
+                    agent_id="skill_lifecycle",
+                    action="skill_proposal_approved",
+                    summary=f"proposal {proposal_id[:8]} を承認・適用しました",
+                    severity="INFO",
+                )
+            except Exception as exc:
+                st.error(f"Skill更新エラー: {exc}")
+                _append_activity(
+                    agent_id="skill_lifecycle",
+                    action="skill_proposal_apply_failed",
+                    summary=str(exc)[:200],
+                    severity="CRITICAL",
+                )
+
         elif action == "resume_security_review":
             services = _get_services()
             execution_id = st.session_state.get("execution_id")
@@ -974,6 +1033,9 @@ def render_main_content() -> None:
 
     elif screen == "knowledge":
         _handle_knowledge()
+
+    elif screen == "skill_improvement":
+        _handle_skill_improvement()
 
     elif screen == "settings":
         _handle_settings()
@@ -1349,6 +1411,147 @@ def _handle_knowledge() -> None:
             )
         except Exception as exc:
             st.error(f"アーカイブエラー: {exc}")
+        st.rerun()
+
+
+def _handle_skill_improvement() -> None:
+    """Phase 8 — Skill自己改善画面.
+
+    Loads pending SkillImprovementProposals from the DB and renders the
+    review UI.  Approve / reject events are returned from the component and
+    handled here so session_state mutation stays in app.py (UP-002).
+    """
+    from cie.core.database import SkillImprovementProposalRow, get_session
+    from sqlalchemy import select
+
+    services = _get_services()
+
+    # Fetch proposals (pending first, then reviewed) — cache in session_state
+    # and refresh on explicit rerun so the list is not re-queried every render.
+    if not st.session_state.get("skill_proposals"):
+        try:
+            session_factory = services["session_factory"]
+            async def _load() -> list[dict]:
+                async with session_factory() as sess:
+                    stmt = (
+                        select(SkillImprovementProposalRow)
+                        .order_by(SkillImprovementProposalRow.generated_at.desc())
+                        .limit(50)
+                    )
+                    rows = (await sess.execute(stmt)).scalars().all()
+                    return [
+                        {
+                            "proposal_id":    r.proposal_id,
+                            "target_skill_id": r.target_skill_id,
+                            "target_namespace": r.target_namespace,
+                            "current_version": r.current_version,
+                            "proposed_version": r.proposed_version,
+                            "trigger_id":      r.trigger_id,
+                            "trigger_evidence": r.trigger_evidence or {},
+                            "proposed_changes": r.proposed_changes or [],
+                            "status":          r.status,
+                            "generated_at":    str(r.generated_at)[:19],
+                            "human_decision":  r.human_decision or {},
+                            "reviewed_at":     str(r.reviewed_at)[:19] if r.reviewed_at else "",
+                        }
+                        for r in rows
+                    ]
+            st.session_state["skill_proposals"] = asyncio.run(_load())
+        except Exception as exc:
+            st.error(f"提案の読み込みエラー: {exc}")
+            st.session_state["skill_proposals"] = []
+
+    proposals: list[dict] = st.session_state.get("skill_proposals", [])
+
+    col_refresh, col_trigger = st.columns([1, 4])
+    if col_refresh.button("🔄 更新", key="skill_proposals_refresh"):
+        st.session_state["skill_proposals"] = []
+        st.rerun()
+
+    # Allow manually triggering evaluation on a specific skill (SE-004)
+    with col_trigger.expander("手動でSkill評価をトリガー", expanded=False):
+        skill_id_input = st.text_input(
+            "Skill ID (例: statistics/t-test)",
+            key="manual_eval_skill_id",
+        )
+        if st.button("評価リクエスト (SE-004)", key="manual_eval_trigger"):
+            if skill_id_input:
+                try:
+                    with st.spinner("提案を生成中..."):
+                        proposal = asyncio.run(
+                            services["skill_lifecycle"].generate_proposal(
+                                skill_id_input, "SE-004", {"manual": True}
+                            )
+                        )
+                    st.success(
+                        f"提案を生成しました: `{proposal.proposal_id[:8]}…`"
+                        f"  ({proposal.current_version} → {proposal.proposed_version})"
+                    )
+                    st.session_state["skill_proposals"] = []  # force refresh
+                    _append_activity(
+                        agent_id="skill_lifecycle",
+                        action="manual_proposal_generated",
+                        summary=f"{skill_id_input} の SE-004 提案を生成",
+                        severity="INFO",
+                    )
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"提案生成エラー: {exc}")
+            else:
+                st.warning("Skill ID を入力してください")
+
+    event = render_skill_improvement(proposals)
+
+    # Reject — no approval panel needed; apply directly
+    if event.get("reject_proposal"):
+        pid = event["reject_proposal"]
+        from cie.security.capability_token import CapabilityScope
+        token = services["token_manager"].issue(
+            execution_id=str(uuid.uuid4()),
+            agent_id="skill_lifecycle",
+            step_id="skill_proposal_reject",
+            requested_scopes={CapabilityScope.SKILL_UPDATE_CORE},
+        )
+        try:
+            asyncio.run(
+                services["skill_lifecycle"].apply_approved_proposal(
+                    pid, token, {"action": "rejected"}
+                )
+            )
+            st.success("提案を却下しました")
+            st.session_state["skill_proposals"] = []
+            _append_activity(
+                agent_id="skill_lifecycle",
+                action="skill_proposal_rejected",
+                summary=f"proposal {pid[:8]} を却下しました",
+                severity="INFO",
+            )
+        except Exception as exc:
+            st.error(f"却下エラー: {exc}")
+        st.rerun()
+
+    # Approve — route through the shared approval panel (irreversible)
+    if event.get("approve_proposal"):
+        pid = event["approve_proposal"]
+        proposal_info = next(
+            (p for p in proposals if p["proposal_id"] == pid), {}
+        )
+        skill_id = proposal_info.get("target_skill_id", pid[:8])
+        cv = proposal_info.get("current_version", "?")
+        pv = proposal_info.get("proposed_version", "?")
+        st.session_state["approval_pending"] = True
+        st.session_state["approval_context"] = {
+            "action": "apply_skill_proposal",
+            "proposal_id": pid,
+            "title": f"Skill を更新します: {skill_id}  ({cv} → {pv})",
+            "description": (
+                f"**対象 Skill:** `{skill_id}`\n\n"
+                f"**バージョン:** `{cv}` → `{pv}`\n\n"
+                "承認すると SKILL.md に提案された変更が挿入され、"
+                "旧バージョンがアーカイブされます。この操作は取り消せません。"
+            ),
+            "is_irreversible": True,
+        }
         st.rerun()
 
 
