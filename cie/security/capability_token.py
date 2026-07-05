@@ -169,6 +169,7 @@ class CapabilityTokenManager:
         "visualization": {
             CapabilityScope.DATASET_READ_VALIDATED,
             CapabilityScope.R_CODE_GENERATE_TEMPLATE,
+            CapabilityScope.RUNTIME_INVOKE_EXECUTION,
             CapabilityScope.AUDIT_WRITE_ENTRY,
         },
         "reporting": {
@@ -188,6 +189,11 @@ class CapabilityTokenManager:
         "runtime": {
             CapabilityScope.RUNTIME_INVOKE_EXECUTION,
             CapabilityScope.AUDIT_WRITE_ENTRY,
+        },
+        "evaluation": {
+            CapabilityScope.WORKFLOW_STATE_READ,
+            CapabilityScope.AUDIT_WRITE_ENTRY,
+            CapabilityScope.SKILL_READ_PERFORMANCE,
         },
     }
 

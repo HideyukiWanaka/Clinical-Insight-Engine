@@ -1,0 +1,15 @@
+{
+  "version": "1.0",
+  "entries": {
+    "27ca9baafb20ef9a4dc260374fcca497352d4dc87383c6401d90fefcc977ed2f": {
+      "signature": "99cb5585c26e3f3eea1a137c8256e17948fb6db6bd58546fe57aa40bd9e12f15",
+      "method_id": "box_plot_with_jitter",
+      "r_script": "set.seed(42)\nlibrary(ggplot2)\n\nokabe_ito <- c(\"#E69F00\",\"#56B4E9\",\"#009E73\",\"#F0E442\",\n               \"#0072B2\",\"#D55E00\",\"#CC79A7\",\"#000000\")\n\ntryCatch({\n  data <- read.csv(file.path(Sys.getenv(\"WORKSPACE_DIR\"), \"dataset.csv\"),\n                   stringsAsFactors = FALSE)\n\n  # Defensive column detection\n  group_col   <- names(data)[1]\n  outcome_col <- names(data)[2]\n\n  cie_theme <- theme_classic() +\n    theme(\n      text          = element_text(size = 10),\n      axis.title    = element_text(size = 10, face = \"bold\"),\n      axis.text     = element_text(size = 9),\n      legend.position = \"none\",\n      panel.grid.major = element_line(color = \"grey90\", linewidth = 0.3),\n      panel.grid.minor = element_blank()\n    )\n\n  p <- ggplot(data, aes(x = .data[[group_col]],\n                        y = .data[[outcome_col]],\n                        fill = .data[[group_col]])) +\n    geom_boxplot(outlier.shape = NA, alpha = 0.7) +\n    geom_jitter(width = 0.15, alpha = 0.5, size = 1.5, colour = \"grey40\") +\n    scale_fill_manual(values = okabe_ito) +\n    cie_theme +\n    labs(x = group_col, y = outcome_col, title = \"Group Comparison\") +\n    annotate(\"text\", x = 1.5,\n             y = max(data[[outcome_col]], na.rm = TRUE) * 1.02,\n             label = \"p < 0.001  d = 1.04\", size = 3.5, fontface = \"italic\")\n\n  out_path <- file.path(Sys.getenv(\"OUTPUT_DIR\"), \"figure_fig_box_plot_with_jitter_001.png\")\n  ggsave(out_path, plot = p, width = 180, height = 120, units = \"mm\", dpi = 300)\n  cat(sprintf(\"figure_saved: %s\\n\", out_path))\n\n}, error = function(e) {\n  cat(\"ERROR:\", conditionMessage(e), \"\\n\")\n  quit(status = 1)\n})",
+      "llm_provider": "stub",
+      "llm_model": "stub-model",
+      "created_at": "2026-07-04T13:43:18.611555+00:00",
+      "last_used_at": "2026-07-04T13:43:18.611555+00:00",
+      "use_count": 0
+    }
+  }
+}

@@ -39,6 +39,9 @@ class WorkflowNodeDef:
         depends_on: Node IDs that must complete before this node may run.
         outputs: Artifact keys produced by this node.
         description: Optional human-readable description.
+        rules: Decision routing table for ``node_type="decision"`` nodes.
+            Shape: ``{condition_key: {True: target_node_id, False: ...}}``
+            (spec/workflow.yaml ``rules:``). Empty for non-decision nodes.
     """
 
     node_id: str
@@ -47,6 +50,7 @@ class WorkflowNodeDef:
     depends_on: list[str] = field(default_factory=list)
     outputs: list[str] = field(default_factory=list)
     description: str = ""
+    rules: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -189,6 +193,7 @@ class WorkflowRegistry:
                 outputs: list[str] = (
                     outputs_raw if isinstance(outputs_raw, list) else [outputs_raw]
                 )
+                rules_raw = node_body.get("rules") or {}
                 nodes[node_id] = WorkflowNodeDef(
                     node_id=node_id,
                     node_type=node_type,  # type: ignore[arg-type]
@@ -196,6 +201,7 @@ class WorkflowRegistry:
                     depends_on=depends_on,
                     outputs=outputs,
                     description=node_body.get("description", ""),
+                    rules=rules_raw if isinstance(rules_raw, dict) else {},
                 )
 
             registry._definitions[wf_id] = WorkflowDefinition(

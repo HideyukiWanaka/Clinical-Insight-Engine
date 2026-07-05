@@ -278,12 +278,16 @@ class Orchestrator:
         self,
         execution_id: str,
         human_decision: dict,
-    ) -> None:
+    ) -> dict:
         """Resume a suspended workflow after human decision.
 
         Args:
             execution_id: The execution that is in WAITING_FOR_HUMAN state.
             human_decision: Structured decision payload from the human operator.
+
+        Returns:
+            A result dict ``{"execution_id", "final_state", "node_results"}``
+            covering the nodes executed after resumption.
         """
         await self._write_audit(
             execution_id=execution_id,
@@ -303,13 +307,18 @@ class Orchestrator:
             )
         # Merge human decision into context and continue from suspended node
         checkpoint["context"].update(human_decision)
-        await self._task_dispatch_loop(
+        loop_result = await self._task_dispatch_loop(
             execution_id=execution_id,
             workflow_def=checkpoint["workflow_def"],
             initial_payload=checkpoint["context"],
             current_state=WorkflowState.RUNNING,
             skip_nodes=checkpoint["completed_nodes"],
         )
+        return {
+            "execution_id": execution_id,
+            "final_state": loop_result["final_state"],
+            "node_results": loop_result["node_results"],
+        }
 
     async def run_system_workflow(
         self,
@@ -426,6 +435,29 @@ class Orchestrator:
             # Step 2 — verify preconditions (node_type sanity)
             agent_id = node_def.agent_id
             if not agent_id:
+                # Agentless decision nodes route purely on their static rules
+                # (e.g. decision_assumption normality branch). The non-selected
+                # branch targets are pruned so only one path executes.
+                if node_def.node_type == "decision" and node_def.rules:
+                    pruned = await self._apply_decision_rules(
+                        execution_id=execution_id,
+                        node_def=node_def,
+                        workflow_def=workflow_def,
+                        accumulated_context=accumulated_context,
+                        completed_nodes=completed_nodes,
+                    )
+                    completed_nodes.update(pruned)
+                    completed_nodes.add(node_id)
+                    ready_queue.extend(self._find_ready(node_id, workflow_def, completed_nodes))
+                    # Nodes downstream of a pruned branch (e.g. security_review
+                    # after generate_r_script) are unblocked by the pruning and
+                    # must be queued AFTER the selected branch so the selected
+                    # branch executes first (FIFO order).
+                    for pruned_id in sorted(pruned):
+                        ready_queue.extend(
+                            self._find_ready(pruned_id, workflow_def, completed_nodes)
+                        )
+                    continue
                 completed_nodes.add(node_id)
                 ready_queue.extend(self._find_ready(node_id, workflow_def, completed_nodes))
                 continue
@@ -470,7 +502,26 @@ class Orchestrator:
             # Step 9 — advance: mark complete, accumulate context, find next nodes
             completed_nodes.add(node_id)
             accumulated_context.update(result.output_payload)
+            # Decision nodes that carry both an agent and static rules
+            # (e.g. select_prediction_method) route AFTER the agent output has
+            # been merged so rule conditions can read it.
+            pruned: set[str] = set()
+            if node_def.node_type == "decision" and node_def.rules:
+                pruned = await self._apply_decision_rules(
+                    execution_id=execution_id,
+                    node_def=node_def,
+                    workflow_def=workflow_def,
+                    accumulated_context=accumulated_context,
+                    completed_nodes=completed_nodes,
+                )
+                completed_nodes.update(pruned)
             ready_queue.extend(self._find_ready(node_id, workflow_def, completed_nodes))
+            # Queue nodes unblocked by pruned branches after the selected
+            # branch so the selected branch executes first (FIFO order).
+            for pruned_id in sorted(pruned):
+                ready_queue.extend(
+                    self._find_ready(pruned_id, workflow_def, completed_nodes)
+                )
 
         # All nodes processed
         current_state = self._state_machine.transition(
@@ -672,6 +723,136 @@ class Orchestrator:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    async def _apply_decision_rules(
+        self,
+        execution_id: str,
+        node_def: WorkflowNodeDef,
+        workflow_def: WorkflowDefinition,
+        accumulated_context: dict,
+        completed_nodes: set[str],
+    ) -> set[str]:
+        """Evaluate a decision node's static rules and prune unselected branches.
+
+        Rule shape (spec/workflow.yaml)::
+
+            rules:
+              normality:
+                true: generate_r_script
+                false: select_nonparametric
+
+        The condition value is resolved deterministically from the
+        accumulated context (never invented). The selected route is recorded
+        under ``accumulated_context["decision_routes"][node_id]`` and every
+        non-selected branch target that exists as a DAG node is returned so
+        the dispatch loop can mark it completed (= skipped). Branch targets
+        that are labels rather than node IDs (e.g. ``random_effects`` in the
+        meta workflow) are recorded in the route only.
+
+        Returns:
+            Set of node IDs to prune (may be empty).
+        """
+        pruned: set[str] = set()
+        routes: dict = accumulated_context.setdefault("decision_routes", {})
+
+        for condition_key, branches in node_def.rules.items():
+            if not isinstance(branches, dict):
+                continue
+            value, source = self._resolve_condition_value(
+                condition_key, accumulated_context
+            )
+            # YAML parses `true:` / `false:` keys as booleans, but tolerate
+            # string keys ("true"/"false") in hand-written definitions.
+            normalized = {
+                (k if isinstance(k, bool) else str(k).strip().lower() == "true"): v
+                for k, v in branches.items()
+            }
+            selected = normalized.get(value)
+            not_selected = [v for k, v in normalized.items() if k != value]
+
+            routes[node_def.node_id] = {
+                "condition": condition_key,
+                "value": value,
+                "value_source": source,
+                "selected": selected,
+                "pruned": [t for t in not_selected if t in workflow_def.nodes],
+            }
+
+            for target in not_selected:
+                if target in workflow_def.nodes and target not in completed_nodes:
+                    pruned.add(target)
+
+            await self._write_audit(
+                execution_id=execution_id,
+                agent_id="orchestrator",
+                action=f"DECISION_ROUTED:{node_def.node_id}",
+                status="success",
+                payload={
+                    "node_id": node_def.node_id,
+                    "condition": condition_key,
+                    "value": value,
+                    "value_source": source,
+                    "selected_branch": selected,
+                    "pruned_nodes": sorted(pruned),
+                },
+            )
+
+        return pruned
+
+    @staticmethod
+    def _resolve_condition_value(condition_key: str, context: dict) -> tuple[bool, str]:
+        """Resolve a decision condition to a boolean from the accumulated context.
+
+        Resolution order (first hit wins; fully deterministic):
+          1. Top-level context key (e.g. a prior node wrote ``normality``).
+          2. Well-known report containers that upstream nodes merge into the
+             context (``assumption_report``, ``epp_report``, ``analysis_plan``,
+             ``data_quality_report``, ``intent_object``).
+          3. Semantic fallback for ``normality``: the Planner's
+             ``distribution_assumptions`` field (``assumed_normal`` → True,
+             ``non_parametric`` → False).
+          4. Default ``True`` — the primary (parametric / sufficient) branch.
+             This is the documented default, not a guess: the selected branch
+             re-validates its own assumptions downstream.
+
+        Returns:
+            ``(value, source)`` where ``source`` names where the value came
+            from (for the audit trail).
+        """
+        def _to_bool(raw: object) -> bool:
+            if isinstance(raw, bool):
+                return raw
+            if isinstance(raw, str):
+                lowered = raw.strip().lower()
+                if lowered in {"true", "yes", "passed", "normal", "assumed_normal", "sufficient"}:
+                    return True
+                if lowered in {"false", "no", "failed", "non_parametric", "nonparametric", "insufficient"}:
+                    return False
+            return bool(raw)
+
+        if condition_key in context and not isinstance(context[condition_key], dict):
+            return _to_bool(context[condition_key]), "context_top_level"
+
+        for container_key in (
+            "assumption_report",
+            "epp_report",
+            "analysis_plan",
+            "data_quality_report",
+            "intent_object",
+        ):
+            container = context.get(container_key)
+            if isinstance(container, dict) and condition_key in container:
+                return _to_bool(container[condition_key]), container_key
+
+        if condition_key == "normality":
+            intent = context.get("intent_object") or {}
+            distribution = str(intent.get("distribution_assumptions") or "").lower()
+            if distribution == "assumed_normal":
+                return True, "intent_object.distribution_assumptions"
+            if distribution in {"non_parametric", "nonparametric"}:
+                return False, "intent_object.distribution_assumptions"
+
+        return True, "default_primary_branch"
 
     def _find_ready(
         self,

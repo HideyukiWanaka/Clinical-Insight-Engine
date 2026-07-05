@@ -29,6 +29,7 @@ from cie.knowledge.reference_library import MarkdownReferenceLibrary
 from cie.schemas.validator import SchemaRegistry
 from cie.security.capability_token import CapabilityScope
 from cie.security.policy_engine import PolicyEngine
+from cie.skills.loader import SkillLoader
 
 _log = logging.getLogger(__name__)
 
@@ -225,6 +226,25 @@ _METHODS: dict[str, dict] = {
     },
 }
 
+# ---------------------------------------------------------------------------
+# Method-ID → Skill-ID mapping (ADR-0002: user/ > core/ priority via SkillLoader)
+# ---------------------------------------------------------------------------
+
+_METHOD_TO_SKILL_ID: dict[str, str] = {
+    "independent_samples_t_test": "statistics/t-test",
+    "mann_whitney_u_test": "statistics/t-test",
+    "paired_t_test": "statistics/t-test",
+    "wilcoxon_signed_rank_test": "statistics/t-test",
+    "one_way_anova": "statistics/anova",
+    "kruskal_wallis_test": "statistics/anova",
+    "pearson_correlation": "statistics/correlation",
+    "spearman_rank_correlation": "statistics/correlation",
+    "multiple_linear_regression": "statistics/regression",
+    "logistic_regression": "statistics/regression",
+    "kaplan_meier_estimator": "statistics/survival",
+    "chi_square_test_or_fishers_exact": "statistics/t-test",
+}
+
 _ASSUMPTION_CHECKS_BY_METHOD: dict[str, list[dict]] = {
     "independent_samples_t_test": [
         {
@@ -293,6 +313,7 @@ class StatisticsAgent(BaseAgent):
         llm_client: LLMClient | None = None,
         reference_library: MarkdownReferenceLibrary | None = None,
         script_cache: RScriptCache | None = None,
+        skill_loader: SkillLoader | None = None,
     ) -> None:
         super().__init__(policy_engine, schema_registry, audit_service)
         # When llm_client is None the agent falls back to specification-only
@@ -300,6 +321,7 @@ class StatisticsAgent(BaseAgent):
         self._llm_client = llm_client
         self._reference_library = reference_library
         self._script_cache = script_cache
+        self._skill_loader = skill_loader
 
     @property
     def agent_id(self) -> str:
@@ -350,6 +372,12 @@ class StatisticsAgent(BaseAgent):
         n_groups: int | None = intent_obj.get("n_groups_estimate")
         paired: bool | None = intent_obj.get("paired")
         distribution: str = intent_obj.get("distribution_assumptions", "unknown")
+
+        # decision_assumption routed to the nonparametric fallback branch
+        # (spec/workflow.yaml rules.normality=false → select_nonparametric):
+        # force a nonparametric method regardless of the original assumption.
+        if agent_input.node_id == "select_nonparametric":
+            distribution = "non_parametric"
 
         # Step 3 — method selection
         method = self._select_method(objective, outcome_type, n_groups, paired, distribution)
@@ -483,8 +511,14 @@ class StatisticsAgent(BaseAgent):
             references = self._reference_library.retrieve(query_terms, top_k=2)
             provenance["knowledge_references"] = [r.title for r in references]
 
-        # 3. Build prompt and call the LLM
-        system_prompt = _R_GEN_SYSTEM_PROMPT
+        # 3. Build prompt (optionally grounded with SKILL.md instructions)
+        skill_id = _METHOD_TO_SKILL_ID.get(method["method_id"])
+        skill_block = (
+            self._skill_loader.get_skill_prompt_block(skill_id)
+            if self._skill_loader is not None and skill_id
+            else ""
+        )
+        system_prompt = _R_GEN_SYSTEM_PROMPT + skill_block
         user_message = self._build_r_gen_user_message(
             method, intent_obj, column_metadata, references
         )

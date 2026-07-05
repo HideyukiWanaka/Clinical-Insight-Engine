@@ -16,6 +16,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from cie.reporting.format_context import build_format_context
 from cie.reporting.result_formatter import format_statistical_results
 from cie.ui.components.right_pane import render_right_pane
 from cie.ui.components.status_bar import render_status_bar
@@ -27,6 +28,7 @@ from cie.ui.screens.intent_entry import render_intent_entry, render_intent_previ
 from cie.ui.screens.knowledge_management import render_knowledge_management
 from cie.ui.screens.quality_review import render_quality_review
 from cie.ui.screens.settings import render_settings
+from cie.ui.screens.format_selection import render_format_selection
 from cie.ui.screens.results import render_results
 from cie.ui.screens.workflow_view import render_workflow_view
 
@@ -62,6 +64,7 @@ def _get_services() -> dict:
     """
     from cie.agents.base import AgentInput  # noqa: F401 — re-exported for handlers
     from cie.agents.data_quality import DataQualityAgent
+    from cie.agents.evaluation import EvaluationAgent
     from cie.agents.planner import PlannerAgent
     from cie.agents.reporting import ReportingAgent
     from cie.agents.reviewer import ReviewerAgent
@@ -145,15 +148,41 @@ def _get_services() -> dict:
     # structurally-identical analyses.
     reference_library = MarkdownReferenceLibrary(knowledge_root)
     r_script_cache = RScriptCache()
+    # SkillLoader: user/ > core/ priority (ADR-0002 Principle 3)
+    from cie.skills.loader import SkillLoader
+    skill_loader = SkillLoader(Path("skills"))
     statistics    = StatisticsAgent(
         policy_engine, schema_registry, audit,
         llm_client=llm_client,
         reference_library=reference_library,
         script_cache=r_script_cache,
+        skill_loader=skill_loader,
     )
-    visualization = VisualizationAgent(policy_engine, schema_registry, audit)
-    reporting     = ReportingAgent(policy_engine, schema_registry, audit)
+    viz_output_dir = workspace / "viz_output"
+    viz_output_dir.mkdir(parents=True, exist_ok=True)
+    viz_local_executor = LocalRExecutor(
+        workspace_dir=workspace, output_dir=viz_output_dir, context_guard=context_guard
+    )
+    viz_runtime_provider = RuntimeProvider(local_executor=viz_local_executor)
+    visualization = VisualizationAgent(
+        policy_engine, schema_registry, audit,
+        llm_client=llm_client,
+        reference_library=reference_library,
+        script_cache=r_script_cache,
+        runtime_provider=viz_runtime_provider,
+        workspace_dir=workspace / "viz_scripts",
+        output_dir=viz_output_dir,
+        skill_loader=skill_loader,
+    )
+    reporting     = ReportingAgent(
+        policy_engine, schema_registry, audit,
+        llm_client=llm_client,
+        reference_library=reference_library,
+        skill_loader=skill_loader,
+    )
     reviewer      = ReviewerAgent(policy_engine, schema_registry, audit)
+    # Evaluation agent — final DAG stage (correctness/statistical/security/usability)
+    evaluation    = EvaluationAgent(policy_engine, schema_registry, audit)
 
     # Runtime agent — executes upstream-generated R scripts in the sandbox
     r_output_dir = workspace / "r_output"
@@ -176,6 +205,7 @@ def _get_services() -> dict:
         "reporting":     reporting,
         "reviewer":      reviewer,
         "runtime":       runtime_agent,
+        "evaluation":    evaluation,
     }
 
     # Workflow engine
@@ -204,6 +234,7 @@ def _get_services() -> dict:
         "knowledge_loader": knowledge_loader,
         "orchestrator": orchestrator,
         "cache_store": cache_store,
+        "skill_loader": skill_loader,
     }
 
 
@@ -215,12 +246,16 @@ def _build_dataset_context(csv_bytes: bytes | None) -> dict:
     the Orchestrator merges into the workflow's initial payload:
       - dataset_structural_metadata: {column: {inferred_type}} for the LLM
       - data_quality_report: a passing gate so the Statistics node proceeds
+      - DatasetMetadata fields (metadata_type/columns/row_count/...): the
+        aggregate-only input the Data Quality nodes validate (DQ-001 — column
+        names are replaced by var_n aliases; no row values are included)
     Returns an empty dict when no dataset was uploaded.
     """
     if not csv_bytes:
         return {}
 
     import io
+    from datetime import datetime, timezone
     from pathlib import Path
 
     import pandas as pd
@@ -232,9 +267,13 @@ def _build_dataset_context(csv_bytes: bytes | None) -> dict:
     (workspace / "dataset.csv").write_bytes(csv_bytes)
 
     metadata: dict = {}
+    dq_columns: list[dict] = []
+    var_n_alias_map: dict[str, str] = {}
+    row_count = 0
     try:
         df = pd.read_csv(io.BytesIO(csv_bytes))
-        for col in df.columns:
+        row_count = int(len(df))
+        for idx, col in enumerate(df.columns, start=1):
             series = df[col]
             if pd.api.types.is_numeric_dtype(series):
                 inferred = "continuous"
@@ -246,8 +285,21 @@ def _build_dataset_context(csv_bytes: bytes | None) -> dict:
                 "inferred_type": inferred,
                 "unique_count": int(series.nunique(dropna=True)),
             }
+            var_n = f"var_{idx}"
+            var_n_alias_map[var_n] = str(col)
+            missing_count = int(series.isna().sum())
+            dq_columns.append({
+                "var_n": var_n,
+                "inferred_type": inferred,
+                "missing_count": missing_count,
+                "missing_rate_pct": (
+                    round(missing_count / row_count * 100.0, 2) if row_count else 0.0
+                ),
+            })
     except Exception:
         metadata = {}
+        dq_columns = []
+        var_n_alias_map = {}
 
     return {
         "dataset_structural_metadata": metadata,
@@ -256,6 +308,16 @@ def _build_dataset_context(csv_bytes: bytes | None) -> dict:
         # so the analysis proceeds; the data_quality node still runs and can
         # override this with its own findings.
         "data_quality_report": {"quality_gate_passed": True},
+        # DatasetMetadata contract consumed by the Data Quality nodes
+        # (validate_dataset / classify_variables / detect_missing_values /
+        # detect_outliers). Aggregates only — DQ-001.
+        "dataset_id": "uploaded_dataset",
+        "metadata_type": "validated_structural",
+        "row_count": row_count,
+        "column_count": len(dq_columns),
+        "columns": dq_columns,
+        "var_n_alias_map": var_n_alias_map,
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -273,9 +335,16 @@ def _reload_knowledge_state(services: dict) -> None:
 
 def _unpack_workflow_result(result: dict) -> None:
     """Expand Orchestrator node_results into per-screen session_state keys."""
-    node_results: list[dict] = result.get("node_results", [])
-    node_statuses: dict = {}
-    node_outputs: dict = {}
+    import dataclasses
+
+    raw_results: list = result.get("node_results", [])
+    # Orchestrator returns TaskDispatchResult dataclasses — normalize to dicts
+    node_results: list[dict] = [
+        dataclasses.asdict(nr) if dataclasses.is_dataclass(nr) else nr
+        for nr in raw_results
+    ]
+    node_statuses: dict = dict(st.session_state.get("node_statuses") or {})
+    node_outputs: dict = dict(st.session_state.get("node_outputs") or {})
     for nr in node_results:
         nid = nr.get("node_id", "")
         node_statuses[nid] = nr.get("status", "unknown")
@@ -294,14 +363,96 @@ def _unpack_workflow_result(result: dict) -> None:
             st.session_state["statistical_results_formatted"] = format_statistical_results(
                 sr, payload.get("statistical_results_reason")
             )
+        elif agent == "visualization":
+            payload = nr.get("output_payload", {})
+            fig_manifest: list = payload.get("figure_manifest") or []
+            st.session_state["figures"] = [
+                {
+                    "title": f.get("figure_id", "Figure"),
+                    "path": f.get("actual_path"),
+                }
+                for f in fig_manifest
+                if isinstance(f, dict)
+            ]
+        elif agent == "reporting":
+            payload = nr.get("output_payload", {})
+            sections_list: list = payload.get("manuscript_sections") or []
+            unresolved: list = payload.get("unresolved_items") or []
+            # Convert list → dict keyed by section_id for render_results
+            sections_dict: dict = {}
+            for sec in sections_list:
+                if not isinstance(sec, dict):
+                    continue
+                sid = sec.get("section_id", "unknown")
+                sections_dict[sid] = {
+                    "text": sec.get("content", ""),
+                    "is_ai_generated": sec.get("llm_generated", False),
+                    "unresolved_items": [],
+                }
+            # Attach top-level unresolved_items to the results section if present
+            if unresolved and "results" in sections_dict:
+                sections_dict["results"]["unresolved_items"] = [
+                    {"item_id": f"RP-{i+1:03d}", "description": item}
+                    for i, item in enumerate(unresolved)
+                ]
+            st.session_state["manuscript_sections"] = sections_dict
         elif agent == "reviewer":
             st.session_state["review_result"] = nr.get("output_payload", {})
+        elif agent == "evaluation":
+            st.session_state["evaluation_report"] = nr.get("output_payload", {})
     st.session_state["node_statuses"] = node_statuses
     st.session_state["node_outputs"] = node_outputs
-    st.session_state["workflow_definition"] = {
-        "workflow_id": result.get("workflow_id_selected"),
-        "rule_id": result.get("rule_id"),
-        "justification": result.get("justification"),
+    st.session_state["workflow_state"] = result.get("final_state")
+    # resume_workflow results carry no workflow selection metadata — keep the
+    # definition recorded by the original run_workflow in that case.
+    if result.get("workflow_id_selected") is not None:
+        st.session_state["workflow_definition"] = {
+            "workflow_id": result.get("workflow_id_selected"),
+            "rule_id": result.get("rule_id"),
+            "justification": result.get("justification"),
+        }
+
+
+def _maybe_request_security_approval(result: dict) -> None:
+    """If the workflow paused at the security_review approval gate, surface
+    the generated R script in the approval panel so the human can review it
+    and resume the run (spec/workflow.yaml security_review, ADR human-in-loop).
+    """
+    import dataclasses
+
+    if result.get("final_state") != "waiting_for_human":
+        return
+
+    node_results = [
+        dataclasses.asdict(nr) if dataclasses.is_dataclass(nr) else nr
+        for nr in result.get("node_results", [])
+    ]
+    waiting = [
+        nr for nr in node_results
+        if nr.get("status") == "waiting_for_human"
+        and nr.get("node_id") == "security_review"
+    ]
+    if not waiting:
+        return
+
+    # The R script pending approval was produced by the generate_* node
+    r_script = ""
+    for nr in node_results:
+        payload = nr.get("output_payload") or {}
+        if payload.get("r_script"):
+            r_script = payload["r_script"]
+    description = (
+        "実行前のセキュリティレビューです。以下の生成Rスクリプトを確認し、"
+        "問題がなければ承認してください。承認するとサンドボックスで実行されます。\n\n"
+        f"```r\n{r_script.strip()}\n```" if r_script
+        else "実行前のセキュリティレビューです。生成Rスクリプトを確認のうえ承認してください。"
+    )
+    st.session_state["approval_pending"] = True
+    st.session_state["approval_context"] = {
+        "action": "resume_security_review",
+        "title": "R スクリプト実行の承認（security_review）",
+        "description": description,
+        "is_irreversible": False,
     }
 
 
@@ -351,6 +502,7 @@ def _init_session_state() -> None:
         "figures":                [],
         "manuscript_sections":    {},
         "review_result":          {},
+        "evaluation_report":      {},
         # Audit
         "audit_events":           [],
         "audit_selected_event":   None,
@@ -372,6 +524,10 @@ def _init_session_state() -> None:
         "settings_key_status":        {},
         # Workflow execution result
         "workflow_run_result": None,
+        # Format selection (Phase 5) — propagated to ReportingAgent via dataset_context
+        "format_checklist_id":   None,   # None = auto-infer from study_design
+        "format_journal_style":  "APA",  # "APA" / "AMA" / "Vancouver"
+        "format_skill_id":       None,   # None = use core reporting/manuscript-section
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -420,6 +576,10 @@ def _render_right_pane_content() -> None:
     # Handle approval / cancellation events from the right pane
     if pane_result.get("approved"):
         action = (st.session_state.get("approval_context") or {}).get("action")
+        # Clear the fulfilled approval BEFORE processing: the handler may queue
+        # a follow-up approval (e.g. security_review raised by run_workflow).
+        st.session_state["approval_pending"] = False
+        st.session_state["approval_context"] = None
 
         if action == "run_workflow":
             # session_state["intent_object"] holds the Planner output_payload;
@@ -431,6 +591,12 @@ def _render_right_pane_content() -> None:
             dataset_context = _build_dataset_context(
                 st.session_state.get("intent_csv_bytes")
             )
+            # Merge format selections (Phase 5) into the initial workflow context
+            dataset_context.update(build_format_context(
+                checklist_id=st.session_state.get("format_checklist_id"),
+                journal_style=st.session_state.get("format_journal_style", "APA"),
+                skill_id=st.session_state.get("format_skill_id"),
+            ))
             services = _get_services()
             with st.spinner("ワークフローを実行中..."):
                 try:
@@ -439,8 +605,12 @@ def _render_right_pane_content() -> None:
                             execution_id, intent_object, dataset_context=dataset_context
                         )
                     )
+                    st.session_state["execution_id"] = execution_id
                     st.session_state["workflow_run_result"] = result
                     _unpack_workflow_result(result)
+                    # security_review approval gate → surface the R script for
+                    # human review and queue the resume action.
+                    _maybe_request_security_approval(result)
                     st.session_state["current_screen"] = "workflow"
                     _append_activity(
                         agent_id="orchestrator",
@@ -461,8 +631,42 @@ def _render_right_pane_content() -> None:
                         severity="CRITICAL",
                     )
 
-        st.session_state["approval_pending"] = False
-        st.session_state["approval_context"] = None
+        elif action == "resume_security_review":
+            services = _get_services()
+            execution_id = st.session_state.get("execution_id")
+            with st.spinner("承認済み — ワークフローを再開中..."):
+                try:
+                    resume_result = asyncio.run(
+                        services["orchestrator"].resume_workflow(
+                            execution_id,
+                            {
+                                "execution_permission": True,
+                                "human_decision": {
+                                    "decision": "approved",
+                                    "node_id": "security_review",
+                                },
+                            },
+                        )
+                    )
+                    _unpack_workflow_result(resume_result)
+                    st.session_state["current_screen"] = "results"
+                    _append_activity(
+                        agent_id="orchestrator",
+                        action="workflow_resumed",
+                        summary=(
+                            f"再開後の最終状態: {resume_result.get('final_state', '')}"
+                        ),
+                        severity="INFO",
+                    )
+                except Exception as exc:
+                    st.error(f"ワークフロー再開エラー: {exc}")
+                    _append_activity(
+                        agent_id="orchestrator",
+                        action="resume_failed",
+                        summary=str(exc)[:200],
+                        severity="CRITICAL",
+                    )
+
         _append_activity(
             agent_id="human",
             action="approved",
@@ -646,6 +850,26 @@ def _handle_intent() -> None:
         st.session_state["intent_csv_bytes"] = current_csv_bytes
     if current_csv_filename is not None:
         st.session_state["intent_csv_filename"] = current_csv_filename
+
+    # --- Format selection panel (Phase 5) ---
+    # Render below the intent entry widget; collect any user/ skill IDs to list.
+    services = _get_services()
+    skill_loader = services.get("skill_loader")
+    user_skill_ids: list[str] = (
+        [m.skill_id for m in skill_loader.get_all_user_skills()]
+        if skill_loader is not None
+        else []
+    )
+    fmt = render_format_selection(
+        available_user_skills=user_skill_ids,
+        current_checklist=st.session_state.get("format_checklist_id"),
+        current_journal_style=st.session_state.get("format_journal_style", "APA"),
+        current_skill_id=st.session_state.get("format_skill_id"),
+    )
+    # Persist selections without triggering a full rerun (values are read at workflow start)
+    st.session_state["format_checklist_id"]  = fmt["checklist_id"]
+    st.session_state["format_journal_style"] = fmt["journal_style"]
+    st.session_state["format_skill_id"]      = fmt["skill_id"]
 
     if start_requested:
         st.session_state["approval_pending"] = True

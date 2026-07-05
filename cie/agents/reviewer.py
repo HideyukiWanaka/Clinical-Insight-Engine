@@ -100,12 +100,21 @@ class ReviewerAgent(BaseAgent):
 
     @property
     def output_schema_ref(self) -> str:
-        return "cie://schemas/report.schema.json"
+        # Dedicated permissive artifact schema: the output keys
+        # (review_passed / readiness_score / review_report) are the downstream
+        # contract read by the evaluation node and the UI. report.schema.json
+        # is the strict report *envelope* (additionalProperties: false) and
+        # does not admit this shape.
+        return "cie://schemas/review-report.schema.json"
 
     @property
     def required_scopes(self) -> list[CapabilityScope]:
+        # spec/permissions.yaml agent_permission_matrix.reviewer allows
+        # dataset.read_validated / audit.write_entry /
+        # skill.read_performance_records — workflow.state_read is NOT granted,
+        # so requesting it would fail the PolicyEngine scope check.
         return [
-            CapabilityScope.WORKFLOW_STATE_READ,
+            CapabilityScope.DATASET_READ_VALIDATED,
             CapabilityScope.AUDIT_WRITE_ENTRY,
         ]
 
@@ -127,7 +136,17 @@ class ReviewerAgent(BaseAgent):
 
         statistical_results: dict = payload.get("statistical_results") or {}
         figure_manifest: list = payload.get("figure_manifest") or []
-        manuscript_sections: dict = payload.get("manuscript_sections") or {}
+        manuscript_raw = payload.get("manuscript_sections") or {}
+        # ReportingAgent emits a list of {section_id, content, ...} dicts;
+        # normalize to the {section_id: text} mapping the checks below expect.
+        if isinstance(manuscript_raw, list):
+            manuscript_sections: dict = {
+                str(sec.get("section_id") or f"section_{i}"): str(sec.get("content") or "")
+                for i, sec in enumerate(manuscript_raw)
+                if isinstance(sec, dict)
+            }
+        else:
+            manuscript_sections = manuscript_raw
         reporting_checklist_status: dict = payload.get("reporting_checklist_status") or {}
 
         critical: list[dict] = []

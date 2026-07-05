@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cie://schemas/review-report.schema.json",
+  "title": "CIE Review Report (Reviewer Agent output)",
+  "description": "Output of the Reviewer Agent: CC-001..CC-007 consistency check findings, the review pass/fail verdict, and the readiness score. Internal artifact chained forward via accumulated_context (evaluation node reads review_report), so validation asserts shape but permits additional fields.",
+  "version": "1.0.0",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["execution_id", "review_passed", "readiness_score", "review_report"],
+  "properties": {
+    "execution_id": { "type": "string" },
+    "review_passed": { "type": "boolean" },
+    "readiness_score": { "type": "number", "minimum": 0, "maximum": 1 },
+    "critical_findings": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "advisory_findings": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "consistency_matrix": {
+      "type": "object",
+      "description": "check_id → passed | failed | skipped",
+      "additionalProperties": { "type": "string" }
+    },
+    "review_report": { "type": "object" }
+  }
+}

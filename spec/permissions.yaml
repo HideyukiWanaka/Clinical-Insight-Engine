@@ -189,6 +189,19 @@ agent_permission_matrix:
       - "workflow.*"
       - "skill.*"
 
+  # Added: Phase 6 — evaluation stage agent (wraps cie/evaluation/* evaluators)
+  evaluation:
+    allow:
+      - "workflow.state_read"
+      - "audit.write_entry"
+      - "skill.read_performance_records"   # ADR-0002 skill performance monitoring
+    deny:
+      - "dataset.read_raw"
+      - "r_code.*"
+      - "runtime.*"
+      - "skill.update_core"
+      - "skill.register_user"
+
   # Added: ADR-0002 — Skill Lifecycle service permissions
   skill_lifecycle:
     description: "Manages Skill evaluation, proposal generation, and update execution after human approval."

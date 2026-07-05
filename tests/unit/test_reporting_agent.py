@@ -128,9 +128,11 @@ class TestAgentIdentity:
 
     def test_agent_id_and_scopes(self, agent: ReportingAgent) -> None:
         assert agent.agent_id == "reporting"
-        assert CapabilityScope.DATASET_READ_VALIDATED in agent.required_scopes
+        # Must stay a subset of spec/permissions.yaml reporting.allow
+        # (report.compile_manuscript + audit.write_entry only)
         assert CapabilityScope.REPORT_COMPILE_MANUSCRIPT in agent.required_scopes
         assert CapabilityScope.AUDIT_WRITE_ENTRY in agent.required_scopes
+        assert CapabilityScope.DATASET_READ_VALIDATED not in agent.required_scopes
 
 
 # ---------------------------------------------------------------------------

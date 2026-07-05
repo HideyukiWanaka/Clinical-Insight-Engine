@@ -35,21 +35,23 @@ UI は Streamlit（`cie/ui/app.py`）。LLM は `cie/core/llm_client.py`（anthr
 
 ### 動く
 - Planner（自然言語→intent_object）LLM経由
-- **Statistics の実行可能R生成**（LLM＋ナレッジRAG＋キャッシュ）← 本セッションで実装、ハーネスで実証
-- Runtime サンドボックスR実行＋`result.json`→`statistical_results`パース ← 本セッションで実装
-- 結果整形 `cie/reporting/result_formatter.py` ← 本セッションで実装
+- **Statistics の実行可能R生成**（LLM＋ナレッジRAG＋キャッシュ）← フェーズ1で実装、ハーネスで実証
+- Runtime サンドボックスR実行＋`result.json`→`statistical_results`パース ← フェーズ1で実装
+- 結果整形 `cie/reporting/result_formatter.py` ← フェーズ1で実装
+- **Visualization ggplot2 実生成**（LLM＋RAG＋sandbox実行→実PNG）← フェーズ2で実装
+- **Reporting 実原稿生成**（LLM＋ナレッジRAG、APA/AMA/Vancouver、CONSORT/STROBE/TRIPOD+AI/PRISMA）← フェーズ3で実装
+- **Skill適用層**（SkillLoader: user/ > core/ 優先。statistics/visualization/reporting 注入済み）← フェーズ4で実装
+- **フォーマット選択UI**（チェックリスト/雑誌スタイル/ユーザーSkillをUI選択→reporting contextへ伝搬）← フェーズ5で実装
+- **フルDAGオーケストレーション**（decisionルーティング・EvaluationAgent・承認/再開・下流キー整合、E2Eハーネス完走）← フェーズ6で実装
 - ナレッジ取り込みパイプライン＋UI、data_quality、スキーマ検証、Capabilityトークン/ポリシー、planner セマンティックキャッシュ
 
 ### 未実装／未配線（＝残タスク。詳細は IMPLEMENTATION_PLAN.md）
-- Visualization：ggplot2 の**仕様のみ**（実行可能R・実図なし）
-- Reporting：**テンプレのみ**（LLM/ナレッジ未使用）
-- ユーザー指定フォーマット（`target_journal_style`）読まれず、選択UIなし
-- **Skill を誰も適用していない**（core も user も。SkillLoader 呼出しゼロ）
 - メタSkill／自己改善ループ（SKILL.md のみ、reviewer→提案→承認→更新 未接続）
-- 評価ステージ（`cie/evaluation/*` はワークフロー未接続、evaluationノード素通り）
-- decisionノードのルーティング（`rules` 評価コードなし）
-- フルDAGのE2E（承認/再開・下流キー整合が未完）
-- 継続解析（対話的リファインメント）
+- ~~評価ステージ~~→**フェーズ6完了**（EvaluationAgent が evaluation ノードで4次元評価を実行）
+- ~~decisionノードのルーティング~~→**フェーズ6完了**（rules 評価＋ブランチ枝刈り）
+- ~~フルDAGのE2E~~→**フェーズ6完了**（承認/再開・下流キー整合、`scratchpad/harness_full_dag_exec.py`）
+- 継続解析（対話的リファインメント）← 次はフェーズ7
+- assumption_check ノードが実際の正規性検定（Shapiro-Wilk 等の実R実行）を行わない → evaluation の statistical 次元が0点（ST-002）。フェーズ7で実検定を積む
 
 ---
 
@@ -82,7 +84,14 @@ UI は Streamlit（`cie/ui/app.py`）。LLM は `cie/core/llm_client.py`（anthr
 - `statistical_results` の契約キー：`method_id, test_name, test_statistic, df, p_value, effect_size, effect_size_measure, ci_lower, ci_upper, sample_size, group_summaries`
 
 ### 標準ワークフロー DAG（`spec/workflow.yaml` clinical_analysis_standard）
-`intake(planner)` → validate_dataset/classify_variables/detect_missing/detect_outliers(data_quality) → **select_analysis(decision, statistics)** → assumption_check(statistics) → **decision_assumption(decision, ルーティング未実装)** → generate_r_script or select_nonparametric(statistics) → **security_review(approval, 人間承認で一時停止)** → runtime_execution(runtime) → visualization → reporting → reviewer → **evaluation(agentなし＝現状素通り)**
+`intake(planner)` → validate_dataset/classify_variables/detect_missing/detect_outliers(data_quality) → **select_analysis(decision, statistics)** → assumption_check(statistics) → **decision_assumption(decision, rulesルーティング＝フェーズ6実装)** → generate_r_script or select_nonparametric(statistics) → **security_review(approval, 人間承認で一時停止→resume_workflow)** → runtime_execution(runtime) → visualization → reporting → reviewer → **evaluation(EvaluationAgent, 4次元評価＝フェーズ6実装)**
+
+### decisionルーティング（フェーズ6）
+- `WorkflowNodeDef.rules`（registry が YAML `rules:` を取込）を Orchestrator `_apply_decision_rules` が評価
+- 条件値解決は `_resolve_condition_value`：context top-level → assumption_report/epp_report/analysis_plan/data_quality_report/intent_object コンテナ → `normality` は `intent_object.distribution_assumptions` フォールバック → デフォルト True（主分岐）
+- 非選択ブランチは completed 扱いで枝刈り。**pruned ノードの後続**（例: security_review は generate_r_script 依存）は選択ブランチの後に ready キューへ入る（入れないと DAG が早期 completed になる — 実装済みバグ修正）
+- ルートは `accumulated_context["decision_routes"][node_id]` に記録、`DECISION_ROUTED:<node>` 監査イベント
+- agent 付き decision ノード（prediction の select_prediction_method）は**エージェント実行後**に rules を評価（出力を条件に使えるように）
 
 ---
 
@@ -113,7 +122,7 @@ UI は Streamlit（`cie/ui/app.py`）。LLM は `cie/core/llm_client.py`（anthr
 ```
 python3 -m pytest tests/unit/ -q
 ```
-- **現状 600 passed / 15 failed**。15件は本作業前から存在する既存失敗（`test_audit`, `test_database`, `test_skill_lifecycle` の SQLAlchemy/DB系、`test_planner::test_input_schema_ref`）。**新規失敗を出さないこと**が回帰の基準
+- **現状 670 passed / 15 failed**。15件は本作業前から存在する既存失敗（`test_audit`, `test_database`, `test_skill_lifecycle` の SQLAlchemy/DB系、`test_planner::test_input_schema_ref`）。**新規失敗を出さないこと**が回帰の基準
 
 ### ハーネス（実R実行のE2E断片検証）
 `scratchpad/harness_r_exec.py` が雛形（statistics→runtime→statistical_results→formatter を実CSV・実Rで検証）。API不要のスタブLLMで実行可能。新フェーズでは同様に、対象エージェント単体を実Rまで通すハーネスで検証してから統合する。
@@ -132,7 +141,7 @@ python3 -m py_compile <file>
 
 各フェーズは「対象ファイル・踏襲パターン・検証」を記載。順序はエラー最小（下から積み上げ）。
 
-### フェーズ2: Visualization 実生成 ← 次はここ
+### ✅ フェーズ2: Visualization 実生成 — 完了
 - 対象: `cie/agents/visualization.py`
 - パターン: statistics の LLM R生成を踏襲。コンストラクタに `llm_client`, `reference_library`, `script_cache`（任意）を追加（app.py の生成箇所も更新）
 - 入力: `statistical_results`（フェーズ1で供給済）＋intent_object
@@ -141,30 +150,47 @@ python3 -m py_compile <file>
 - 注意: DAG では visualization ノードが runtime_execution の後段。可視化用Rも runtime で実行させる設計にするか、visualization 内で別途 runtime_provider を呼ぶか要判断（既存 figure_manifest 出力キーに合わせる）
 - 検証: ハーネスで実PNG生成
 
-### フェーズ3: Reporting 実生成＋標準フォーマット
-- 対象: `cie/agents/reporting.py`
-- LLM＋ナレッジ（`reporting/manuscript_structure_guide.md`, `result_interpretation_guide.md`, `reporting_checklists.md`）で実原稿生成。**数値は statistical_results 由来のみ（捏造禁止、RP-001）**
-- フォーマット: `payload.get("reporting_checklist_id")`＋**新規に `payload.get("target_journal_style")` を読む**。未指定は study_design から推論（既存 `_CHECKLIST_BY_STUDY_DESIGN`）
-- `cie/reporting/result_formatter.py` を journal_style 対応に拡張可
-- 検証: ハーネスで APA＋STROBE 原稿
+### ✅ フェーズ3: Reporting 実生成＋標準フォーマット — 完了
+- 対象: `cie/agents/reporting.py`（全面書き換え）、`cie/ui/app.py`（配線更新）
+- LLM＋ナレッジRAG（`reporting/manuscript_structure_guide.md`, `result_interpretation_guide.md`, `reporting_checklists.md`）で実原稿生成
+- `target_journal_style`（APA/AMA/Vancouver）の p値フォーマット実装。未指定は APA デフォルト
+- `reporting_checklist_id` 明示→優先、未指定→study_design から推論（CONSORT/STROBE/TRIPOD+AI 2024/PRISMA 2020）
+- llm_client=None → template fallback でユニットテスト互換維持
+- 検証: `scratchpad/harness_reporting_exec.py` で PASSED（7セクション出力、p値6パターン、チェックリスト推論/上書き）
 
-### フェーズ4: Skill適用層
-- 対象: statistics/visualization/reporting、`cie/skills/loader.py`（SkillLoader）
-- 各エージェントに `SkillLoader` 注入。タスク対応 Skill を `skills/user/ > skills/core/` 優先で解決し、SKILL.md 指示を生成プロンプトへ合成
-- 例: `skills/core/reporting/table-one/SKILL.md`, `skills/core/statistics/t-test/SKILL.md`
-- 検証: 同じ解析で user Skill 上書きにより出力が変わることを確認
+### ✅ フェーズ4: Skill適用層 — 完了
+- `SkillLoader.read_skill_content()` / `get_skill_prompt_block()` 追加（user/ > core/ 優先）
+- statistics: `_METHOD_TO_SKILL_ID` で method_id → skill_id を解決しシステムプロンプトに `=== SKILL INSTRUCTIONS ===` ブロックを追記
+- visualization: `_CHART_TO_SKILL_ID` で chart_key → skill_id を解決し同様に注入
+- reporting: 常に `reporting/manuscript-section` を解決し注入
+- app.py: `SkillLoader(Path("skills"))` を生成し3エージェントに配線
+- 新規テスト: `tests/unit/test_skill_application.py`（14件 PASSED）
+- ハーネス: `scratchpad/harness_skill_exec.py`（5件 PASSED、プロンプト差分を目視確認）
+- 回帰: 618 passed / 15 failed（既存 DB 系のみ）
 
-### フェーズ5: フォーマット選択UI
-- 対象: `cie/ui/app.py`＋新規/既存スクリーン。チェックリスト＋雑誌スタイル＋登録済みユーザーSkill を選択し reporting コンテキストへ伝搬
+### ✅ フェーズ5: フォーマット選択UI — 完了
+- `cie/ui/screens/format_selection.py` — `render_format_selection()`: チェックリスト/雑誌スタイル/ユーザーSkill expander（presentation-only）
+- `cie/reporting/format_context.py` — `build_format_context()`: streamlit なし純粋 Python ヘルパー（テスト可能）
+- `cie/agents/reporting.py` — `_execute` が `payload.get("reporting_skill_id")` を読み、指定スキルIDで `get_skill_prompt_block()` を呼ぶ
+- `cie/ui/app.py` — `_init_session_state()` に format_* キー追加、`_handle_intent()` に `render_format_selection` 配線、ワークフロー起動時に `build_format_context()` を `dataset_context` にマージ、`_unpack_workflow_result()` に reporting/viz 結果の抽出追加
+- 新規テスト: `tests/unit/test_format_selection.py`（18件 PASSED）
+- 回帰: 636 passed / 15 failed（既存 DB 系のみ）
 
-### フェーズ6(A): オーケストレーション完成＋フルDAG
-- 対象: `cie/workflow/orchestrator.py`, `cie/ui/app.py`, 新規 evaluation エージェント
-- decisionノード `rules` 評価（`decision_assumption` の正規性分岐）。現状 decision/evaluation ノードは agent_id 無しだと素通り
-- evaluationノード＝評価エージェント新規（`cie/evaluation/*` の correctness/statistical/security/usability をラップ）。agent_registry と AGENT_ALLOWED_SCOPES に登録
-- app.py：`security_review`（approval）停止時にRを承認パネル表示 → 承認で `orchestrator.resume_workflow(execution_id, human_decision)`（既存メソッド）
-- 検証: 実オーケストレータ・ハーネスで intent→…→evaluation 完走
+### ✅ フェーズ6(A): オーケストレーション完成＋フルDAG — 完了
+- `cie/workflow/registry.py`: `WorkflowNodeDef.rules` 追加（YAML `rules:` 取込）
+- `cie/workflow/orchestrator.py`: `_apply_decision_rules` / `_resolve_condition_value`（decisionルーティング、上記§3参照）、`resume_workflow` が結果 dict を返すように変更
+- `cie/agents/evaluation.py` 新規: EvaluationAgent（agent_id=`evaluation`、4次元評価、context→artifact アダプタ。DBには書かない — SkillPerformanceRecord 永続化は EvaluatorService の役割のまま）
+- `spec/workflow.yaml`: 全4ワークフローの evaluation ノードに `agent: evaluation`
+- `spec/permissions.yaml` + `AGENT_ALLOWED_SCOPES`: evaluation エージェント登録（workflow.state_read / audit.write_entry / skill.read_performance_records）
+- **スコープ正典整合（実DAGで PERMISSION_DENIED になっていた）**: reporting から DATASET_READ_VALIDATED を除去、reviewer の WORKFLOW_STATE_READ → DATASET_READ_VALIDATED（spec/permissions.yaml が正典。required_scopes は必ず allow のサブセットに）
+- `schemas/review-report.schema.json` 新規（寛容）: reviewer 出力は report.schema.json（strict envelope, additionalProperties:false）に適合しないため専用スキーマに変更
+- `cie/agents/reviewer.py`: manuscript_sections が list（Reporting出力形式）でも正規化して処理
+- `cie/agents/statistics.py`: node_id=`select_nonparametric` でノンパラ手法を強制
+- `cie/ui/app.py`: EvaluationAgent 配線、`_build_dataset_context` が DatasetMetadata 契約（var_n エイリアス、欠損率）を供給、`_unpack_workflow_result` の dataclass 正規化＋evaluation 取込、`_maybe_request_security_approval`（停止時に生成Rを承認パネル表示）→ 承認で `resume_workflow` → 結果マージ
+- 検証: `scratchpad/harness_full_dag_exec.py`（実Orchestrator/実エージェント/実R/実PNG、LLMのみスタブ）全項目 PASSED。回帰 670 passed / 15 failed（既存DB系のみ）
+- 残課題: assumption_check が実検定を実行しないため evaluation の statistical 次元は0点（正直な評価）。フェーズ7で実検定を積む
 
-### フェーズ7(C): 継続解析ループ
+### フェーズ7(C): 継続解析ループ ← 次はここ
 - statistics/visualization が `prior_statistical_results`＋`prior_r_script` を受理する任意入力を追加
 - 継続プロンプト分岐。前回 result.json/データを読み直して積み上げ
 - UI：結果の下に「この結果を踏まえ追加解析を相談」入力＋会話ループ、`session_state` に解析履歴保持
@@ -176,9 +202,43 @@ python3 -m py_compile <file>
 
 ---
 
-## 7. 本セッションで変更/新規したファイル
+## 7. フェーズ6で変更/新規したファイル
 
 ### 新規
+- `cie/agents/evaluation.py` — EvaluationAgent（4次元評価、context→artifact アダプタ）
+- `schemas/review-report.schema.json` — reviewer 出力用の寛容スキーマ
+- `tests/unit/test_decision_routing.py` — decisionルーティング/枝刈り/再開完走
+- `tests/unit/test_evaluation_agent.py` — EvaluationAgent（アダプタ含む）
+- `scratchpad/harness_full_dag_exec.py` — フルDAG E2E ハーネス（実R/実PNG）
+
+### 変更
+- `cie/workflow/registry.py` — `WorkflowNodeDef.rules` 追加
+- `cie/workflow/orchestrator.py` — decisionルーティング、pruned 後続のキューイング、`resume_workflow` が結果を返す
+- `spec/workflow.yaml` — evaluation ノードに `agent: evaluation`（4ワークフロー）
+- `spec/permissions.yaml` — evaluation エージェントの permission matrix 追加
+- `cie/security/capability_token.py` — AGENT_ALLOWED_SCOPES に evaluation
+- `cie/agents/reporting.py` — required_scopes を正典に整合（DATASET_READ_VALIDATED 除去）
+- `cie/agents/reviewer.py` — required_scopes 整合、出力スキーマ変更、manuscript list 正規化
+- `cie/agents/statistics.py` — select_nonparametric ノードでノンパラ強制
+- `cie/ui/app.py` — evaluation 配線、DatasetMetadata 供給、承認→resume 配線、`_unpack_workflow_result` 修正
+- `tests/unit/test_reporting_agent.py` / `test_reviewer.py` — スコープ/スキーマ期待値を正典に更新
+
+## 7b. フェーズ5で変更/新規したファイル
+
+### 新規
+- `cie/ui/screens/format_selection.py` — フォーマット選択 UI コンポーネント（presentation-only）
+- `cie/reporting/format_context.py` — `build_format_context()` ヘルパー（streamlit 依存なし）
+- `tests/unit/test_format_selection.py` — フォーマット選択 18 件ユニットテスト
+
+### 変更
+- `cie/agents/reporting.py` — `_generate_manuscript_with_llm` に `reporting_skill_id` パラメータ追加、ペイロードの skill_id を反映
+- `cie/ui/app.py` — format session_state キー追加、`_handle_intent()` 配線、`build_format_context()` マージ、`_unpack_workflow_result()` reporting/viz 出力抽出
+
+---
+
+## 8. フェーズ1〜4で変更/新規したファイル（参考）
+
+### 新規（フェーズ1〜4）
 - `cie/agents/runtime.py` — RuntimeAgent（R実行＋result.jsonパース→statistical_results、捏造防止）
 - `cie/knowledge/reference_library.py` — MarkdownReferenceLibrary（.mdをRAG検索）
 - `cie/cache/r_script_cache.py` — RScriptCache（Rスクリプトのトークン節約キャッシュ）
@@ -188,7 +248,7 @@ python3 -m py_compile <file>
 - `tests/unit/test_result_formatter.py`
 - `IMPLEMENTATION_PLAN.md`, `docs/DEVELOPER_HANDOFF.md`（本書）
 
-### 変更
+### 変更（フェーズ1〜4）
 - `cie/agents/statistics.py` — LLM＋ナレッジRAG＋キャッシュでR生成、result.json契約キー統一
 - `cie/agents/data_quality.py` — agent_id を `data_quality`（アンダースコア）に統一、produced_by も
 - `cie/agents/planner.py` — JSON抽出堅牢化・キャッシュ汚染ガード・outcome_variables推論フォールバック

@@ -220,6 +220,8 @@ workflows:
       evaluation:
         type: evaluation
         depends_on: [reviewer]
+        agent: evaluation
+        description: "Run correctness/statistical/security/usability evaluators (cie/evaluation/*)."
         outputs:
           - evaluation_report
           - reproducibility_report
@@ -324,6 +326,7 @@ workflows:
       evaluation:
         type: evaluation
         depends_on: [reviewer]
+        agent: evaluation
         outputs: [evaluation_report, reproducibility_report, completion_status]
 
   # ─── WORKFLOW 3: clinical_analysis_meta ─────────────────────────────────────
@@ -409,6 +412,7 @@ workflows:
       evaluation:
         type: evaluation
         depends_on: [reviewer]
+        agent: evaluation
         outputs: [evaluation_report, reproducibility_report, completion_status]
 
   # ─── WORKFLOW 4: clinical_analysis_prediction ────────────────────────────────
@@ -518,6 +522,7 @@ workflows:
       evaluation:
         type: evaluation
         depends_on: [reviewer]
+        agent: evaluation
         outputs: [evaluation_report, reproducibility_report, completion_status]
 
 # -----------------------------------------------------------------------------

@@ -86,7 +86,7 @@ def token() -> CapabilityToken:
         bound_agent_id="reviewer",
         bound_step_id=NODE_ID,
         granted_scopes=frozenset({
-            CapabilityScope.WORKFLOW_STATE_READ,
+            CapabilityScope.DATASET_READ_VALIDATED,
             CapabilityScope.AUDIT_WRITE_ENTRY,
         }),
         denied_scopes=frozenset(),
@@ -150,15 +150,18 @@ class TestAgentIdentity:
         assert agent.agent_id == "reviewer"
 
     def test_required_scopes(self, agent: ReviewerAgent) -> None:
+        # Must stay a subset of spec/permissions.yaml reviewer.allow
+        # (workflow.state_read is NOT granted to the reviewer)
         scopes = agent.required_scopes
-        assert CapabilityScope.WORKFLOW_STATE_READ in scopes
+        assert CapabilityScope.DATASET_READ_VALIDATED in scopes
         assert CapabilityScope.AUDIT_WRITE_ENTRY in scopes
+        assert CapabilityScope.WORKFLOW_STATE_READ not in scopes
 
     def test_input_schema_ref(self, agent: ReviewerAgent) -> None:
         assert agent.input_schema_ref == "cie://schemas/task.schema.json"
 
     def test_output_schema_ref(self, agent: ReviewerAgent) -> None:
-        assert agent.output_schema_ref == "cie://schemas/report.schema.json"
+        assert agent.output_schema_ref == "cie://schemas/review-report.schema.json"
 
 
 # ---------------------------------------------------------------------------

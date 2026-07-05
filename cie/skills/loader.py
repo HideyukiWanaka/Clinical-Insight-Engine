@@ -222,3 +222,40 @@ class SkillLoader:
             for m in metas
             if m.namespace == SkillNamespace.USER
         ]
+
+    def read_skill_content(self, skill_id: str) -> str | None:
+        """Return the full SKILL.md text for *skill_id* (user > core priority).
+
+        Returns None if the skill is not found in any eligible namespace or the
+        file cannot be read — callers should treat None as "no instructions".
+        """
+        try:
+            meta = self.resolve(skill_id)
+        except SkillNotFoundError:
+            return None
+        try:
+            return meta.skill_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Could not read SKILL.md for %s: %s", skill_id, exc)
+            return None
+
+    def get_skill_prompt_block(self, skill_id: str) -> str:
+        """Return a formatted prompt block for the resolved SKILL.md, or empty string.
+
+        The block is designed to be appended to an agent's system prompt so the
+        LLM is grounded in the Skill instructions.  When the skill is not found
+        the empty string is returned and the caller's prompt is unchanged.
+        """
+        content = self.read_skill_content(skill_id)
+        if not content:
+            return ""
+        try:
+            meta = self.resolve(skill_id)
+            header = (
+                f"\n\n=== SKILL INSTRUCTIONS "
+                f"(skill_id: {skill_id}, namespace: {meta.namespace.value}, "
+                f"version: {meta.version}) ===\n"
+            )
+        except SkillNotFoundError:
+            header = f"\n\n=== SKILL INSTRUCTIONS (skill_id: {skill_id}) ===\n"
+        return header + content + "\n=== END SKILL INSTRUCTIONS ==="
