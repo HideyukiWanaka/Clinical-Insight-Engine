@@ -161,11 +161,60 @@ def render_intent_preview(payload: dict) -> None:
         st.json(payload)
 
 
+_VALUE_LABELS: dict[str, str] = {
+    # objective
+    "between_group_comparison":        "群間比較",
+    "paired_comparison":               "対応比較（前後比較）",
+    "correlation_analysis":            "相関分析",
+    "regression_analysis":             "回帰分析",
+    "survival_analysis":               "生存時間分析",
+    "diagnostic_accuracy":             "診断精度",
+    "prediction_model":                "予測モデル",
+    "descriptive_only":                "記述統計",
+    "systematic_review":               "システマティックレビュー",
+    # outcome_type / predictor_type
+    "continuous":                      "連続変数",
+    "categorical_binary":              "2値カテゴリ変数",
+    "categorical_ordinal":             "順序カテゴリ変数",
+    "categorical_nominal":             "名義カテゴリ変数",
+    "survival":                        "生存時間",
+    "mixed":                           "混合",
+    "unknown":                         "不明",
+    # study_design
+    "randomized_controlled_trial":     "ランダム化比較試験（RCT）",
+    "observational":                   "観察研究",
+    "cohort":                          "コホート研究",
+    "case_control":                    "症例対照研究",
+    "cross_sectional":                 "横断研究",
+    "systematic_review_or_meta_analysis": "システマティックレビュー／メタ分析",
+    "diagnostic_accuracy_study":       "診断精度研究",
+    # distribution_assumptions
+    "assumed_normal":                  "正規分布を仮定",
+    "assumed_non_normal":              "非正規分布を仮定",
+    # variable roles
+    "primary_outcome":                 "主要アウトカム",
+    "secondary_outcome":               "副次アウトカム",
+    "time_to_event":                   "イベント発生時間",
+    "event_indicator":                 "イベント指標",
+    "primary_predictor":               "主要予測因子",
+    "covariate":                       "共変量",
+    "grouping_variable":               "群分け変数",
+    "matching_variable":               "マッチング変数",
+    # reporting checklists (proper nouns — keep acronym, add context)
+    "CONSORT":  "CONSORT（RCT）",
+    "STROBE":   "STROBE（観察研究）",
+    "TRIPOD":   "TRIPOD（予測モデル）",
+    "PRISMA":   "PRISMA（システマティックレビュー）",
+    "STARD":    "STARD（診断精度）",
+}
+
+
 def _format_field_value(value: object) -> str | None:
     """Format an intent_object field for display, or None if empty.
 
     Handles var_n list fields (outcome_variables / predictor_variables) by
     joining their var_n / role pairs into a readable string.
+    Enum values are translated to Japanese via _VALUE_LABELS.
     """
     if value is None or value == "":
         return None
@@ -177,11 +226,13 @@ def _format_field_value(value: object) -> str | None:
             if isinstance(item, dict):
                 var_n = item.get("var_n", "?")
                 role = item.get("role")
-                parts.append(f"{var_n} ({role})" if role else str(var_n))
+                role_ja = _VALUE_LABELS.get(role, role) if role else None
+                parts.append(f"{var_n}（{role_ja}）" if role_ja else str(var_n))
             else:
-                parts.append(str(item))
+                parts.append(_VALUE_LABELS.get(str(item), str(item)))
         return ", ".join(parts)
-    return str(value)
+    s = str(value)
+    return _VALUE_LABELS.get(s, s)
 
 
 # ---------------------------------------------------------------------------

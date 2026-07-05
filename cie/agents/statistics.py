@@ -638,8 +638,14 @@ class StatisticsAgent(BaseAgent):
         user_message = self._build_r_gen_user_message(
             method, intent_obj, column_metadata, references
         )
+        # Prefill "```r\n" to force the model to start inside the fenced block.
+        # This bypasses thinking-model preamble (Gemini 2.x) and any tendency to
+        # output prose before code — the model simply continues from the prefill.
+        _PREFILL = "```r\n"
         try:
-            raw = await self._llm_client.complete(system_prompt, user_message)
+            raw = await self._llm_client.complete(
+                system_prompt, user_message, assistant_prefill=_PREFILL
+            )
         except LLMError as exc:
             _log.warning("R script LLM generation failed: %s", exc)
             provenance["reason"] = f"llm_error: {exc}"
@@ -647,6 +653,11 @@ class StatisticsAgent(BaseAgent):
 
         r_script = self._extract_r_code(raw)
         if not r_script:
+            _log.warning(
+                "R script LLM response contained no fenced ```r block even with prefill "
+                "(first 300 chars: %r)",
+                raw[:300],
+            )
             provenance["reason"] = "empty_or_unparsable_llm_response"
             return None, provenance
 
@@ -702,15 +713,17 @@ class StatisticsAgent(BaseAgent):
     def _extract_r_code(raw_text: str) -> str | None:
         """Extract R source from an LLM response.
 
-        Prefers a fenced ```r ... ``` block; otherwise returns the whole text
-        if it looks like R, else None.
+        Only accepts a fenced ```r ... ``` block.  If the LLM did not follow
+        the instruction to wrap its output in a fenced block (e.g. it echoed
+        the user prompt, returned JSON, or produced prose only) we return None
+        so that the caller can treat this as a generation failure rather than
+        executing garbage as R code.
         """
         match = re.search(r"```(?:r|R)?\s*\n(.*?)```", raw_text, re.DOTALL)
         if match:
             code = match.group(1).strip()
             return code or None
-        text = raw_text.strip()
-        return text or None
+        return None
 
     # ------------------------------------------------------------------
     # Conversational proposal generation (Workbench chat mode)
@@ -943,8 +956,11 @@ class StatisticsAgent(BaseAgent):
             prior_r_script=prior_r_script,
         )
 
+        _PREFILL = "```r\n"
         try:
-            raw = await self._llm_client.complete(system_prompt, user_message)
+            raw = await self._llm_client.complete(
+                system_prompt, user_message, assistant_prefill=_PREFILL
+            )
         except LLMError as exc:
             _log.warning("Continuation R script LLM generation failed: %s", exc)
             provenance["reason"] = f"llm_error: {exc}"

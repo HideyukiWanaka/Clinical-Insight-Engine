@@ -51,10 +51,24 @@ def render_workflow_view(
         The node_id whose detail button was clicked, or None.
     """
     st.title("ワークフロービジュアライザー")
+    st.caption(
+        "解析パイプラインの各ステップ（Agent）の実行状況を示します。"
+        "カードをクリックすると各ステップの入出力・判断根拠を確認できます。"
+    )
+
+    # Legend
+    with st.expander("凡例 — ステップの状態"):
+        cols = st.columns(3)
+        cols[0].markdown("○ **pending** — 未実行")
+        cols[0].markdown("⟳ **running** — 実行中")
+        cols[1].markdown("✅ **completed** — 完了")
+        cols[1].markdown("❌ **failed** — 失敗")
+        cols[2].markdown("🟣 **waiting_for_human** — 承認待ち")
+        cols[2].markdown("🔄 **retrying** — 再試行中")
 
     nodes: list[dict] = workflow_definition.get("nodes", [])
     if not nodes:
-        st.info("ワークフロー定義が見つかりません。")
+        st.info("ワークフロー定義が見つかりません。解析を開始するとパイプラインがここに表示されます。")
         return None
 
     # Overall workflow progress summary
