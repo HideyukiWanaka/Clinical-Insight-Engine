@@ -320,3 +320,91 @@ class TestOutputContract:
 
         r_spec = result.output_payload["r_script_specification"]
         assert r_spec["seed"] == 42
+
+
+# ---------------------------------------------------------------------------
+# Conversational proposal (Workbench chat mode)
+# ---------------------------------------------------------------------------
+
+_CONVERSATIONAL_LLM_RESPONSE = """\
+=== EXPLANATION ===
+性別間の血圧を比較するには、対応のない2群の比較を行います。正規性が仮定できる場合は
+Welchのt検定、疑わしい場合はWilcoxon順位和検定を代替として使ってください。
+
+=== CODE: welch_t_test|Welchのt検定 ===
+```r
+data <- read.csv(file.path(Sys.getenv("WORKSPACE_DIR"), "dataset.csv"))
+t.test(BP ~ Sex, data = data)
+```
+
+=== CODE: wilcoxon|Wilcoxon順位和検定 ===
+```r
+data <- read.csv(file.path(Sys.getenv("WORKSPACE_DIR"), "dataset.csv"))
+wilcox.test(BP ~ Sex, data = data)
+```
+"""
+
+
+class TestConversationalProposal:
+
+    def test_extract_conversational_proposal_parses_two_candidates(self) -> None:
+        result = StatisticsAgent._extract_conversational_proposal(
+            _CONVERSATIONAL_LLM_RESPONSE
+        )
+        assert result is not None
+        explanation, candidates = result
+        assert "対応のない2群" in explanation
+        assert len(candidates) == 2
+        assert candidates[0]["candidate_id"] == "welch_t_test"
+        assert candidates[0]["label"] == "Welchのt検定"
+        assert "t.test(BP ~ Sex" in candidates[0]["r_code"]
+        assert candidates[1]["candidate_id"] == "wilcoxon"
+        assert "wilcox.test(BP ~ Sex" in candidates[1]["r_code"]
+
+    def test_extract_conversational_proposal_returns_none_when_no_code(self) -> None:
+        assert StatisticsAgent._extract_conversational_proposal(
+            "=== EXPLANATION ===\nNo code here.\n"
+        ) is None
+
+    async def test_conversational_mode_produces_analysis_proposal(
+        self,
+        mock_policy_engine: MagicMock,
+        mock_schema_registry: MagicMock,
+        mock_audit: MagicMock,
+        token: CapabilityToken,
+    ) -> None:
+        """conversational_mode=True yields analysis_proposal with 2 candidates
+        and mirrors the recommended candidate's code into r_script for
+        backward compatibility with Runtime Agent's _extract_script_source."""
+        mock_llm = MagicMock()
+        mock_llm.provider = "anthropic"
+        mock_llm.model = "test-model"
+        mock_llm.complete = AsyncMock(return_value=_CONVERSATIONAL_LLM_RESPONSE)
+
+        agent = StatisticsAgent(
+            mock_policy_engine, mock_schema_registry, mock_audit,
+            llm_client=mock_llm,
+        )
+        payload = {**_BASE_PAYLOAD, "conversational_mode": True}
+        result = await agent.run(_make_input(payload, token))
+
+        assert result.status == "success"
+        proposal = result.output_payload["analysis_proposal"]
+        assert proposal["recommended_candidate_id"] == "welch_t_test"
+        assert len(proposal["code_candidates"]) == 2
+        assert result.output_payload["r_script"] == proposal["code_candidates"][0]["r_code"]
+        assert result.output_payload["r_script_provenance"]["conversational"] is True
+
+    async def test_conversational_mode_without_llm_client_surfaces_reason(
+        self, agent: StatisticsAgent, token: CapabilityToken
+    ) -> None:
+        """No llm_client configured: r_script/analysis_proposal absent, but the
+        failure reason must be present in r_script_provenance (not swallowed)."""
+        payload = {**_BASE_PAYLOAD, "conversational_mode": True}
+        result = await agent.run(_make_input(payload, token))
+
+        assert "analysis_proposal" not in result.output_payload
+        assert result.output_payload["r_script"] is None
+        assert result.output_payload["r_script_provenance"]["reason"] == (
+            "no_llm_client_configured"
+        )
