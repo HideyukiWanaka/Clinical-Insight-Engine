@@ -214,7 +214,7 @@ class TestStatisticsAgentSkillInjection:
         mock_llm = MagicMock()
         mock_llm.provider = "stub"
         mock_llm.model = "stub-model"
-        mock_llm.complete = AsyncMock(side_effect=lambda sys, usr: captured.append(sys) or "```r\ncat('ok')\n```")
+        mock_llm.complete = AsyncMock(side_effect=lambda sys, usr, **_kw: captured.append(sys) or "```r\ncat('ok')\n```")
 
         agent = StatisticsAgent(
             _mock_policy(), _mock_schema(), _mock_audit(),
@@ -240,7 +240,7 @@ class TestStatisticsAgentSkillInjection:
         mock_llm = MagicMock()
         mock_llm.provider = "stub"
         mock_llm.model = "stub-model"
-        mock_llm.complete = AsyncMock(side_effect=lambda sys, usr: captured.append(sys) or "```r\ncat('ok')\n```")
+        mock_llm.complete = AsyncMock(side_effect=lambda sys, usr, **_kw: captured.append(sys) or "```r\ncat('ok')\n```")
 
         agent = StatisticsAgent(
             _mock_policy(), _mock_schema(), _mock_audit(),
@@ -272,7 +272,7 @@ class TestStatisticsAgentSkillInjection:
         mock_llm = MagicMock()
         mock_llm.provider = "stub"
         mock_llm.model = "stub-model"
-        mock_llm.complete = AsyncMock(side_effect=lambda sys, usr: captured.append(sys) or "```r\ncat('ok')\n```")
+        mock_llm.complete = AsyncMock(side_effect=lambda sys, usr, **_kw: captured.append(sys) or "```r\ncat('ok')\n```")
 
         agent = StatisticsAgent(
             _mock_policy(), _mock_schema(), _mock_audit(),
@@ -306,7 +306,7 @@ class TestVisualizationAgentSkillInjection:
         mock_llm.provider = "stub"
         mock_llm.model = "stub-model"
         mock_llm.complete = AsyncMock(
-            side_effect=lambda sys, usr: captured.append(sys)
+            side_effect=lambda sys, usr, **_kw: captured.append(sys)
             or "```r\nggsave(file.path(Sys.getenv('OUTPUT_DIR'),'figure_fig_box_plot_with_jitter_001.png'))\n```"
         )
 
@@ -360,7 +360,7 @@ class TestReportingAgentSkillInjection:
         mock_llm.provider = "stub"
         mock_llm.model = "stub-model"
         mock_llm.complete = AsyncMock(
-            side_effect=lambda sys, usr: captured.append(sys) or f"```json\n{_stub_json}\n```"
+            side_effect=lambda sys, usr, **_kw: captured.append(sys) or f"```json\n{_stub_json}\n```"
         )
 
         agent = ReportingAgent(
