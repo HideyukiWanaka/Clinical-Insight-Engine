@@ -468,17 +468,32 @@ def _maybe_request_security_approval(result: dict) -> None:
         payload = nr.get("output_payload") or {}
         if payload.get("r_script"):
             r_script = payload["r_script"]
-    description = (
-        "実行前のセキュリティレビューです。以下の生成Rスクリプトを確認し、"
-        "問題がなければ承認してください。承認するとサンドボックスで実行されます。\n\n"
-        f"```r\n{r_script.strip()}\n```" if r_script
-        else "実行前のセキュリティレビューです。生成Rスクリプトを確認のうえ承認してください。"
-    )
+
+    if not r_script:
+        # Statistics agent failed to generate a valid R script (LLM returned
+        # prose or an empty response). Surface the error instead of an empty dialog.
+        st.error(
+            "⚠️ Rスクリプトの生成に失敗しました。LLMがコードブロックを返しませんでした。\n\n"
+            "「研究意図入力」に戻って再解析するか、使用するAIプロバイダーを設定画面で確認してください。"
+        )
+        _append_activity(
+            agent_id="statistics",
+            action="r_script_generation_failed",
+            summary="security_review に到達したがrスクリプトが空",
+            severity="CRITICAL",
+        )
+        return
+
     st.session_state["approval_pending"] = True
     st.session_state["approval_context"] = {
         "action": "resume_security_review",
         "title": "R スクリプト実行の承認（security_review）",
-        "description": description,
+        "description": (
+            "実行前のセキュリティレビューです。以下の生成Rスクリプトを確認し、"
+            "問題がなければ承認してください。承認するとサンドボックスで実行されます。"
+        ),
+        "code_block": r_script.strip(),
+        "code_language": "r",
         "is_irreversible": False,
     }
 
@@ -574,16 +589,13 @@ def _start_continuation_analysis(query: str, services: dict) -> None:
         "analysis_plan": output.output_payload,
     }
 
-    description = (
-        "追加解析のRスクリプトを確認し、問題がなければ「承認して実行」を押してください。\n\n"
-        f"**追加解析の内容:** {query}\n\n"
-        f"```r\n{r_script.strip()}\n```"
-    )
     st.session_state["approval_pending"] = True
     st.session_state["approval_context"] = {
         "action": "execute_continuation",
         "title": "追加解析 Rスクリプトの実行承認",
-        "description": description,
+        "description": f"追加解析のRスクリプトを確認し、問題がなければ承認してください。\n\n**追加解析の内容:** {query}",
+        "code_block": r_script.strip(),
+        "code_language": "r",
         "is_irreversible": False,
     }
     _append_activity("statistics", "continuation_r_generated",
@@ -1153,6 +1165,8 @@ def _handle_intent() -> None:
         finally:
             services["token_manager"].revoke(token)
             st.session_state["_intent_processing"] = False
+            # Trigger UI rerun to reflect updated intent_object_confirmed state
+            st.rerun()
 
     start_requested, current_csv_bytes, current_csv_filename = render_intent_entry(
         on_submit=_on_submit,
@@ -1189,11 +1203,39 @@ def _handle_intent() -> None:
     st.session_state["format_skill_id"]      = fmt["skill_id"]
 
     if start_requested:
+        # Build a human-readable summary of the intent object for the approval panel.
+        _stored = st.session_state.get("intent_object") or {}
+        _iobj = _stored.get("intent_object", _stored)
+        _label = {
+            "between_group_comparison": "群間比較",
+            "paired_comparison": "対応比較（前後比較）",
+            "correlation_analysis": "相関分析",
+            "regression_analysis": "回帰分析",
+            "survival_analysis": "生存時間分析",
+            "diagnostic_accuracy": "診断精度",
+            "prediction_model": "予測モデル",
+            "descriptive_only": "記述統計",
+            "systematic_review": "システマティックレビュー",
+        }
+        _objective = _label.get(_iobj.get("objective", ""), _iobj.get("objective", "不明"))
+        _summary = _iobj.get("natural_language_summary", "")
+        _confidence = _stored.get("confidence_score")
+        _conf_str = f"{_confidence:.2f}" if _confidence is not None else "?"
+        _desc_lines = [
+            f"**解析目的:** {_objective}",
+            f"**確信度:** {_conf_str}",
+        ]
+        if _summary:
+            _desc_lines.append(f"\n> {_summary}")
+        _desc_lines.append(
+            "\n詳細はこのパネル上部の「AI解釈結果」をご確認ください。"
+        )
         st.session_state["approval_pending"] = True
         st.session_state["approval_context"] = {
             "title": "この解釈で解析を開始します。内容を確認してください。",
             "is_irreversible": False,
             "action": "run_workflow",
+            "description": "\n".join(_desc_lines),
         }
         st.rerun()
 

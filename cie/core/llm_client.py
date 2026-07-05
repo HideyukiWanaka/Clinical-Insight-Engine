@@ -40,8 +40,13 @@ _ENV_KEY_NAMES: dict[str, str] = {
     "google_gemini": "GOOGLE_GEMINI_API_KEY",
 }
 
-_DEFAULT_MAX_TOKENS = 1024
-_DEFAULT_TIMEOUT = 30.0
+# 1024 was too low: reasoning-capable models (e.g. Gemini flash) spend output
+# tokens on internal thinking, truncating the JSON/R-script payload mid-field
+# before the required properties are emitted. This client is shared by the
+# Statistics/Visualization/Reporting agents, whose R-script generation needs
+# even more headroom, so keep a generous ceiling.
+_DEFAULT_MAX_TOKENS = 4096
+_DEFAULT_TIMEOUT = 60.0
 
 
 class LLMError(Exception):
@@ -105,36 +110,60 @@ class LLMClient:
     def model(self) -> str:
         return self._model
 
-    async def complete(self, system: str, user: str) -> str:
+    async def complete(
+        self, system: str, user: str, assistant_prefill: str | None = None
+    ) -> str:
         """Send a system + user prompt and return the text completion.
 
         Args:
-            system: System prompt (instructions / persona).
-            user:   User message content.
+            system:            System prompt (instructions / persona).
+            user:              User message content.
+            assistant_prefill: Optional string to inject as the start of the
+                               assistant turn, forcing the model to continue
+                               from that prefix.  Useful for constraining
+                               output format (e.g. "```r\\n" to force fenced R
+                               code output from thinking models).
+                               The prefill is prepended to the returned text so
+                               callers receive the full response.
 
         Returns:
-            The model's text response as a plain string.
+            The model's text response as a plain string (prefill included).
 
         Raises:
             LLMError: On HTTP errors or unexpected response shape.
         """
         if self._http is not None:
-            return await self._dispatch(self._http, system, user)
+            return await self._dispatch(self._http, system, user, assistant_prefill)
         async with httpx.AsyncClient() as http:
-            return await self._dispatch(http, system, user)
+            return await self._dispatch(http, system, user, assistant_prefill)
 
-    async def _dispatch(self, http: httpx.AsyncClient, system: str, user: str) -> str:
+    async def _dispatch(
+        self,
+        http: httpx.AsyncClient,
+        system: str,
+        user: str,
+        assistant_prefill: str | None = None,
+    ) -> str:
         if self._provider == "anthropic":
-            return await self._complete_anthropic(http, system, user)
+            return await self._complete_anthropic(http, system, user, assistant_prefill)
         else:
-            return await self._complete_openai_compat(http, system, user)
+            return await self._complete_openai_compat(http, system, user, assistant_prefill)
 
     # ------------------------------------------------------------------
     # Provider-specific implementations
     # ------------------------------------------------------------------
 
-    async def _complete_anthropic(self, http: httpx.AsyncClient, system: str, user: str) -> str:
+    async def _complete_anthropic(
+        self,
+        http: httpx.AsyncClient,
+        system: str,
+        user: str,
+        assistant_prefill: str | None = None,
+    ) -> str:
         """Call the Anthropic Messages API."""
+        messages: list[dict] = [{"role": "user", "content": user}]
+        if assistant_prefill:
+            messages.append({"role": "assistant", "content": assistant_prefill})
         try:
             response = await http.post(
                 self._endpoint,
@@ -142,7 +171,7 @@ class LLMClient:
                     "model": self._model,
                     "max_tokens": self._max_tokens,
                     "system": system,
-                    "messages": [{"role": "user", "content": user}],
+                    "messages": messages,
                 },
                 headers={
                     "x-api-key": self._api_key,
@@ -152,7 +181,9 @@ class LLMClient:
                 timeout=self._timeout,
             )
             response.raise_for_status()
-            return response.json()["content"][0]["text"]
+            text = response.json()["content"][0]["text"]
+            # Prepend the prefill so callers see the complete response
+            return (assistant_prefill + text) if assistant_prefill else text
         except httpx.HTTPStatusError as exc:
             raise LLMError(
                 f"Anthropic API error {exc.response.status_code}: {exc.response.text[:200]}",
@@ -164,22 +195,31 @@ class LLMClient:
         except Exception as exc:
             raise LLMError(str(exc), provider="anthropic") from exc
 
-    async def _complete_openai_compat(self, http: httpx.AsyncClient, system: str, user: str) -> str:
+    async def _complete_openai_compat(
+        self,
+        http: httpx.AsyncClient,
+        system: str,
+        user: str,
+        assistant_prefill: str | None = None,
+    ) -> str:
         """Call an OpenAI-compatible Chat Completions endpoint.
 
         Works for both OpenAI and Google Gemini (which exposes an
         OpenAI-compatible REST endpoint at the configured URL).
         """
+        messages: list[dict] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        if assistant_prefill:
+            messages.append({"role": "assistant", "content": assistant_prefill})
         try:
             response = await http.post(
                 self._endpoint,
                 json={
                     "model": self._model,
                     "max_tokens": self._max_tokens,
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
+                    "messages": messages,
                 },
                 headers={
                     "Authorization": f"Bearer {self._api_key}",
@@ -188,7 +228,8 @@ class LLMClient:
                 timeout=self._timeout,
             )
             response.raise_for_status()
-            return response.json()["choices"][0]["message"]["content"]
+            text = response.json()["choices"][0]["message"]["content"]
+            return (assistant_prefill + text) if assistant_prefill else text
         except httpx.HTTPStatusError as exc:
             raise LLMError(
                 f"{self._provider} API error {exc.response.status_code}: {exc.response.text[:200]}",

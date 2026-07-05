@@ -217,8 +217,12 @@ skill_result <- list(
     p_value        = result$p.value,
     estimate       = as.numeric(result$estimate),
     mean_diff      = if (!is.null(mean_diff)) as.numeric(mean_diff) else NULL,
-    ci_lower       = result$conf.int[1],
-    ci_upper       = result$conf.int[2]
+    ci_lower       = if (!is.null(result$conf.int) && length(result$conf.int) >= 1)
+                       as.numeric(result$conf.int[1]) else NA_real_,
+    ci_upper       = if (!is.null(result$conf.int) && length(result$conf.int) >= 2)
+                       as.numeric(result$conf.int[2]) else NA_real_,
+    ci_note        = if (is.null(result$conf.int))
+                       "CI could not be computed (e.g. ties in Wilcoxon test)" else NULL
   ),
 
   effect_size = list(
@@ -253,7 +257,8 @@ skill_result <- list(
 - If `design = "paired"`: `subject_id_var` must not be NULL
 - If `design = "paired"`: `n_pairs` must equal `min(n_per_group)` when no missing data
 - `p_value` must be in (0, 1)
-- If `p_value < 0.05`: CI must not include 0
+- `ci_lower` / `ci_upper` may be `NA_real_` when `result$conf.int` is NULL (e.g. Wilcoxon with ties); in that case `ci_note` must be set
+- If `p_value < 0.05` and CI is available (not NA): CI must not include 0
 - `effect_size.value` must be ≥ 0
 - Paired tests (`paired_t_test`, `wilcoxon_signed_rank`) must use vector syntax, not formula
 - `method_justification` must state `paired=` value explicitly

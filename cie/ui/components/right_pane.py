@@ -49,6 +49,11 @@ def _render_approval_panel(approval_context: dict) -> dict[str, bool]:
     if description:
         st.markdown(description)
 
+    code_block = approval_context.get("code_block")
+    if code_block:
+        lang = approval_context.get("code_language", "r")
+        st.code(code_block, language=lang)
+
     confirmed = st.checkbox("内容を確認しました", key="approval_confirmed")
 
     col_cancel, col_approve = st.columns(2)
