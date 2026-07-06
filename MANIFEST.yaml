@@ -1,7 +1,7 @@
 manifest:
   name: CIE Platform
   codename: CIE
-  version: 2.2.0
+  version: 2.3.0
   specification_version: 1.2
 
 metadata:
@@ -16,6 +16,19 @@ metadata:
   machine_readable: true
 
   changelog:
+    - version: "2.3.0"
+      date: "2026-07-06"
+      decisions:
+        - "ADR-0005: IDE型フロントエンド・ローカル埋め込みRAG・Rワークスペース永続化"
+      changes:
+        - "repository構成に api/ (cie/api/) と frontend/ を追加（足場のみ、実装はPhase 1以降）"
+        - "spec/api/rest-api-contract.md added"
+        - "spec/ui/ide-workbench-spec.md added"
+        - "spec/knowledge/embedding-rag-spec.md added"
+        - "spec/runtime-workspace-persistence.md added"
+        - "schemas/knowledge-entry.schema.json に任意プロパティ embedding を追加"
+        - "pyproject.toml に optional extra rag / api を追加"
+        - "decisions/ADR-0005.md added"
     - version: "2.2.0"
       date: "2026-06-28"
       decisions:
@@ -57,6 +70,7 @@ loading_order:
 
   - PROJECT_RULES.md
   - decisions/
+  - decisions/ADR-0005.md          # Added: IDE型フロント・ローカル埋め込みRAG・Rワークスペース永続化
 
   - architecture/vision.md
   - architecture/principles.md
@@ -72,7 +86,11 @@ loading_order:
   - spec/system-workflow.yaml       # Added: ADR-0003 — SystemWorkflowRegistry
   - spec/permissions.yaml
   - spec/skill-lifecycle.md
+  - spec/runtime-workspace-persistence.md   # Added: ADR-0005 — .RData永続化
   - spec/ui/
+  - spec/ui/ide-workbench-spec.md           # Added: ADR-0005 — IDE型フロント
+  - spec/api/rest-api-contract.md           # Added: ADR-0005 — REST API契約
+  - spec/knowledge/embedding-rag-spec.md    # Added: ADR-0005 — ローカル埋め込みRAG
 
   - schemas/
 
@@ -115,6 +133,7 @@ repository:
       - permissions.yaml
       - configuration.yaml
       - skill-lifecycle.md          # Added: ADR-0002
+      - runtime-workspace-persistence.md   # Added: ADR-0005 — .RData永続化
 
     subdirectories:
       ui:
@@ -123,6 +142,29 @@ repository:
           - screen-specifications.md
           - component-library.md
           - interaction-flow.md
+          - ide-workbench-spec.md      # Added: ADR-0005 — IDE型フロント
+      api:                             # Added: ADR-0005
+        required:
+          - rest-api-contract.md
+      knowledge:                       # Added: ADR-0005
+        required:
+          - embedding-rag-spec.md
+
+  api:                                 # Added: ADR-0005 — API層（FastAPI）足場
+
+    root: cie/api/
+
+    description: >
+      既存Agent呼び出しパターン（token発行→AgentInput→agent.run()→finallyでrevoke）を
+      エンドポイント様式として踏襲するAPI層。実装はPhase 1以降（本フェーズは足場のみ）。
+
+  frontend:                            # Added: ADR-0005 — Webフロント（React+TS+Monaco）足場
+
+    root: frontend/
+
+    description: >
+      IDE型ワークベンチ（チャット/コードエディタ/コンソール/ファイルの可変ペイン）。
+      実装はPhase 1以降（本フェーズは足場のみ）。
 
   schemas:
 
@@ -278,6 +320,7 @@ repository:
       - ADR-0001.md   # Orchestrator-Planner Responsibility Boundary
       - ADR-0002.md   # Meta-Skills and Self-Improving Skill Architecture
       - ADR-0003.md   # Dynamic Knowledge Ingestion Architecture
+      - ADR-0005.md   # IDE型フロントエンド・ローカル埋め込みRAG・Rワークスペース永続化
 
 runtime:
 

@@ -1,7 +1,10 @@
 # PROJECT_RULES.md
 # CIE Platform Project Constitution
-# Version: 2.2.0
+# Version: 2.3.0
 # Status: Draft
+# Changelog v2.3.0:
+#   - Section 6: Footnote added — visible files (e.g. .RData) are not Hidden state (ADR-0005)
+#   - Section 18: Long-Term Compatibility updated (IDE型フロント, ローカル埋め込みRAG — ADR-0005)
 # Changelog v2.2.0:
 #   - Section 12: Knowledge Rules updated to reflect ADR-0003 3-namespace structure
 #   - Section 16: Forbidden Behaviors updated (ADR-0003 additions)
@@ -124,6 +127,11 @@ Never through implementation.
 
 **Forbidden:** Internal variables / Hidden state / Prompt injection /
 Undocumented behavior
+
+> **Footnote (ADR-0005):** A visible, user-inspectable, deletable file
+> (e.g. an `.RData` workspace snapshot written under `OUTPUT_DIR`) does not
+> constitute Hidden state. Hidden state refers to state that is invisible,
+> unauditable, or undocumented — not to persistence via ordinary files.
 
 ---
 
@@ -338,6 +346,8 @@ All architectural decisions must remain compatible with:
 - Additional User Skills (via REGISTRY.yaml)
 - Additional document parser backends (via AbstractDocumentParser)
 - Additional institutional knowledge entries (via KIP + REGISTRY.yaml)
+- IDE型フロント（API＋Webフロント）(ADR-0005)
+- ローカル埋め込みRAG (ADR-0005)
 - Future cloud deployment
 - Future distributed execution
 - Future MCP-compatible services
