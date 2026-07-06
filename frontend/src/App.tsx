@@ -1,16 +1,17 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { apiClient } from "./api/client";
 import { ChatPane } from "./components/ChatPane";
 import { ConsolePane } from "./components/ConsolePane";
-import { EditorPane } from "./components/EditorPane";
+import { EditorPane, type EditorHandle } from "./components/EditorPane";
 import { FileTree } from "./components/FileTree";
 import { Header } from "./components/Header";
 import { WorkspacePane } from "./components/WorkspacePane";
 import { applyTheme, getInitialTheme, type Theme } from "./theme";
+import { useRunner } from "./useRunner";
 
 const INITIAL_SCRIPT = `# CIE Workbench — R スクリプト
-# チャットの提案コードを「スクリプトへ挿入」するとここに入ります（Phase 3）。
+# チャットの提案コードを「✓ 挿入」でカーソル位置へ、「▶ Run」で実行します。
 `;
 
 export default function App() {
@@ -20,8 +21,13 @@ export default function App() {
     return t;
   });
   const [script, setScript] = useState(INITIAL_SCRIPT);
+  const [editorTab, setEditorTab] = useState("code");
+  const [consoleTab, setConsoleTab] = useState("console");
+  const editorRef = useRef<EditorHandle>(null);
   // Bumps whenever the session token changes so the header status refreshes.
   const [, setTokenTick] = useState(0);
+
+  const runner = useRunner(apiClient);
 
   const toggleTheme = useCallback(() => {
     setTheme((prev) => {
@@ -31,10 +37,25 @@ export default function App() {
     });
   }, []);
 
+  // Chat "✓ 挿入": drop the candidate at the editor cursor, do not run (§3.1).
   const insertCode = useCallback((code: string) => {
-    // Cursor-position insertion is Phase 3; append for now.
-    setScript((prev) => `${prev.replace(/\n+$/, "")}\n\n${code}\n`);
+    editorRef.current?.insertAtCursor(code);
   }, []);
+
+  // "▶ 実行" (chat / editor): run without further insertion. Bring the console
+  // forward so the streamed log is visible immediately (§4).
+  const runCode = useCallback(
+    (code: string, intent?: Record<string, unknown>) => {
+      setConsoleTab("console");
+      runner.runCode(code, intent);
+    },
+    [runner],
+  );
+
+  // Surface the structured result on the Result tab once it lands (§3.2, §4).
+  useEffect(() => {
+    if (runner.result) setEditorTab("result");
+  }, [runner.result]);
 
   const onConnectedChange = useCallback(() => setTokenTick((n) => n + 1), []);
   const connected = apiClient.hasToken();
@@ -56,6 +77,7 @@ export default function App() {
             connected={connected}
             onConnectedChange={onConnectedChange}
             onInsertCode={insertCode}
+            onRunCode={runCode}
           />
         </Panel>
 
@@ -64,11 +86,26 @@ export default function App() {
         <Panel defaultSize={46} minSize={25} order={2}>
           <PanelGroup direction="vertical" autoSaveId="cie.layout.center">
             <Panel defaultSize={62} minSize={20} order={1}>
-              <EditorPane value={script} onChange={setScript} theme={theme} />
+              <EditorPane
+                ref={editorRef}
+                value={script}
+                onChange={setScript}
+                theme={theme}
+                onRunCode={runCode}
+                running={runner.running}
+                result={runner.result}
+                tab={editorTab}
+                onTabChange={setEditorTab}
+              />
             </Panel>
             <PanelResizeHandle className="resize-handle" />
             <Panel defaultSize={38} minSize={12} order={2}>
-              <ConsolePane />
+              <ConsolePane
+                lines={runner.consoleLines}
+                figures={runner.figures}
+                tab={consoleTab}
+                onTabChange={setConsoleTab}
+              />
             </Panel>
           </PanelGroup>
         </Panel>
@@ -82,7 +119,7 @@ export default function App() {
             </Panel>
             <PanelResizeHandle className="resize-handle" />
             <Panel defaultSize={50} minSize={15} order={2}>
-              <WorkspacePane />
+              <WorkspacePane result={runner.result} />
             </Panel>
           </PanelGroup>
         </Panel>

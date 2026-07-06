@@ -1,11 +1,24 @@
-import { useState } from "react";
+import { useEffect, useRef } from "react";
+import type { ConsoleLine, RunFigure } from "../useRunner";
 import { Pane, PhasePlaceholder } from "./Pane";
 
+interface ConsolePaneProps {
+  lines: ConsoleLine[];
+  figures: RunFigure[];
+  tab: string;
+  onTabChange: (tab: string) => void;
+}
+
 /** Center-bottom: R console (WS /ws/console) + plot output
- *  (spec/ui/ide-workbench-spec.md §3.3). Streaming + figures land in Phase 3;
- *  this is the tabbed frame. */
-export function ConsolePane() {
-  const [tab, setTab] = useState("console");
+ *  (spec/ui/ide-workbench-spec.md §3.3). The Console tab shows the sanitized
+ *  streamed log; the Output tab shows figures from POST /api/visualize. */
+export function ConsolePane({ lines, figures, tab, onTabChange }: ConsolePaneProps) {
+  const logRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (tab === "console") logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
+  }, [lines, tab]);
+
   return (
     <Pane
       title="コンソール"
@@ -14,16 +27,45 @@ export function ConsolePane() {
         { id: "output", label: "Output" },
       ]}
       activeTab={tab}
-      onTabChange={setTab}
+      onTabChange={onTabChange}
+      flush
     >
       {tab === "console" ? (
-        <PhasePlaceholder phase="Phase 3">
-          WS <code>/ws/console</code> のサニタイズ済みストリームをここに逐次表示します。
-        </PhasePlaceholder>
+        <div className="console" data-testid="console-log" ref={logRef}>
+          {lines.length === 0 ? (
+            <div className="placeholder" style={{ padding: 12 }}>
+              コードを実行すると、<code>/ws/console</code>{" "}
+              のサニタイズ済みログをここに逐次表示します。
+            </div>
+          ) : (
+            lines.map((l) => (
+              <div key={l.id} className={`console__line console__line--${l.stream}`}>
+                {l.text}
+              </div>
+            ))
+          )}
+        </div>
       ) : (
-        <PhasePlaceholder phase="Phase 3">
-          <code>POST /api/visualize</code> で生成された図（PNG）を表示します。
-        </PhasePlaceholder>
+        <div className="pane__body">
+          {figures.length === 0 ? (
+            <PhasePlaceholder phase="Output">
+              統計結果から生成された図（<code>POST /api/visualize</code>）をここに表示します。
+            </PhasePlaceholder>
+          ) : (
+            <div className="figures" data-testid="figure-output">
+              {figures.map((f, i) => (
+                <figure className="figure" key={i}>
+                  {f.url ? (
+                    <img src={f.url} alt={f.title} className="figure__img" />
+                  ) : (
+                    <div className="placeholder">図を読み込めませんでした: {f.title}</div>
+                  )}
+                  <figcaption className="figure__caption">{f.title}</figcaption>
+                </figure>
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </Pane>
   );

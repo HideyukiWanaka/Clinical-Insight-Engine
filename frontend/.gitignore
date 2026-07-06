@@ -10,3 +10,8 @@ dist-ssr/
 /playwright-report/
 /blob-report/
 /.playwright/
+
+# The repo-wide .gitignore ignores *.html / *.png (spec-repo default). The
+# frontend legitimately needs these, so re-include the ones we track here.
+!index.html
+!tests/e2e/fixtures/*.png

@@ -11,6 +11,8 @@ interface PaneProps {
   activeTab?: string;
   onTabChange?: (id: string) => void;
   flush?: boolean;
+  /** Optional controls rendered in the header (e.g. the editor Run toolbar). */
+  headerExtra?: ReactNode;
   children: ReactNode;
 }
 
@@ -22,12 +24,14 @@ export function Pane({
   activeTab,
   onTabChange,
   flush,
+  headerExtra,
   children,
 }: PaneProps) {
   return (
     <section className="pane" aria-label={title}>
       <div className="pane__header">
         <span>{title}</span>
+        {headerExtra}
         {tabs && tabs.length > 0 && (
           <div className="pane__tabs" role="tablist">
             {tabs.map((t) => (

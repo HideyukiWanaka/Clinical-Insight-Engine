@@ -424,6 +424,115 @@ body {
   min-height: 0;
 }
 
+/* ---- Pane header toolbar (editor Run buttons) ---- */
+.pane__toolbar {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+.mini-btn--run {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.mini-btn--run:hover:not(:disabled) {
+  background: var(--accent-weak);
+}
+
+/* ---- Console pane ---- */
+.console {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--code-bg);
+}
+.console__line {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.console__line--stderr {
+  color: var(--danger);
+}
+.console__line--info {
+  color: var(--text-muted);
+}
+.console__line--exit {
+  color: var(--ok);
+  margin-top: 4px;
+}
+
+/* ---- Output figures ---- */
+.figures {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.figure {
+  margin: 0;
+}
+.figure__img {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+}
+.figure__caption {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ---- Result tab ---- */
+.result__json {
+  margin: 10px 0 0;
+  padding: 10px;
+  overflow: auto;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.result-error {
+  color: var(--danger);
+  font-size: 13px;
+}
+.result-error__detail {
+  margin-top: 6px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---- Workspace/Data ---- */
+.workspace__var {
+  display: contents;
+}
+.workspace__vars dt {
+  font-weight: 600;
+  color: var(--text);
+}
+.workspace__files {
+  margin-top: 12px;
+  font-size: 12px;
+}
+.workspace__label {
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.workspace__files ul {
+  margin: 0;
+  padding-left: 18px;
+  font-family: ui-monospace, monospace;
+}
+
 .kv {
   display: grid;
   grid-template-columns: auto 1fr;

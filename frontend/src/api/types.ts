@@ -56,3 +56,52 @@ export interface ProposeResponse {
   analysis_proposal: AnalysisProposal | null;
   r_script_provenance: RScriptProvenance;
 }
+
+// POST /api/run (§3.3)
+export interface RunRequest {
+  r_script: string;
+  persist_workspace?: boolean;
+}
+
+export interface ExecutionResult {
+  status?: string;
+  exit_code?: number;
+  duration_ms?: number;
+  sanitized_stdout_summary?: string;
+  detail?: string | null;
+}
+
+export interface RunResponse {
+  execution_id: string;
+  execution_result: ExecutionResult;
+  statistical_results?: Record<string, unknown> | null;
+  statistical_results_reason?: string | null;
+  generated_files?: string[];
+  workspace_summary?: Record<string, unknown> | null;
+  // Always present when the run failed (§3.3, §5) — the frontend must show it.
+  error_detail?: string | null;
+}
+
+// POST /api/visualize (§3.4)
+export interface VisualizeRequest {
+  statistical_results: Record<string, unknown>;
+  intent_object: Record<string, unknown>;
+}
+
+export interface Figure {
+  title: string;
+  path?: string | null;
+}
+
+export interface VisualizeResponse {
+  execution_id: string;
+  figures: Figure[];
+  error_detail?: string | null;
+}
+
+// WS /ws/console (§4.1) — sanitized console frames.
+export interface ConsoleMessage {
+  type: "stdout" | "stderr" | "exit";
+  text: string;
+  exit_code?: number | null;
+}
