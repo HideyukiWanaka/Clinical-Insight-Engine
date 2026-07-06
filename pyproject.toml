@@ -34,6 +34,16 @@ pdf = [
 ui = [
     "streamlit>=1.35",
 ]
+rag = [
+    "onnxruntime>=1.17",
+    "numpy>=1.26",
+]
+api = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "python-multipart>=0.0.9",
+    "websockets>=12.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

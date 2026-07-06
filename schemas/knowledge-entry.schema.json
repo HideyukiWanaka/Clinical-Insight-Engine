@@ -73,6 +73,12 @@
         }
       }
     },
+    "embedding": {
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 1,
+      "description": "Optional local embedding vector for semantic retrieval (ADR-0005). Generated at ingestion/reindex time; not authored by humans."
+    },
     "approved_by_human": { "type": "boolean", "const": true },
     "created_by":        { "type": "string" },
     "approved_by":       { "type": "string" },
