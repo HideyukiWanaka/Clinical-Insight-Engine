@@ -82,6 +82,11 @@ export interface RunResponse {
   error_detail?: string | null;
 }
 
+// POST /api/workspace/reset (spec/runtime-workspace-persistence.md §3)
+export interface WorkspaceResetResponse {
+  removed: string[];
+}
+
 // POST /api/visualize (§3.4)
 export interface VisualizeRequest {
   statistical_results: Record<string, unknown>;

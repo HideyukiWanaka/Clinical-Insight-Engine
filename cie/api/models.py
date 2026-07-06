@@ -81,10 +81,15 @@ class ProposeResponse(BaseModel):
 
 
 class RunRequest(BaseModel):
-    """Request body for ``POST /api/run``."""
+    """Request body for ``POST /api/run``.
+
+    ``persist_workspace`` defaults to ``True``: the .RData workspace is kept
+    across runs at project scope (spec/runtime-workspace-persistence.md §3,
+    ADR-0005 Principle 2). Callers may pass ``False`` for a one-off, isolated run.
+    """
 
     r_script: str
-    persist_workspace: bool = False
+    persist_workspace: bool = True
 
 
 class RunResponse(BaseModel):
@@ -98,6 +103,22 @@ class RunResponse(BaseModel):
     workspace_summary: dict[str, Any] | None = None
     # Always populated on failure so the frontend never fails silently (§5).
     error_detail: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# POST /api/workspace/reset (spec/runtime-workspace-persistence.md §3)
+# ---------------------------------------------------------------------------
+
+
+class WorkspaceResetResponse(BaseModel):
+    """Result of clearing the persisted R workspace.
+
+    ``removed`` lists the files that were physically deleted (``.RData`` and/or
+    ``workspace_summary.json``). Deleting these visible files is permitted —
+    they are a convenience cache, not soft-delete-governed knowledge (§3).
+    """
+
+    removed: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
