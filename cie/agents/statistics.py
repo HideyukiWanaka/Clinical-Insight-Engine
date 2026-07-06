@@ -62,6 +62,51 @@ STRICT REQUIREMENTS (same as primary analysis):
 10. Never call install.packages(), system(), system2(), shell(), or source().
 """
 
+_R_GEN_CHAT_SYSTEM_PROMPT = """\
+You are a biostatistics R programmer and clinical research advisor for the CIE
+Platform, replying inside a chat-style workbench. Explain your recommended
+analysis approach in natural, conversational Japanese, then provide one or
+more complete, runnable R code candidates the user can choose from (e.g. a
+parametric test and a non-parametric alternative) — the way a knowledgeable
+colleague would when asked "how should I compare X between groups?".
+
+STRICT OUTPUT FORMAT (follow exactly, do not add text outside these markers):
+
+=== EXPLANATION ===
+<Japanese markdown: which test(s) you recommend and why, the key assumption(s)
+checked, when the alternative should be preferred instead, and how to
+interpret the results (p-value, effect size, CI). 3-8 sentences.>
+
+=== CODE: <candidate_id>|<short Japanese label> ===
+```r
+<complete runnable R script for this candidate>
+```
+
+Repeat the "=== CODE: id|label ===" marker followed by a fenced ```r block for
+each additional candidate (e.g. a non-parametric alternative). List the
+primary recommended candidate FIRST. Provide at most 2 candidates; if there is
+no meaningful statistical alternative, provide just the one.
+
+RULES FOR EACH R CODE CANDIDATE (same as always):
+1. Read the dataset:
+       data <- read.csv(file.path(Sys.getenv("WORKSPACE_DIR"), "dataset.csv"),
+                        stringsAsFactors = FALSE)
+   Never hard-code an absolute path and never fabricate data.
+2. Use the column names given in dataset_columns.
+3. set.seed(42) for reproducibility before any stochastic step.
+4. Ground your implementation in the provided KNOWLEDGE REFERENCE PATTERNS.
+5. Compute and print: the test statistic, p-value, effect size (named), and
+   95% confidence interval where applicable.
+6. Write a machine-readable result as JSON to
+       file.path(Sys.getenv("OUTPUT_DIR"), "result.json")
+   using EXACTLY these keys: method_id, test_name, test_statistic, df,
+   p_value, effect_size, effect_size_measure, ci_lower, ci_upper,
+   sample_size, group_summaries.
+7. Wrap the analysis in tryCatch so failures print a clear message and quit
+   with a non-zero status.
+8. Never call install.packages(), system(), system2(), shell(), or source().
+"""
+
 _R_GEN_SYSTEM_PROMPT = """\
 You are a biostatistics R programmer for the CIE Platform. Produce a single,
 complete, runnable R script that performs the requested statistical analysis.
@@ -318,6 +363,32 @@ _ASSUMPTION_CHECKS_BY_METHOD: dict[str, list[dict]] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Parametric <-> non-parametric counterpart, used to offer a second candidate
+# in the conversational (Workbench) proposal — mirrors the on_violation
+# fallback already declared in _ASSUMPTION_CHECKS_BY_METHOD above.
+# ---------------------------------------------------------------------------
+
+_METHOD_ALTERNATIVES: dict[str, str] = {
+    "independent_samples_t_test": "mann_whitney_u_test",
+    "mann_whitney_u_test": "independent_samples_t_test",
+    "paired_t_test": "wilcoxon_signed_rank_test",
+    "wilcoxon_signed_rank_test": "paired_t_test",
+    "one_way_anova": "kruskal_wallis_test",
+    "kruskal_wallis_test": "one_way_anova",
+    "pearson_correlation": "spearman_rank_correlation",
+    "spearman_rank_correlation": "pearson_correlation",
+}
+
+# Parses the strict "=== EXPLANATION ===" / "=== CODE: id|label ===" format
+# required by _R_GEN_CHAT_SYSTEM_PROMPT.
+_EXPLANATION_RE = re.compile(r"===\s*EXPLANATION\s*===\s*(.*?)(?====\s*CODE:|\Z)", re.DOTALL)
+_CODE_CANDIDATE_RE = re.compile(
+    r"===\s*CODE:\s*([^|=]+)\|([^=]+?)\s*===\s*```(?:r|R)?\s*\n(.*?)```",
+    re.DOTALL,
+)
+
+
 class StatisticsAgent(BaseAgent):
     """Statistical method selection and analysis plan generation agent.
 
@@ -461,6 +532,7 @@ class StatisticsAgent(BaseAgent):
         # fresh-analysis prompt.  Falls back to specification-only (r_script=None)
         # when no LLM client is configured.
         continuation_query: str | None = payload.get("continuation_query")
+        conversational_mode: bool = bool(payload.get("conversational_mode", False))
         if continuation_query:
             r_script, provenance = await self._generate_continuation_r_script(
                 method=method,
@@ -470,6 +542,12 @@ class StatisticsAgent(BaseAgent):
                 prior_statistical_results=payload.get("prior_statistical_results"),
                 prior_r_script=payload.get("prior_r_script"),
             )
+        elif conversational_mode:
+            analysis_proposal, r_script, provenance = await self._generate_conversational_proposal(
+                method=method, intent_obj=intent_obj, payload=payload
+            )
+            if analysis_proposal is not None:
+                output_payload["analysis_proposal"] = analysis_proposal
         else:
             r_script, provenance = await self._generate_r_script(
                 method=method, intent_obj=intent_obj, payload=payload
@@ -646,6 +724,168 @@ class StatisticsAgent(BaseAgent):
             code = match.group(1).strip()
             return code or None
         return None
+
+    # ------------------------------------------------------------------
+    # Conversational proposal generation (Workbench chat mode)
+    # ------------------------------------------------------------------
+
+    async def _generate_conversational_proposal(
+        self, method: dict, intent_obj: dict, payload: dict
+    ) -> tuple[dict | None, str | None, dict]:
+        """Generate a natural-language explanation + selectable R code candidates.
+
+        Unlike ``_generate_r_script`` (single silently-chosen script, no prose),
+        this produces an ``analysis_proposal`` the Workbench chat can render as
+        a conversational reply: an explanation of the recommended method(s) plus
+        one or two runnable R code candidates (primary + non-parametric
+        alternative, when one exists via _METHOD_ALTERNATIVES) that the human
+        selects and runs explicitly. Not cached — conversational replies are
+        exploratory, like the continuation flow.
+
+        Returns:
+            (analysis_proposal, recommended_r_script, provenance).
+            ``analysis_proposal`` and ``recommended_r_script`` are None when no
+            LLM client is available or the response could not be parsed.
+        """
+        provenance: dict = {
+            "llm_generated": False,
+            "from_cache": False,
+            "knowledge_references": [],
+            "conversational": True,
+        }
+
+        if self._llm_client is None:
+            provenance["reason"] = "no_llm_client_configured"
+            return None, None, provenance
+
+        column_metadata = (
+            payload.get("dataset_structural_metadata")
+            or payload.get("variable_metadata")
+            or {}
+        )
+
+        alt_method_id = _METHOD_ALTERNATIVES.get(method["method_id"])
+        alt_method = _METHODS.get(alt_method_id) if alt_method_id else None
+
+        references: list = []
+        if self._reference_library is not None:
+            query_terms = [
+                method["method_id"],
+                method.get("r_function", ""),
+                intent_obj.get("objective", ""),
+                intent_obj.get("outcome_type", ""),
+            ]
+            if alt_method:
+                query_terms += [alt_method["method_id"], alt_method.get("r_function", "")]
+            references = self._reference_library.retrieve(query_terms, top_k=2)
+            provenance["knowledge_references"] = [r.title for r in references]
+
+        skill_id = _METHOD_TO_SKILL_ID.get(method["method_id"])
+        skill_block = (
+            self._skill_loader.get_skill_prompt_block(skill_id)
+            if self._skill_loader is not None and skill_id
+            else ""
+        )
+        system_prompt = _R_GEN_CHAT_SYSTEM_PROMPT + skill_block
+        user_message = self._build_conversational_user_message(
+            method, alt_method, intent_obj, column_metadata, references
+        )
+
+        try:
+            raw = await self._llm_client.complete(system_prompt, user_message)
+        except LLMError as exc:
+            _log.warning("Conversational proposal LLM generation failed: %s", exc)
+            provenance["reason"] = f"llm_error: {exc}"
+            return None, None, provenance
+
+        parsed = self._extract_conversational_proposal(raw)
+        if parsed is None:
+            provenance["reason"] = "empty_or_unparsable_llm_response"
+            return None, None, provenance
+
+        explanation, candidates = parsed
+        analysis_proposal = {
+            "explanation_markdown": explanation,
+            "code_candidates": candidates,
+            "recommended_candidate_id": candidates[0]["candidate_id"],
+        }
+        provenance["llm_generated"] = True
+        return analysis_proposal, candidates[0]["r_code"], provenance
+
+    @staticmethod
+    def _build_conversational_user_message(
+        method: dict,
+        alt_method: dict | None,
+        intent_obj: dict,
+        column_metadata: dict,
+        references: list,
+    ) -> str:
+        """Assemble the user turn for conversational proposal generation."""
+        reference_block = "\n\n".join(
+            f"### Reference: {r.title}\n{r.excerpt()}" for r in references
+        ) or "(no matching reference documents found)"
+
+        request = {
+            "primary_method": {
+                "method_id": method["method_id"],
+                "r_function": method.get("r_function"),
+                "r_packages": method.get("r_packages", []),
+                "effect_size_measure": method.get("effect_size_measure"),
+            },
+            "alternative_method": (
+                {
+                    "method_id": alt_method["method_id"],
+                    "r_function": alt_method.get("r_function"),
+                    "r_packages": alt_method.get("r_packages", []),
+                    "effect_size_measure": alt_method.get("effect_size_measure"),
+                }
+                if alt_method is not None
+                else None
+            ),
+            "intent_object": {
+                "objective": intent_obj.get("objective"),
+                "outcome_type": intent_obj.get("outcome_type"),
+                "paired": intent_obj.get("paired"),
+                "outcome_variables": intent_obj.get("outcome_variables", []),
+                "predictor_variables": intent_obj.get("predictor_variables", []),
+                "distribution_assumptions": intent_obj.get("distribution_assumptions"),
+            },
+            "dataset_columns": column_metadata,
+        }
+        return (
+            "A user in the chat workbench asked for this analysis. Recommend an "
+            "approach and provide selectable R code candidate(s).\n\n"
+            "=== ANALYSIS REQUEST ===\n"
+            f"{json.dumps(request, ensure_ascii=False, indent=2)}\n\n"
+            "=== KNOWLEDGE REFERENCE PATTERNS (ground your script in these) ===\n"
+            f"{reference_block}\n"
+        )
+
+    @staticmethod
+    def _extract_conversational_proposal(raw_text: str) -> tuple[str, list[dict]] | None:
+        """Parse the strict EXPLANATION/CODE format into (explanation, candidates).
+
+        Returns None when no candidate code block could be found (unparsable or
+        empty LLM response).
+        """
+        exp_match = _EXPLANATION_RE.search(raw_text)
+        explanation = exp_match.group(1).strip() if exp_match else ""
+
+        candidates: list[dict] = []
+        for m in _CODE_CANDIDATE_RE.finditer(raw_text):
+            candidate_id = m.group(1).strip()
+            label = m.group(2).strip()
+            code = m.group(3).strip()
+            if candidate_id and code:
+                candidates.append({
+                    "candidate_id": candidate_id,
+                    "label": label,
+                    "r_code": code,
+                })
+
+        if not candidates:
+            return None
+        return explanation, candidates
 
     # ------------------------------------------------------------------
     # Continuation (follow-up) R-script generation

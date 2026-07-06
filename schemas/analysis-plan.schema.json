@@ -25,6 +25,30 @@
       "description": "How the R script was produced: whether it was LLM-generated, which knowledge references grounded it, and whether it came from cache.",
       "additionalProperties": true
     },
+    "analysis_proposal": {
+      "type": "object",
+      "description": "Conversational-mode output (Workbench): a natural-language explanation plus one or more selectable R code candidates, produced instead of a single silently-chosen r_script.",
+      "additionalProperties": true,
+      "properties": {
+        "explanation_markdown": {
+          "type": "string",
+          "description": "Natural-language explanation of the recommended method(s), assumptions, and interpretation guidance."
+        },
+        "code_candidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["candidate_id", "label", "r_code"],
+            "properties": {
+              "candidate_id": { "type": "string" },
+              "label": { "type": "string" },
+              "r_code": { "type": "string" }
+            }
+          }
+        },
+        "recommended_candidate_id": { "type": ["string", "null"] }
+      }
+    },
     "created_at": { "type": "string" }
   }
 }

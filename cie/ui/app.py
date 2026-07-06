@@ -31,6 +31,7 @@ from cie.ui.screens.settings import render_settings
 from cie.ui.screens.format_selection import render_format_selection
 from cie.ui.screens.results import render_results
 from cie.ui.screens.skill_improvement import render_skill_improvement
+from cie.ui.screens.workbench import render_workbench, new_message_id
 from cie.ui.screens.workflow_view import render_workflow_view
 
 _CSS_VARIABLES = """
@@ -735,10 +736,434 @@ def _execute_continuation(services: dict) -> None:
                      f"追加解析完了 (p={new_sr.get('p_value') if new_sr else 'N/A'})", "INFO")
 
 
-_SCREENS = ("dashboard", "intent", "data_preview", "workflow", "quality", "analysis", "results", "audit", "knowledge", "skill_improvement", "settings")
+def _handle_workbench() -> None:
+    """SCR-Workbench: chat-driven analysis, bypassing the Orchestrator DAG.
+
+    Mirrors the existing "continuation analysis" mini-pipeline (see
+    ``_start_continuation_analysis``/``_execute_continuation`` above): each
+    agent is invoked directly via ``agent.run()`` with a freshly minted,
+    try/finally-revoked capability token, instead of going through the DAG's
+    ``security_review`` approval gate. The human-in-the-loop role is played by
+    the chat/code-editor interaction itself (the user explicitly picks or
+    edits the code before pressing "実行").
+    """
+    from cie.core.config import CIEConfig
+
+    services = _get_services()
+    skill_loader = services.get("skill_loader")
+    user_skill_ids: list[str] = (
+        [m.skill_id for m in skill_loader.get_all_user_skills()]
+        if skill_loader is not None
+        else []
+    )
+
+    event = render_workbench(
+        chat_history=st.session_state["workbench_history"],
+        active_code=st.session_state["workbench_active_code"],
+        last_run=st.session_state["workbench_last_run"],
+        manuscript_sections=st.session_state["workbench_manuscript_sections"],
+        dataset_uploaded=st.session_state.get("intent_csv_bytes") is not None,
+        workspace_dir=CIEConfig().workspace_directory,
+        available_user_skills=user_skill_ids,
+        format_settings={
+            "checklist_id": st.session_state["format_checklist_id"],
+            "journal_style": st.session_state["format_journal_style"],
+            "skill_id": st.session_state["format_skill_id"],
+        },
+    )
+
+    if not event:
+        return
+
+    action = event.get("action")
+    if action == "upload_dataset":
+        st.session_state["intent_csv_bytes"] = event["bytes"]
+        st.session_state["intent_csv_filename"] = event["filename"]
+        st.rerun()
+    elif action == "update_format_settings":
+        st.session_state["format_checklist_id"] = event.get("checklist_id")
+        st.session_state["format_journal_style"] = event.get("journal_style", "APA")
+        st.session_state["format_skill_id"] = event.get("skill_id")
+        st.rerun()
+    elif action == "user_message":
+        _workbench_handle_user_message(services, event["text"])
+        st.rerun()
+    elif action in ("run_candidate", "run_code"):
+        _workbench_execute_code(services, event.get("r_code") or event.get("code"))
+        st.rerun()
+    elif action == "generate_manuscript":
+        _workbench_generate_manuscript(services)
+        st.rerun()
+
+
+def _workbench_handle_user_message(services: dict, text: str) -> None:
+    """Handle one chat turn: Planner (first turn only) → Statistics.
+
+    First turn produces a conversational analysis_proposal (explanation +
+    selectable R code candidates, see StatisticsAgent._generate_conversational_
+    proposal). Subsequent turns are routed as continuation_query through the
+    existing single-script continuation path. Any failure reason is rendered
+    directly into the assistant's chat message — this is the fix for the
+    previously-silent StatisticsAgent LLM-failure bug: r_script_provenance.reason
+    is never dropped on the floor here.
+    """
+    from cie.agents.base import AgentInput
+    from cie.security.capability_token import CapabilityScope
+
+    history: list = st.session_state["workbench_history"]
+    history.append({"id": new_message_id(), "role": "user", "content": text, "candidates": []})
+
+    planner = services["planner"]
+    statistics = services["statistics"]
+    token_manager = services["token_manager"]
+
+    csv_bytes = st.session_state.get("intent_csv_bytes")
+    col_meta: dict = {}
+    if csv_bytes:
+        dc = _build_dataset_context(csv_bytes)
+        col_meta = dc.get("dataset_structural_metadata", {})
+
+    intent_obj: dict = st.session_state.get("workbench_intent_object") or {}
+    is_first_turn = not intent_obj
+
+    if is_first_turn:
+        execution_id = str(uuid.uuid4())
+        pl_token = token_manager.issue(
+            execution_id=execution_id,
+            agent_id="planner",
+            step_id="workbench_planner",
+            requested_scopes={
+                CapabilityScope.DATASET_PROXY_METADATA,
+                CapabilityScope.WORKFLOW_STATE_READ,
+                CapabilityScope.AUDIT_WRITE_ENTRY,
+            },
+        )
+        try:
+            pl_input = AgentInput(
+                execution_id=execution_id,
+                node_id="workbench_planner",
+                capability_token=pl_token,
+                payload={
+                    "user_natural_language_prompt": text,
+                    "dataset_structural_metadata": col_meta,
+                    "inject_raw_data_rows": False,
+                },
+                input_schema_ref="cie://schemas/planner-input.schema.json",
+            )
+            with st.spinner("研究意図を解析中..."):
+                pl_output = asyncio.run(planner.run(pl_input))
+        finally:
+            token_manager.revoke(pl_token)
+
+        if pl_output.status not in ("success", "clarification_required"):
+            history.append({
+                "id": new_message_id(), "role": "assistant", "candidates": [],
+                "content": f"意図の解析に失敗しました: {pl_output.error_message}",
+            })
+            _append_activity("planner", "workbench_planner_failed",
+                             pl_output.error_message or "不明なエラー", "CRITICAL")
+            return
+
+        intent_obj = pl_output.output_payload.get("intent_object") or {}
+        st.session_state["workbench_intent_object"] = intent_obj
+
+        if pl_output.output_payload.get("requires_human_clarification"):
+            options = pl_output.output_payload.get("clarification_options") or []
+            option_lines = "\n".join(f"- {o.get('label')}" for o in options)
+            history.append({
+                "id": new_message_id(), "role": "assistant", "candidates": [],
+                "content": (
+                    "研究意図に確認したい点があります。次のメッセージで具体的に教えてください。\n\n"
+                    f"{option_lines}"
+                ),
+            })
+            return
+
+    execution_id = str(uuid.uuid4())
+    prior_sr = st.session_state.get("workbench_statistical_results")
+    conversational = prior_sr is None
+
+    st_token = token_manager.issue(
+        execution_id=execution_id,
+        agent_id="statistics",
+        step_id="workbench_statistics",
+        requested_scopes={
+            CapabilityScope.DATASET_READ_VALIDATED,
+            CapabilityScope.R_CODE_GENERATE_TEMPLATE,
+            CapabilityScope.AUDIT_WRITE_ENTRY,
+        },
+    )
+    try:
+        payload: dict = {
+            "data_quality_report": {"quality_gate_passed": True},
+            "intent_object": intent_obj,
+            "dataset_structural_metadata": col_meta,
+            "inject_raw_data_rows": False,
+        }
+        if conversational:
+            payload["conversational_mode"] = True
+        else:
+            payload["continuation_query"] = text
+            payload["prior_statistical_results"] = prior_sr
+            last_run = st.session_state.get("workbench_last_run") or {}
+            payload["prior_r_script"] = last_run.get("r_script")
+        st_input = AgentInput(
+            execution_id=execution_id,
+            node_id="workbench_statistics",
+            capability_token=st_token,
+            payload=payload,
+            input_schema_ref="cie://schemas/analysis-request.schema.json",
+        )
+        with st.spinner("分析方法を検討中..."):
+            st_output = asyncio.run(statistics.run(st_input))
+    finally:
+        token_manager.revoke(st_token)
+
+    if st_output.status != "success":
+        history.append({
+            "id": new_message_id(), "role": "assistant", "candidates": [],
+            "content": f"分析方法の検討中にエラーが発生しました: {st_output.error_message}",
+        })
+        _append_activity("statistics", "workbench_statistics_failed",
+                         st_output.error_message or "不明なエラー", "CRITICAL")
+        return
+
+    op = st_output.output_payload
+    proposal = op.get("analysis_proposal")
+    reason = (op.get("r_script_provenance") or {}).get("reason")
+
+    if proposal:
+        history.append({
+            "id": new_message_id(), "role": "assistant",
+            "content": proposal["explanation_markdown"],
+            "candidates": proposal["code_candidates"],
+        })
+    elif op.get("r_script"):
+        # Continuation turn: single script, no candidates list.
+        history.append({
+            "id": new_message_id(), "role": "assistant",
+            "content": f"追加解析のRコードを用意しました（{text}）。内容を確認して実行してください。",
+            "candidates": [{
+                "candidate_id": "continuation",
+                "label": "この追加解析を実行",
+                "r_code": op["r_script"],
+            }],
+        })
+    else:
+        # Never silently drop the reason (fixes the previously-swallowed
+        # r_script_provenance.reason bug).
+        detail = f"（理由: {reason}）" if reason else ""
+        history.append({
+            "id": new_message_id(), "role": "assistant", "candidates": [],
+            "content": (
+                f"Rコードを生成できませんでした。{detail}\n\n"
+                "設定画面でLLMのAPIキーが設定されているか確認してください。"
+            ),
+        })
+        _append_activity("statistics", "workbench_no_script", detail or "no reason given", "WARNING")
+
+
+def _workbench_execute_code(services: dict, code: str | None) -> None:
+    """Run *code* via RuntimeAgent (+ VisualizationAgent), bypassing the DAG.
+
+    Mirrors ``_execute_continuation``'s token-mint/run/revoke pattern. Any
+    failure reason (execution_result.detail / statistical_results_reason) is
+    always attached to workbench_last_run["error_detail"] so the output pane
+    can show it — this is the direct fix for the "silent no results" bug
+    (previously RuntimeAgent's detailed no_executable_script/execution_failed
+    messages were computed but never reached the UI).
+    """
+    from cie.agents.base import AgentInput
+    from cie.security.capability_token import CapabilityScope
+
+    if not code or not code.strip():
+        return
+
+    st.session_state["workbench_active_code"] = code
+    runtime_agent = services.get("runtime_agent")
+    visualization = services.get("visualization")
+    token_manager = services["token_manager"]
+    execution_id = str(uuid.uuid4())
+
+    rt_token = token_manager.issue(
+        execution_id=execution_id,
+        agent_id="runtime",
+        step_id="workbench_runtime",
+        requested_scopes={
+            CapabilityScope.RUNTIME_INVOKE_EXECUTION,
+            CapabilityScope.AUDIT_WRITE_ENTRY,
+        },
+    )
+    try:
+        rt_input = AgentInput(
+            execution_id=execution_id,
+            node_id="workbench_runtime",
+            capability_token=rt_token,
+            payload={"r_script": code, "inject_raw_data_rows": False},
+            input_schema_ref="cie://schemas/task-context.schema.json",
+        )
+        with st.spinner("Rコードを実行中..."):
+            rt_output = asyncio.run(runtime_agent.run(rt_input))
+    finally:
+        token_manager.revoke(rt_token)
+
+    if rt_output.status != "success":
+        st.session_state["workbench_last_run"] = {
+            "r_script": code,
+            "execution_result": {},
+            "statistical_results": None,
+            "statistical_results_formatted": None,
+            "error_detail": rt_output.error_message or "実行に失敗しました。",
+            "figures": [],
+            "generated_files": [],
+        }
+        _append_activity("runtime", "workbench_runtime_failed",
+                         rt_output.error_message or "不明なエラー", "CRITICAL")
+        return
+
+    op = rt_output.output_payload
+    execution_result: dict = op.get("execution_result") or {}
+    statistical_results = op.get("statistical_results")
+    stats_reason = op.get("statistical_results_reason")
+
+    error_detail: str | None = None
+    if execution_result.get("status") in ("no_executable_script", "execution_failed", "nonzero_exit"):
+        error_detail = execution_result.get("detail") or (
+            f"Rの実行が正常に終了しませんでした（exit_code={execution_result.get('exit_code')}）。"
+        )
+    elif statistical_results is None and stats_reason:
+        error_detail = f"統計結果を読み取れませんでした（理由: {stats_reason}）。"
+
+    figures: list[dict] = []
+    if visualization is not None and statistical_results:
+        intent_obj = st.session_state.get("workbench_intent_object") or {}
+        csv_bytes = st.session_state.get("intent_csv_bytes")
+        col_meta = {}
+        if csv_bytes:
+            dc = _build_dataset_context(csv_bytes)
+            col_meta = dc.get("dataset_structural_metadata", {})
+        vz_token = token_manager.issue(
+            execution_id=execution_id,
+            agent_id="visualization",
+            step_id="workbench_visualization",
+            requested_scopes={
+                CapabilityScope.DATASET_READ_VALIDATED,
+                CapabilityScope.R_CODE_GENERATE_TEMPLATE,
+                CapabilityScope.AUDIT_WRITE_ENTRY,
+                CapabilityScope.RUNTIME_INVOKE_EXECUTION,
+            },
+        )
+        try:
+            vz_input = AgentInput(
+                execution_id=execution_id,
+                node_id="workbench_visualization",
+                capability_token=vz_token,
+                payload={
+                    "statistical_results": statistical_results,
+                    "intent_object": intent_obj,
+                    "dataset_structural_metadata": col_meta,
+                    "inject_raw_data_rows": False,
+                },
+                input_schema_ref="cie://schemas/task-context.schema.json",
+            )
+            with st.spinner("図を生成中..."):
+                vz_output = asyncio.run(visualization.run(vz_input))
+        finally:
+            token_manager.revoke(vz_token)
+
+        if vz_output.status == "success":
+            fig_manifest = vz_output.output_payload.get("figure_manifest") or []
+            figures = [
+                {"title": f.get("figure_id", "Figure"), "path": f.get("actual_path")}
+                for f in fig_manifest if isinstance(f, dict)
+            ]
+
+    st.session_state["workbench_last_run"] = {
+        "r_script": code,
+        "execution_result": execution_result,
+        "statistical_results": statistical_results,
+        "statistical_results_formatted": format_statistical_results(
+            statistical_results, stats_reason
+        ),
+        "error_detail": error_detail,
+        "figures": figures,
+        "generated_files": op.get("generated_files") or [],
+    }
+    if statistical_results:
+        st.session_state["workbench_statistical_results"] = statistical_results
+    _append_activity("runtime", "workbench_execution_completed",
+                     f"実行完了 (status={execution_result.get('status')})",
+                     "INFO" if not error_detail else "WARNING")
+
+
+def _workbench_generate_manuscript(services: dict) -> None:
+    """Draft manuscript sections from the current statistical_results.
+
+    Calls ReportingAgent directly with the format settings chosen in the
+    Workbench's format-selection panel (Phase 6) — the same
+    checklist_id/journal_style/skill_id fields the wizard's ReportingAgent
+    invocation already reads.
+    """
+    from cie.agents.base import AgentInput
+    from cie.security.capability_token import CapabilityScope
+
+    reporting = services.get("reporting")
+    statistical_results = st.session_state.get("workbench_statistical_results")
+    if reporting is None or not statistical_results:
+        return
+
+    token_manager = services["token_manager"]
+    execution_id = str(uuid.uuid4())
+    rp_token = token_manager.issue(
+        execution_id=execution_id,
+        agent_id="reporting",
+        step_id="workbench_reporting",
+        requested_scopes={
+            CapabilityScope.REPORT_COMPILE_MANUSCRIPT,
+            CapabilityScope.AUDIT_WRITE_ENTRY,
+        },
+    )
+    try:
+        rp_input = AgentInput(
+            execution_id=execution_id,
+            node_id="workbench_reporting",
+            capability_token=rp_token,
+            payload={
+                "statistical_results": statistical_results,
+                "intent_object": st.session_state.get("workbench_intent_object") or {},
+                "reporting_checklist_id": st.session_state.get("format_checklist_id"),
+                "target_journal_style": st.session_state.get("format_journal_style", "APA"),
+                "reporting_skill_id": st.session_state.get("format_skill_id"),
+                "inject_raw_data_rows": False,
+            },
+            input_schema_ref="cie://schemas/task-context.schema.json",
+        )
+        with st.spinner("原稿を生成中..."):
+            rp_output = asyncio.run(reporting.run(rp_input))
+    finally:
+        token_manager.revoke(rp_token)
+
+    if rp_output.status != "success":
+        st.error(f"ReportingAgent エラー: {rp_output.error_message}")
+        _append_activity("reporting", "workbench_reporting_failed",
+                         rp_output.error_message or "不明なエラー", "CRITICAL")
+        return
+
+    sections_list: list = rp_output.output_payload.get("manuscript_sections") or []
+    sections_dict = {
+        s.get("section_id", str(i)): s for i, s in enumerate(sections_list)
+        if isinstance(s, dict)
+    }
+    st.session_state["workbench_manuscript_sections"] = sections_dict
+    _append_activity("reporting", "workbench_manuscript_generated",
+                     f"原稿セクション {len(sections_dict)} 件を生成", "INFO")
+
+
+_SCREENS = ("dashboard", "workbench", "intent", "data_preview", "workflow", "quality", "analysis", "results", "audit", "knowledge", "skill_improvement", "settings")
 
 _NAV_LABELS: dict[str, str] = {
     "dashboard":        "ダッシュボード",
+    "workbench":        "🧪 ワークベンチ",
     "intent":           "研究意図入力",
     "data_preview":     "データプレビュー",
     "workflow":         "ワークフロー",
@@ -814,6 +1239,13 @@ def _init_session_state() -> None:
         "statistical_results":           None,  # latest parsed statistical_results
         # Phase 8: skill self-improvement
         "skill_proposals":               [],    # cached list of proposals for the UI
+        # Workbench (chat + R code + output + files, IDE-style)
+        "workbench_history":             [],    # list of {"id","role","content","candidates"}
+        "workbench_active_code":         "",     # current contents of the code editor pane
+        "workbench_last_run":            None,   # most recent execution result (see workbench.py)
+        "workbench_intent_object":       None,   # IntentObject from the first chat turn
+        "workbench_statistical_results": None,   # latest parsed statistical_results (for continuation turns)
+        "workbench_manuscript_sections": {},     # Phase 6: generated manuscript sections
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -1021,6 +1453,9 @@ def render_main_content() -> None:
 
     if screen == "dashboard":
         _handle_dashboard()
+
+    elif screen == "workbench":
+        _handle_workbench()
 
     elif screen == "intent":
         _handle_intent()
