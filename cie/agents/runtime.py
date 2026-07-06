@@ -28,6 +28,10 @@ from cie.agents.base import AgentInput, AgentOutput, BaseAgent
 from cie.core.audit import AuditService
 from cie.core.exceptions import RuntimeExecutionError
 from cie.runtime.runtime_provider import RuntimeProvider
+from cie.runtime.workspace_wrapper import (
+    WORKSPACE_SUMMARY_FILENAME,
+    wrap_with_workspace_persistence,
+)
 from cie.schemas.validator import SchemaRegistry
 from cie.security.capability_token import CapabilityScope
 from cie.security.policy_engine import PolicyEngine
@@ -91,6 +95,7 @@ class RuntimeAgent(BaseAgent):
 
     async def _execute(self, agent_input: AgentInput) -> AgentOutput:
         payload = agent_input.payload
+        persist_workspace = bool(payload.get("persist_workspace", False))
 
         script_source = self._extract_script_source(payload)
 
@@ -123,9 +128,19 @@ class RuntimeAgent(BaseAgent):
                 output_schema_ref=self.output_schema_ref,
             )
 
+        # Persist-workspace mode (ADR-0005 Principle 2): wrap the user script
+        # with explicit load()/save.image()/summary code *upstream* of the
+        # executor (RT-002: executor never edits scripts). The wrapped source is
+        # what gets written, executed, and recorded in the audit log.
+        script_to_run = (
+            wrap_with_workspace_persistence(script_source)
+            if persist_workspace
+            else script_source
+        )
+
         # Write the script to the workspace and execute it in the sandbox.
         script_path = self._workspace_dir / f"analysis_{uuid4().hex}.R"
-        script_path.write_text(script_source, encoding="utf-8")
+        script_path.write_text(script_to_run, encoding="utf-8")
 
         try:
             result = await self._runtime_provider.execute_r(
@@ -175,6 +190,13 @@ class RuntimeAgent(BaseAgent):
         }
         if statistical_results is None:
             output_payload["statistical_results_reason"] = stats_reason
+        # Surface the persisted R workspace variables (name → type/summary) so
+        # the Workspace/Data pane can render them (spec §2.1, §5). Only present
+        # when persistence is on and the script emitted the summary file.
+        if persist_workspace:
+            workspace_summary = self._read_workspace_summary()
+            if workspace_summary is not None:
+                output_payload["workspace_summary"] = workspace_summary
         return AgentOutput(
             execution_id=agent_input.execution_id,
             agent_id=self.agent_id,
@@ -202,6 +224,35 @@ class RuntimeAgent(BaseAgent):
         if not isinstance(parsed, dict):
             return None, "result_json_not_an_object"
         return parsed, ""
+
+    def _read_workspace_summary(self) -> dict[str, dict] | None:
+        """Read OUTPUT_DIR/workspace_summary.json into a name→descriptor map.
+
+        The wrapper's R code (workspace_wrapper.py) writes a JSON *array* of
+        ``{name, class, summary}`` objects (spec §2.1). This flattens it into a
+        dict keyed by variable name so the API/frontend can render 名前・型・要約
+        directly. Returns ``None`` when the file is missing or unparsable — the
+        summary is a best-effort convenience, never fabricated.
+        """
+        if self._output_dir is None:
+            return None
+        summary_path = self._output_dir / WORKSPACE_SUMMARY_FILENAME
+        if not summary_path.exists():
+            return None
+        try:
+            parsed = json.loads(summary_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(parsed, list):
+            return None
+        summary: dict[str, dict] = {}
+        for item in parsed:
+            if isinstance(item, dict) and isinstance(item.get("name"), str):
+                summary[item["name"]] = {
+                    "class": item.get("class", ""),
+                    "summary": item.get("summary", ""),
+                }
+        return summary
 
     # ------------------------------------------------------------------
     # Helpers

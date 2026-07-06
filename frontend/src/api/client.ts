@@ -20,6 +20,7 @@ import type {
   RunResponse,
   VisualizeRequest,
   VisualizeResponse,
+  WorkspaceResetResponse,
 } from "./types";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:8000";
@@ -162,6 +163,12 @@ export class CieApiClient {
   /** POST /api/visualize — statistical_results → figures (Visualization, §3.4). */
   visualize(body: VisualizeRequest): Promise<VisualizeResponse> {
     return this.post<VisualizeResponse>("/api/visualize", body);
+  }
+
+  /** POST /api/workspace/reset — delete the persisted .RData + summary so the
+   *  next run starts from an empty workspace (workspace-persistence spec §3). */
+  resetWorkspace(): Promise<WorkspaceResetResponse> {
+    return this.post<WorkspaceResetResponse>("/api/workspace/reset", {});
   }
 
   /** GET /api/files/content — fetch a workspace image as an object URL.

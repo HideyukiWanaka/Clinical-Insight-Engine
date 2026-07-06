@@ -34,6 +34,7 @@ export interface Runner {
   figures: RunFigure[];
   runCode: (code: string, intent?: Record<string, unknown>) => void;
   clearConsole: () => void;
+  resetWorkspace: () => void;
 }
 
 let lineSeq = 0;
@@ -140,7 +141,9 @@ export function useRunner(client: CieApiClient): Runner {
 
       void (async () => {
         try {
-          const res = await client.run({ r_script: script, persist_workspace: false });
+          // Persist the workspace across runs (.RData) so derived variables
+          // from a prior run remain available (workspace-persistence spec §2).
+          const res = await client.run({ r_script: script, persist_workspace: true });
           setResult(res);
           if (res.error_detail) {
             // Mirror the reason into the console so it is impossible to miss (§5).
@@ -164,7 +167,24 @@ export function useRunner(client: CieApiClient): Runner {
     [client, running, revokeFigures, clearConsole, push, streamConsole, loadFigures],
   );
 
-  return { running, consoleLines, result, figures, runCode, clearConsole };
+  const resetWorkspace = useCallback(() => {
+    if (running) return;
+    void (async () => {
+      try {
+        const res = await client.resetWorkspace();
+        // Drop the stale variable listing from the pane immediately.
+        setResult(null);
+        const removed = res.removed.length
+          ? res.removed.join(", ")
+          : "（削除対象なし）";
+        push("info", `ワークスペースをリセットしました: ${removed}`);
+      } catch (err) {
+        push("stderr", `ワークスペースのリセットに失敗しました: ${describeError(err)}`);
+      }
+    })();
+  }, [client, running, push]);
+
+  return { running, consoleLines, result, figures, runCode, clearConsole, resetWorkspace };
 }
 
 function describeError(err: unknown): string {

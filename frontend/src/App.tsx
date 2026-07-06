@@ -119,7 +119,11 @@ export default function App() {
             </Panel>
             <PanelResizeHandle className="resize-handle" />
             <Panel defaultSize={50} minSize={15} order={2}>
-              <WorkspacePane result={runner.result} />
+              <WorkspacePane
+                result={runner.result}
+                onResetWorkspace={runner.resetWorkspace}
+                resetting={runner.running}
+              />
             </Panel>
           </PanelGroup>
         </Panel>
