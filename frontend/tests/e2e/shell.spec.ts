@@ -83,10 +83,9 @@ test.describe("CIE Workbench shell", () => {
     const candidate = page.getByTestId("code-candidate");
     await expect(candidate).toBeVisible();
     await expect(candidate).toContainText("t.test(sbp_mmhg ~ sex");
-    // Insert/Run are Phase 3 → rendered but disabled.
-    await expect(
-      candidate.getByRole("button", { name: "✓ 挿入" }),
-    ).toBeDisabled();
+    // Insert/Run are wired in Phase 3 → both enabled.
+    await expect(candidate.getByTestId("candidate-insert")).toBeEnabled();
+    await expect(candidate.getByTestId("candidate-run")).toBeEnabled();
 
     await page.screenshot({ path: "test-results/shell.png", fullPage: true });
 

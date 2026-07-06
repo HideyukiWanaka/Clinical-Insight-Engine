@@ -10,11 +10,16 @@
 //   _render_output_pane which always shows error_detail).
 
 import type {
+  ConsoleMessage,
   ErrorEnvelope,
   IntentRequest,
   IntentResponse,
   ProposeRequest,
   ProposeResponse,
+  RunRequest,
+  RunResponse,
+  VisualizeRequest,
+  VisualizeResponse,
 } from "./types";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:8000";
@@ -70,8 +75,18 @@ export class CieApiClient {
     return this.token.length > 0;
   }
 
+  getToken(): string {
+    return this.token;
+  }
+
   getBaseUrl(): string {
     return this.baseUrl;
+  }
+
+  /** Same host/port as the REST base, ws:// or wss:// scheme (§4).
+   *  "http://…" → "ws://…", "https://…" → "wss://…". */
+  getWsBaseUrl(): string {
+    return this.baseUrl.replace(/^http/i, "ws");
   }
 
   private async post<T>(path: string, body: unknown): Promise<T> {
@@ -136,6 +151,76 @@ export class CieApiClient {
   /** POST /api/propose — intent_object (or continuation) → analysis_proposal. */
   propose(body: ProposeRequest): Promise<ProposeResponse> {
     return this.post<ProposeResponse>("/api/propose", body);
+  }
+
+  /** POST /api/run — execute an R script (Runtime). Failure is never silent:
+   *  the response's `error_detail` is populated on any run failure (§3.3, §5). */
+  run(body: RunRequest): Promise<RunResponse> {
+    return this.post<RunResponse>("/api/run", body);
+  }
+
+  /** POST /api/visualize — statistical_results → figures (Visualization, §3.4). */
+  visualize(body: VisualizeRequest): Promise<VisualizeResponse> {
+    return this.post<VisualizeResponse>("/api/visualize", body);
+  }
+
+  /** GET /api/files/content — fetch a workspace image as an object URL.
+   *  The image bytes need the X-CIE-Token header (§2), so a bare `<img src>`
+   *  won't work; we fetch as a blob and return a URL the caller must revoke. */
+  async fetchImageObjectUrl(path: string): Promise<string> {
+    const url = `${this.baseUrl}/api/files/content?path=${encodeURIComponent(path)}`;
+    const res = await fetch(url, { headers: { "X-CIE-Token": this.token } });
+    if (!res.ok) {
+      const envelope = await this.readErrorEnvelope(res);
+      throw new ApiError(res.status, envelope);
+    }
+    return URL.createObjectURL(await res.blob());
+  }
+
+  /** WS /ws/console — run `rScript` and stream its sanitized stdout (§4.1).
+   *
+   * Auth is the first message (`{token,…}`, §2), not the HTTP middleware. The
+   * backend executor is batch, so it streams the sanitized summary line-by-line
+   * followed by an `exit` frame, then closes. Returns the socket so the caller
+   * can close it early; `onClose` fires exactly once when the socket ends. */
+  streamConsole(params: {
+    rScript: string;
+    executionId?: string;
+    onMessage: (msg: ConsoleMessage) => void;
+    onError: (message: string) => void;
+    onClose: () => void;
+  }): WebSocket {
+    const ws = new WebSocket(`${this.getWsBaseUrl()}/ws/console`);
+    let closed = false;
+    const finish = () => {
+      if (closed) return;
+      closed = true;
+      params.onClose();
+    };
+
+    ws.onopen = () => {
+      ws.send(
+        JSON.stringify({
+          token: this.token,
+          r_script: params.rScript,
+          execution_id: params.executionId,
+        }),
+      );
+    };
+    ws.onmessage = (event) => {
+      try {
+        params.onMessage(JSON.parse(event.data as string) as ConsoleMessage);
+      } catch {
+        // A non-JSON frame should never happen; ignore rather than crash.
+      }
+    };
+    ws.onerror = () => {
+      params.onError(
+        `コンソール接続に失敗しました (${this.getWsBaseUrl()}/ws/console)。`,
+      );
+    };
+    ws.onclose = finish;
+    return ws;
   }
 }
 

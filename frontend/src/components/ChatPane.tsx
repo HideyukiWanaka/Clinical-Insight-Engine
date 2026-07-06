@@ -15,6 +15,7 @@ type Msg =
       explanation: string;
       candidates: CodeCandidate[];
       recommendedId?: string;
+      intent: Record<string, unknown>;
     };
 
 interface ChatPaneProps {
@@ -22,6 +23,7 @@ interface ChatPaneProps {
   connected: boolean;
   onConnectedChange: () => void;
   onInsertCode: (code: string) => void;
+  onRunCode: (code: string, intent?: Record<string, unknown>) => void;
 }
 
 let seq = 0;
@@ -49,6 +51,7 @@ export function ChatPane({
   connected,
   onConnectedChange,
   onInsertCode,
+  onRunCode,
 }: ChatPaneProps) {
   const [messages, setMessages] = useState<Msg[]>([
     {
@@ -122,6 +125,7 @@ export function ChatPane({
         explanation: p.explanation_markdown ?? "",
         candidates: p.code_candidates ?? [],
         recommendedId: p.recommended_candidate_id,
+        intent,
       });
     } catch (err) {
       pushError(err);
@@ -187,6 +191,7 @@ export function ChatPane({
             busy={busy}
             onConfirm={propose}
             onInsertCode={onInsertCode}
+            onRunCode={onRunCode}
           />
         ))}
       </div>
@@ -222,11 +227,13 @@ function MessageView({
   busy,
   onConfirm,
   onInsertCode,
+  onRunCode,
 }: {
   msg: Msg;
   busy: boolean;
   onConfirm: (intent: Record<string, unknown>) => void;
   onInsertCode: (code: string) => void;
+  onRunCode: (code: string, intent?: Record<string, unknown>) => void;
 }) {
   switch (msg.kind) {
     case "user":
@@ -298,16 +305,23 @@ function MessageView({
                   <span className="rec">推奨</span>
                 )}
                 <div className="candidate__actions">
-                  {/* Actual insert/run behavior is Phase 3 (spec §3.1). */}
+                  {/* Insert = editor cursor (no run); Run = POST /api/run only
+                      (no insert). Two-stage flow per spec/ui §3.1 / §4. */}
                   <button
                     className="mini-btn"
-                    disabled
-                    title="Phase 3 で有効化"
+                    data-testid="candidate-insert"
+                    title="スクリプトへ挿入（実行しない）"
                     onClick={() => onInsertCode(c.r_code)}
                   >
                     ✓ 挿入
                   </button>
-                  <button className="mini-btn" disabled title="Phase 3 で有効化">
+                  <button
+                    className="mini-btn mini-btn--run"
+                    data-testid="candidate-run"
+                    disabled={busy}
+                    title="挿入せず即実行（POST /api/run）"
+                    onClick={() => onRunCode(c.r_code, msg.intent)}
+                  >
                     ▶ 実行
                   </button>
                 </div>
