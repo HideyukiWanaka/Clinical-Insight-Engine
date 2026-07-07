@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Literal
 import shutil
 
+import psutil
+
 from cie.core.exceptions import RuntimeExecutionError
 from cie.security.capability_token import CapabilityScope, CapabilityToken
 from cie.security.context_guard import ContextGuard
@@ -34,6 +36,18 @@ from cie.security.context_guard import ContextGuard
 
 _PatternEntry = tuple[re.Pattern[str], str]
 
+# Function names whose *presence as a callable target* is forbidden, however
+# it is spelled: a direct call, a backtick-quoted call, or a string literal
+# handed to an indirection primitive (do.call/get/match.fun/getFunction —
+# themselves left usable, since e.g. workspace_wrapper.py's get(n) looks up an
+# ordinary workspace variable, not a function name). Matching the name inside
+# quotes closes that whole indirection class in one pattern per name instead
+# of enumerating every wrapper function that could carry it.
+_DANGEROUS_NAMES = (
+    "system2?", "shell", "source", r"install\.packages", r"Sys\.setenv",
+)
+_DANGEROUS_NAME_GROUP = "|".join(_DANGEROUS_NAMES)
+
 FORBIDDEN_R_PATTERNS: list[_PatternEntry] = [
     (re.compile(r"\bsystem\s*\("), "system() — shell escape not permitted (RT-001)"),
     (re.compile(r"\bsystem2\s*\("), "system2() — shell escape not permitted (RT-001)"),
@@ -42,17 +56,33 @@ FORBIDDEN_R_PATTERNS: list[_PatternEntry] = [
     (re.compile(r"\binstall\.packages\s*\("), "install.packages() — unapproved installation (RT-006)"),
     (re.compile(r"options\s*\(\s*warn\s*=\s*-\d"), "options(warn=<negative>) — warning suppression not permitted"),
     (re.compile(r"\bsource\s*\("), "source() — uncontrolled external code loading not permitted"),
+    (
+        re.compile(rf"`\s*(?:{_DANGEROUS_NAME_GROUP})\s*`\s*\("),
+        "backtick-quoted call of a forbidden function (RT-001 bypass attempt)",
+    ),
+    (
+        re.compile(rf"""["'](?:{_DANGEROUS_NAME_GROUP})["']"""),
+        "forbidden function name passed as a string (do.call/get/match.fun "
+        "indirection bypass attempt)",
+    ),
+    (re.compile(r"\beval\s*\("), "eval() — dynamic code execution not permitted (RT-001)"),
+    (re.compile(r"\bparse\s*\("), "parse() — dynamic code construction not permitted (RT-001)"),
+    (re.compile(r"\bdownload\.file\s*\("), "download.file() — network access not permitted"),
+    (re.compile(r"\burl\s*\("), "url() — network connection not permitted"),
+    (re.compile(r"\b(?:curl|httr|RCurl)::"), "network package call — network access not permitted"),
 ]
 
-# Hard-coded absolute paths bypass the approved WORKSPACE_DIR/OUTPUT_DIR aliases
-# and break reproducibility (knowledge/official/R/statistical_packages.md).
+# Hard-coded absolute/home-relative paths bypass the approved
+# WORKSPACE_DIR/OUTPUT_DIR aliases and break reproducibility (knowledge/
+# official/R/statistical_packages.md). Rather than a prefix blocklist (which
+# only ever covers the prefixes someone thought to list — /root/, /tmp/,
+# /opt/ etc. were previously wide open), flag any string literal that looks
+# like an absolute path or home-dir reference at all.
 _ABSOLUTE_PATH_PATTERNS: list[_PatternEntry] = [
-    (re.compile(r"C:\\\\"), "Hard-coded Windows absolute path (C:\\...)"),
-    (re.compile(r"C:/"), "Hard-coded Windows absolute path (C:/...)"),
-    (re.compile(r"/home/"), "Hard-coded Unix absolute path (/home/)"),
-    (re.compile(r"/etc/"), "Hard-coded Unix absolute path (/etc/)"),
-    (re.compile(r"/var/"), "Hard-coded Unix absolute path (/var/)"),
-    (re.compile(r"/usr/"), "Hard-coded Unix absolute path (/usr/)"),
+    (re.compile(r"""["'][A-Za-z]:[\\/]"""), "Hard-coded Windows absolute path (<drive>:\\...)"),
+    (re.compile(r"""["']/"""), "Hard-coded Unix absolute path (string literal starting with /)"),
+    (re.compile(r"""["']~"""), "Home-directory shorthand (~) not permitted"),
+    (re.compile(r"\bpath\.expand\s*\("), "path.expand() — home-directory resolution not permitted"),
 ]
 
 
@@ -128,6 +158,56 @@ class RScriptValidator:
                 violations.append(description)
 
         return violations
+
+
+# ---------------------------------------------------------------------------
+# Memory watchdog (RT-005 — cross-platform since resource.setrlimit doesn't
+# exist on Windows; psutil polling works identically on Linux/macOS/Windows)
+# ---------------------------------------------------------------------------
+
+MEMORY_POLL_INTERVAL_SECONDS: float = 0.5
+
+
+class _MemoryWatchdogResult:
+    """Mutable flag set by the watchdog if it kills the process for memory."""
+
+    def __init__(self) -> None:
+        self.exceeded = False
+
+
+async def _watch_memory(
+    proc: asyncio.subprocess.Process,
+    max_mb: int,
+    result: _MemoryWatchdogResult,
+) -> None:
+    """Kill *proc* (and its children) once the tree's RSS exceeds *max_mb*.
+
+    Polls via psutil rather than resource.setrlimit so the same code path
+    enforces the limit on Linux, macOS, and Windows alike.
+    """
+    max_bytes = max_mb * 1024 * 1024
+    try:
+        ps_proc = psutil.Process(proc.pid)
+    except Exception:  # noqa: BLE001 — invalid/mock pid (e.g. under test): nothing to watch
+        return
+
+    while proc.returncode is None:
+        try:
+            total = ps_proc.memory_info().rss
+            for child in ps_proc.children(recursive=True):
+                try:
+                    total += child.memory_info().rss
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return
+
+        if total > max_bytes:
+            result.exceeded = True
+            proc.kill()
+            return
+
+        await asyncio.sleep(MEMORY_POLL_INTERVAL_SECONDS)
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +293,8 @@ class LocalRExecutor:
         raw_stdout: bytes = b""
         raw_stderr: bytes = b""
         proc: asyncio.subprocess.Process | None = None
+        watchdog_task: asyncio.Task | None = None
+        memory_watchdog = _MemoryWatchdogResult()
 
         start_ns = time.monotonic_ns()
         rscript_path = shutil.which("Rscript") or "Rscript"
@@ -228,6 +310,13 @@ class LocalRExecutor:
                 stderr=asyncio.subprocess.PIPE,
             )
 
+            # Step 4b — memory watchdog runs alongside communicate() (RT-005).
+            # psutil polling rather than resource.setrlimit so the same code
+            # enforces the limit on Windows too, not just POSIX.
+            watchdog_task = asyncio.create_task(
+                _watch_memory(proc, self.MAX_MEMORY_MB, memory_watchdog)
+            )
+
             # Step 5 — enforce wall-clock timeout (RT-005)
             try:
                 raw_stdout, raw_stderr = await asyncio.wait_for(
@@ -235,7 +324,9 @@ class LocalRExecutor:
                     timeout=float(self.MAX_EXECUTION_SECONDS),
                 )
                 exit_code = proc.returncode if proc.returncode is not None else -1
-                status = "success" if exit_code == 0 else "error"
+                status = "security_abort" if memory_watchdog.exceeded else (
+                    "success" if exit_code == 0 else "error"
+                )
             except asyncio.TimeoutError:
                 proc.kill()
                 try:
@@ -250,6 +341,12 @@ class LocalRExecutor:
             # Ensure the process is reaped even on unexpected exceptions
             if proc is not None and proc.returncode is None:
                 proc.kill()
+            if watchdog_task is not None and not watchdog_task.done():
+                watchdog_task.cancel()
+                try:
+                    await watchdog_task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
 
         # Truncate captured streams to spec buffer limits before any processing
         raw_stdout = raw_stdout[: self.MAX_STDOUT_BYTES]

@@ -112,7 +112,22 @@ class TestRScriptValidator:
 
     def test_validate_absolute_path_detected(self) -> None:
         violations = RScriptValidator().validate('data <- read.csv("/home/user/data.csv")')
-        assert any("/home/" in v for v in violations), violations
+        assert any("absolute path" in v for v in violations), violations
+
+    def test_validate_absolute_path_detected_for_unlisted_prefix(self) -> None:
+        """Any leading-slash literal is flagged, not just a fixed prefix list
+        (previously /root/, /tmp/, /opt/ etc. were completely unchecked)."""
+        for path in ('"/root/.ssh/id_rsa"', '"/tmp/x"', '"/opt/secret"', '"/srv/data"'):
+            violations = RScriptValidator().validate(f"readLines({path})")
+            assert violations, f"{path} should have been flagged"
+
+    def test_validate_home_shorthand_detected(self) -> None:
+        violations = RScriptValidator().validate('readLines("~/.ssh/id_rsa")')
+        assert any("Home-directory" in v for v in violations), violations
+
+    def test_validate_path_expand_detected(self) -> None:
+        violations = RScriptValidator().validate('path.expand("~/secret")')
+        assert any("path.expand" in v for v in violations), violations
 
     def test_validate_sys_setenv_detected(self) -> None:
         violations = RScriptValidator().validate("Sys.setenv(HOME='/tmp')")
@@ -129,6 +144,49 @@ class TestRScriptValidator:
     def test_validate_windows_absolute_path_detected(self) -> None:
         violations = RScriptValidator().validate('read.csv("C:\\\\Users\\\\data.csv")')
         assert violations, "Windows path should be detected"
+
+    # -- Bypass-technique coverage (OWASP A03:2025 — R sandbox hardening) ----
+
+    def test_validate_backtick_call_detected(self) -> None:
+        """`system`("id") bypasses \\bsystem\\s*\\( since a backtick sits
+        between the name and the opening paren."""
+        violations = RScriptValidator().validate("`system`('id')")
+        assert any("backtick" in v for v in violations), violations
+
+    def test_validate_do_call_indirection_detected(self) -> None:
+        violations = RScriptValidator().validate("do.call('system', list('id'))")
+        assert any("string" in v for v in violations), violations
+
+    def test_validate_get_indirection_detected(self) -> None:
+        violations = RScriptValidator().validate("get('system')('id')")
+        assert any("string" in v for v in violations), violations
+
+    def test_validate_get_of_workspace_variable_not_flagged(self) -> None:
+        """get(n) with a bare variable (no quotes) is the legitimate pattern
+        workspace_wrapper.py uses to read back workspace variables by name —
+        must not be flagged just because get() appears."""
+        violations = RScriptValidator().validate(
+            "n <- 'x'\nobj <- get(n)\nprint(class(obj))"
+        )
+        assert violations == []
+
+    def test_validate_eval_parse_detected(self) -> None:
+        violations = RScriptValidator().validate(
+            "code <- paste0('sys', 'tem(\"id\")')\neval(parse(text = code))"
+        )
+        reasons = "; ".join(violations)
+        assert "eval()" in reasons
+        assert "parse()" in reasons
+
+    def test_validate_network_functions_detected(self) -> None:
+        for snippet in (
+            "download.file('http://x/y', 'z')",
+            "con <- url('http://x')",
+            "curl::curl_download('http://x', 'y')",
+            "httr::GET('http://x')",
+        ):
+            violations = RScriptValidator().validate(snippet)
+            assert violations, f"{snippet!r} should have been flagged"
 
     def test_validate_clean_script_passes(self) -> None:
         clean = (
@@ -272,6 +330,99 @@ class TestLocalRExecutor:
         assert "execution_result.rds" in result.output_artifacts
         assert "plot.png" in result.output_artifacts
         assert len(result.output_artifacts) == 2
+
+    # ------------------------------------------------------------------
+    # Memory watchdog (RT-005 — cross-platform, OWASP A04:2025)
+    # ------------------------------------------------------------------
+
+    async def test_memory_limit_exceeded_sets_security_abort_status(
+        self,
+        tmp_path: Path,
+        guard_passthrough: MagicMock,
+        clean_script: Path,
+        runtime_token: CapabilityToken,
+    ) -> None:
+        """A process tree whose RSS exceeds MAX_MEMORY_MB is killed and the
+        result status is 'security_abort', regardless of its exit code."""
+        proc = MagicMock()
+        proc.pid = 12345
+        proc.returncode = None
+        proc.kill = MagicMock()
+
+        async def _communicate() -> tuple[bytes, bytes]:
+            await asyncio.sleep(0.05)
+            proc.returncode = -9
+            return (b"", b"")
+
+        proc.communicate = AsyncMock(side_effect=_communicate)
+
+        fake_ps_proc = MagicMock()
+        fake_ps_proc.memory_info.return_value = MagicMock(rss=999_999_999_999)
+        fake_ps_proc.children.return_value = []
+
+        (tmp_path / "ws").mkdir(exist_ok=True)
+        (tmp_path / "out").mkdir(exist_ok=True)
+        executor = LocalRExecutor(tmp_path / "ws", tmp_path / "out", guard_passthrough)
+
+        with (
+            patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec,
+            patch("cie.runtime.r_executor.psutil.Process", return_value=fake_ps_proc),
+        ):
+            mock_exec.return_value = proc
+            result = await executor.execute(EXEC_ID, clean_script, runtime_token)
+
+        assert result.status == "security_abort"
+        proc.kill.assert_called()
+
+    async def test_memory_within_limit_does_not_abort(
+        self,
+        tmp_path: Path,
+        guard_passthrough: MagicMock,
+        clean_script: Path,
+        runtime_token: CapabilityToken,
+        ok_proc: MagicMock,
+    ) -> None:
+        """A process using well under the limit must complete normally."""
+        fake_ps_proc = MagicMock()
+        fake_ps_proc.memory_info.return_value = MagicMock(rss=1024)  # 1 KB
+        fake_ps_proc.children.return_value = []
+
+        (tmp_path / "ws").mkdir(exist_ok=True)
+        (tmp_path / "out").mkdir(exist_ok=True)
+        executor = LocalRExecutor(tmp_path / "ws", tmp_path / "out", guard_passthrough)
+
+        with (
+            patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec,
+            patch("cie.runtime.r_executor.psutil.Process", return_value=fake_ps_proc),
+        ):
+            mock_exec.return_value = ok_proc
+            result = await executor.execute(EXEC_ID, clean_script, runtime_token)
+
+        assert result.status == "success"
+
+    async def test_watch_memory_kills_real_subprocess_over_limit(self) -> None:
+        """Direct unit test of _watch_memory against a real (short-lived)
+        subprocess, with psutil's memory reading faked to simulate a bomb."""
+        import sys
+
+        from cie.runtime.r_executor import _MemoryWatchdogResult, _watch_memory
+
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-c", "import time; time.sleep(5)",
+        )
+        result = _MemoryWatchdogResult()
+        try:
+            with patch("psutil.Process.memory_info") as mock_mem, \
+                 patch("psutil.Process.children", return_value=[]):
+                mock_mem.return_value = MagicMock(rss=999_999_999_999)
+                await asyncio.wait_for(
+                    _watch_memory(proc, max_mb=10, result=result), timeout=5
+                )
+            assert result.exceeded is True
+        finally:
+            if proc.returncode is None:
+                proc.kill()
+            await proc.wait()
 
     # ------------------------------------------------------------------
     # Environment isolation
