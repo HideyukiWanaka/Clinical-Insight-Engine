@@ -21,7 +21,8 @@ from cie.api.models import (
     KnowledgeRejectRequest,
     KnowledgeRejectResponse,
 )
-from cie.knowledge.ingestion_guard import IngestionError
+from cie.api.upload_limits import read_upload_bounded
+from cie.knowledge.ingestion_guard import MAX_FILE_SIZE_BYTES, IngestionError
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 
@@ -38,7 +39,7 @@ def _draft_store(request: Request) -> dict:
 async def ingest(request: Request, file: UploadFile) -> KnowledgeIngestResponse:
     """Run the KIP ingestion pipeline; PII-rejected documents return 422."""
     services = get_services(request)
-    file_bytes = await file.read()
+    file_bytes = await read_upload_bounded(file, MAX_FILE_SIZE_BYTES)
     try:
         draft = await services["knowledge_ingestion"].ingest(
             Path(file.filename or "upload.txt"),
