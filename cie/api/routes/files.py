@@ -43,8 +43,18 @@ async def list_files(request: Request) -> FilesResponse:
     if not root.is_dir():
         return FilesResponse(files=[])
 
+    # rglob() follows symlinked subdirectories on this Python version, so a
+    # symlink planted inside the workspace (e.g. by a compromised R script)
+    # could otherwise surface files from outside it. Keep only entries whose
+    # *resolved* real path is still under root (§3.7 — same rule file_content
+    # enforces for reads).
     paths = sorted(
-        (p for p in root.rglob("*") if p.is_file() and not p.name.startswith(".")),
+        (
+            p for p in root.rglob("*")
+            if p.is_file()
+            and not p.name.startswith(".")
+            and p.resolve().is_relative_to(root)
+        ),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )[:_MAX_FILES]

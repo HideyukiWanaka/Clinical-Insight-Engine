@@ -269,6 +269,35 @@ def test_path_traversal_rejected(client: TestClient) -> None:
     assert resp.json()["detail"]["error_code"] == "PATH_TRAVERSAL"
 
 
+def test_symlinked_file_outside_workspace_not_listed(
+    client: TestClient, tmp_path
+) -> None:
+    """A symlink planted inside the workspace must not surface an outside file
+    in the listing (OWASP A01:2025 — broken access control via symlink escape).
+    """
+    outside_dir = tmp_path.parent / "outside_secret"
+    outside_dir.mkdir(exist_ok=True)
+    (outside_dir / "secret.txt").write_text("top secret", encoding="utf-8")
+    (tmp_path / "escape_link.txt").symlink_to(outside_dir / "secret.txt")
+
+    resp = client.get("/api/files", headers=AUTH)
+    assert resp.status_code == 200
+    paths = [f["path"] for f in resp.json()["files"]]
+    assert "escape_link.txt" not in paths
+
+
+def test_symlinked_directory_contents_not_listed(client: TestClient, tmp_path) -> None:
+    outside_dir = tmp_path.parent / "outside_dir"
+    outside_dir.mkdir(exist_ok=True)
+    (outside_dir / "leaked.txt").write_text("leaked", encoding="utf-8")
+    (tmp_path / "linked_subdir").symlink_to(outside_dir)
+
+    resp = client.get("/api/files", headers=AUTH)
+    assert resp.status_code == 200
+    paths = [f["path"] for f in resp.json()["files"]]
+    assert not any("leaked.txt" in p for p in paths)
+
+
 # ---------------------------------------------------------------------------
 # §3.8 / §3.9 — knowledge
 # ---------------------------------------------------------------------------

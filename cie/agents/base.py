@@ -211,6 +211,14 @@ class BaseAgent(ABC):
             self._schema_registry.validate(output.output_payload, output.output_schema_ref)
 
         except Exception as exc:  # noqa: BLE001
+            _log.error(
+                "Unhandled exception in %s.run() (execution_id=%s, node_id=%s): %s",
+                self.agent_id,
+                agent_input.execution_id,
+                agent_input.node_id,
+                exc,
+                exc_info=True,
+            )
             output = AgentOutput(
                 execution_id=agent_input.execution_id,
                 agent_id=self.agent_id,
