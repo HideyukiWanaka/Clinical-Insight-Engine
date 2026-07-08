@@ -687,3 +687,183 @@ body {
   font-family: ui-monospace, monospace;
   user-select: text;
 }
+
+/* ── Phase 8: dataset modal (§5 別入口) ─────────────────────────────────── */
+.header__badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-weak);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+}
+.modal__overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(12, 18, 30, 0.5);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8vh 16px 16px;
+  z-index: 50;
+}
+.modal {
+  width: min(680px, 100%);
+  max-height: 82vh;
+  overflow: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(10, 16, 28, 0.35);
+}
+.modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+.modal__body {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.modal__hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.modal__status {
+  font-size: 12px;
+  color: var(--accent);
+}
+.modal__note {
+  font-size: 12px;
+  color: var(--warn);
+}
+.dataset-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dataset-summary__meta {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.dataset-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.dataset-table th,
+.dataset-table td {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  text-align: left;
+}
+.dataset-table th {
+  background: var(--bg-pane);
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+/* ── Phase 8: file tree (§3.4 read-only) ───────────────────────────────── */
+.filetree {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.filetree__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.filetree__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 4px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+}
+.filetree__item:hover {
+  background: var(--bg-pane);
+}
+.filetree__item--active {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+.filetree__path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filetree__preview {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.filetree__preview-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.filetree__preview-name {
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.filetree__lang {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--code-bg);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+.filetree__image {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+/* ── Phase 8: continuation base chip (§3.2 / design §4.2) ──────────────── */
+.chat__base {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 0;
+}
+.chat__base-chip {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--bg-pane);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.chat__base-chip--active {
+  background: var(--accent-weak);
+  border-color: var(--accent);
+  color: var(--accent);
+}

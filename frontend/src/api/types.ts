@@ -9,6 +9,24 @@ export interface ErrorEnvelope {
   detail?: string | null;
 }
 
+// POST /api/dataset (rest-api-contract §3.1 前提 / cie/api/routes/dataset.py).
+// The response carries aggregate-only column metadata (DQ-001) — never row
+// values. Column names are replaced by var_n aliases server-side; the shape
+// mirrors build_dataset_context()'s `columns` output verbatim (§5, CLAUDE.md).
+export interface DatasetColumn {
+  var_n: string;
+  inferred_type: string;
+  missing_count: number;
+  missing_rate_pct: number;
+}
+
+export interface DatasetUploadResponse {
+  dataset_id: string;
+  row_count: number;
+  column_count: number;
+  columns: DatasetColumn[];
+}
+
 // POST /api/intent (§3.1)
 export interface IntentRequest {
   prompt: string;
@@ -123,6 +141,26 @@ export interface ReportResponse {
   execution_id: string;
   manuscript_sections: ManuscriptSection[];
   error_detail?: string | null;
+}
+
+// GET /api/files (§3.6) — read-only workspace listing (cie/api/models.py).
+export interface FileEntry {
+  path: string;
+  size_bytes: number;
+  modified: string;
+  // "image" | "text" | "other" (cie/api/routes/files.py _kind).
+  kind: string;
+}
+
+export interface FilesResponse {
+  files: FileEntry[];
+}
+
+// GET /api/files/content (§3.7) — text files return {text, language};
+// images return raw bytes (fetched via fetchImageObjectUrl instead).
+export interface FileContentResponse {
+  text: string;
+  language: string;
 }
 
 // WS /ws/console (§4.1) — sanitized console frames.

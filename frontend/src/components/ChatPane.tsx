@@ -24,6 +24,14 @@ interface ChatPaneProps {
   onConnectedChange: () => void;
   onInsertCode: (code: string) => void;
   onRunCode: (code: string, intent?: Record<string, unknown>) => void;
+  /** Real dataset state — rides in POST /api/intent (replaces the hardcode). */
+  datasetUploaded: boolean;
+  /** statistical_results of the most recent run (null → continuation disabled). */
+  priorStats: Record<string, unknown> | null;
+  /** R script of the most recent run — carried as prior_r_script (§3.2). */
+  priorScript: string;
+  /** intent_object of the most recent run — the lineage base for continuation. */
+  priorIntent: Record<string, unknown>;
 }
 
 let seq = 0;
@@ -46,12 +54,27 @@ function intentSummary(intent: Record<string, unknown>): string {
   return parts.length ? parts.join(" / ") : "意図を解釈しました。";
 }
 
+/** Pull a human-readable test/method label out of statistical_results for the
+ *  土台チップ (base chip). Returns null if none is present. */
+function statTestName(stats: Record<string, unknown> | null): string | null {
+  if (!stats) return null;
+  for (const key of ["test", "test_name", "method", "analysis"]) {
+    const v = stats[key];
+    if (typeof v === "string" && v.trim()) return v;
+  }
+  return null;
+}
+
 export function ChatPane({
   client,
   connected,
   onConnectedChange,
   onInsertCode,
   onRunCode,
+  datasetUploaded,
+  priorStats,
+  priorScript,
+  priorIntent,
 }: ChatPaneProps) {
   const [messages, setMessages] = useState<Msg[]>([
     {
@@ -63,13 +86,87 @@ export function ChatPane({
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [tokenDraft, setTokenDraft] = useState("");
+  // When true, the next free-text send starts a NEW intent lineage even though
+  // priorStats is still present. Cleared once a run in the new lineage lands
+  // (sticky to the new lineage — phase8 design §4.2 / R-1).
+  const [newAnalysisPending, setNewAnalysisPending] = useState(false);
+  const resetStatsRef = useRef<Record<string, unknown> | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
   const add = (m: Msg) => setMessages((prev) => [...prev, m]);
 
+  // Continuation is the default while a run has produced statistics AND the user
+  // has not just pressed "＋ 新しい解析" (§3.1 2回目以降 / design §4.2).
+  const continuationActive = priorStats != null && !newAnalysisPending;
+
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
   }, [messages]);
+
+  // A run in the new lineage produced fresh statistics → continuation is sticky
+  // again for this lineage.
+  useEffect(() => {
+    if (newAnalysisPending && priorStats && priorStats !== resetStatsRef.current) {
+      setNewAnalysisPending(false);
+    }
+  }, [priorStats, newAnalysisPending]);
+
+  function send() {
+    if (continuationActive) void sendContinuation();
+    else void sendIntent();
+  }
+
+  function newAnalysis() {
+    if (busy) return;
+    resetStatsRef.current = priorStats;
+    setNewAnalysisPending(true);
+    add({
+      id: nextId(),
+      kind: "system",
+      text: "新しい解析を開始します。次の入力は新規の意図として解釈します。",
+    });
+  }
+
+  async function sendContinuation() {
+    const query = input.trim();
+    if (!query || busy) return;
+    setInput("");
+    add({ id: nextId(), kind: "user", text: query });
+    setBusy(true);
+    add({ id: nextId(), kind: "system", text: "追加解析を生成しています…" });
+    try {
+      const res = await client.propose({
+        continuation_query: query,
+        prior_statistical_results: priorStats,
+        prior_r_script: priorScript,
+      });
+      if (!res.analysis_proposal) {
+        const reason =
+          res.r_script_provenance?.reason || "追加解析を生成できませんでした。";
+        add({
+          id: nextId(),
+          kind: "error",
+          text: "追加解析の生成に失敗しました。",
+          detail: reason,
+        });
+        return;
+      }
+      const p = res.analysis_proposal;
+      add({
+        id: nextId(),
+        kind: "proposal",
+        explanation: p.explanation_markdown ?? "",
+        candidates: p.code_candidates ?? [],
+        recommendedId: p.recommended_candidate_id,
+        // Inherit the lineage intent so a re-run still drafts the manuscript.
+        intent: priorIntent,
+      });
+    } catch (err) {
+      pushError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function sendIntent() {
     const prompt = input.trim();
@@ -78,7 +175,7 @@ export function ChatPane({
     add({ id: nextId(), kind: "user", text: prompt });
     setBusy(true);
     try {
-      const res = await client.intent({ prompt, dataset_uploaded: false });
+      const res = await client.intent({ prompt, dataset_uploaded: datasetUploaded });
       if (res.requires_human_clarification) {
         add({
           id: nextId(),
@@ -196,16 +293,49 @@ export function ChatPane({
         ))}
       </div>
 
+      {/* 土台チップ: いま何を土台にしているかを常時可視化（design §4.2）。
+          横に「＋ 新しい解析」を併置し、話題変更時のみ1操作で文脈をリセットする。 */}
+      <div className="chat__base" data-testid="chat-base">
+        <span
+          className={
+            "chat__base-chip" +
+            (continuationActive ? " chat__base-chip--active" : "")
+          }
+          data-testid="base-chip"
+          title="現在の追加対話が土台にしている解析"
+        >
+          {continuationActive
+            ? `土台: ${intentSummary(priorIntent)}${
+                statTestName(priorStats) ? ` / ${statTestName(priorStats)}` : ""
+              }`
+            : newAnalysisPending
+              ? "新しい解析（次の入力は新規の意図）"
+              : "統計結果なし（初回の意図を入力）"}
+        </span>
+        <button
+          type="button"
+          className="mini-btn"
+          data-testid="new-analysis"
+          onClick={newAnalysis}
+          disabled={busy || !continuationActive}
+          title="文脈をリセットし、次の入力を新規の解析として送信します"
+        >
+          ＋ 新しい解析
+        </button>
+      </div>
+
       <div className="chat__composer">
         <textarea
           data-testid="chat-input"
           value={input}
-          placeholder="解析したい内容を入力…"
+          placeholder={
+            continuationActive ? "追加の解析を入力（継続）…" : "解析したい内容を入力…"
+          }
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
-              void sendIntent();
+              send();
             }
           }}
         />
@@ -213,9 +343,9 @@ export function ChatPane({
           className="btn"
           data-testid="chat-send"
           disabled={busy || !input.trim()}
-          onClick={() => void sendIntent()}
+          onClick={send}
         >
-          送信
+          {continuationActive ? "継続送信" : "送信"}
         </button>
       </div>
     </div>
