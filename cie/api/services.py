@@ -47,13 +47,13 @@ def build_services() -> dict:
     from cie.core.config import CIEConfig
     from cie.core.database import get_engine, get_session, init_db
     from cie.core.llm_client import llm_client_from_env
+    from cie.knowledge.embedding_index import EmbeddingReferenceLibrary
     from cie.knowledge.ingestion_agent import KnowledgeIngestionAgent
     from cie.knowledge.ingestion_guard import IngestionGuard
     from cie.knowledge.lifecycle import KnowledgeLifecycleService
     from cie.knowledge.loader import KnowledgeLoader
     from cie.knowledge.parsers.base import DocumentParserRegistry
     from cie.knowledge.parsers.pymupdf_parser import PlainTextParser, PyMuPDFParser
-    from cie.knowledge.reference_library import MarkdownReferenceLibrary
     from cie.runtime.r_executor import LocalRExecutor
     from cie.runtime.runtime_provider import RuntimeProvider
     from cie.schemas.validator import SchemaRegistry
@@ -115,9 +115,16 @@ def build_services() -> dict:
     # Downstream analysis agents
     data_quality  = DataQualityAgent(policy_engine, schema_registry, audit, pii_filter)
     # Statistics generates the executable R script via the LLM, grounded in the
-    # Markdown knowledge reference library (RAG), with a token-saving cache for
-    # structurally-identical analyses.
-    reference_library = MarkdownReferenceLibrary(knowledge_root)
+    # knowledge reference library (RAG), with a token-saving cache for
+    # structurally-identical analyses. ADR-0005 Phase 5: keyword search is
+    # replaced by a fully-local embedding retriever (same retrieve() signature,
+    # so statistics/visualization/reporting call sites are unchanged). Indexes
+    # all of official/**/*.md plus approved institutional/ entries; the store is
+    # persisted under the workspace so the knowledge tree stays read-only.
+    reference_library = EmbeddingReferenceLibrary(
+        knowledge_root,
+        store_path=workspace / "embedding_index" / "index.json",
+    )
     r_script_cache = RScriptCache()
     # SkillLoader: user/ > core/ priority (ADR-0002 Principle 3)
     from cie.skills.loader import SkillLoader
@@ -219,6 +226,7 @@ def build_services() -> dict:
         "knowledge_ingestion": knowledge_ingestion,
         "knowledge_lifecycle": knowledge_lifecycle,
         "knowledge_loader": knowledge_loader,
+        "reference_library": reference_library,
         "orchestrator": orchestrator,
         "cache_store": cache_store,
         "skill_loader": skill_loader,

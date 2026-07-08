@@ -122,3 +122,6 @@ ehthumbs.db
 # ─── セマンティックキャッシュ（ADR-0004: 施設固有の運用データ）──────────────
 cie/cache/planner_cache.json
 cie/cache/cache_stats.json
+
+# Phase 5 harness-generated local embedding store (regenerated on run)
+scratchpad/_rag_store/

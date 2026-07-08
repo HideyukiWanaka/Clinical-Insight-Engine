@@ -49,7 +49,10 @@ STRICT REQUIREMENTS (same as primary analysis):
    Never hard-code an absolute path and never fabricate data.
 3. Use the column names given in dataset_columns.
 4. set.seed(42) for reproducibility before any stochastic step.
-5. Ground your implementation in the provided KNOWLEDGE REFERENCE PATTERNS.
+5. Use the provided KNOWLEDGE REFERENCE PATTERNS as grounding when present. You
+   MAY add statistically necessary steps they do not cover (e.g. assumption
+   checks), but never contradict them. If no references are provided, rely on
+   standard, defensible statistical practice.
 6. Compute and print: test statistic, p-value, effect size (named), and 95% CI.
 7. Write machine-readable results as JSON to
        file.path(Sys.getenv("OUTPUT_DIR"), "result.json")
@@ -94,7 +97,9 @@ RULES FOR EACH R CODE CANDIDATE (same as always):
    Never hard-code an absolute path and never fabricate data.
 2. Use the column names given in dataset_columns.
 3. set.seed(42) for reproducibility before any stochastic step.
-4. Ground your implementation in the provided KNOWLEDGE REFERENCE PATTERNS.
+4. Use the provided KNOWLEDGE REFERENCE PATTERNS as grounding when present; you
+   MAY supplement them where statistically necessary, but never contradict them.
+   If no references are provided, rely on standard statistical practice.
 5. Compute and print: the test statistic, p-value, effect size (named), and
    95% confidence interval where applicable.
 6. Write a machine-readable result as JSON to
@@ -624,7 +629,7 @@ class StatisticsAgent(BaseAgent):
                 intent_obj.get("outcome_type", ""),
             ]
             query_terms += [str(pkg) for pkg in method.get("r_packages", [])]
-            references = self._reference_library.retrieve(query_terms, top_k=2)
+            references = self._reference_library.retrieve(query_terms, top_k=4)
             provenance["knowledge_references"] = [r.title for r in references]
 
         # 3. Build prompt (optionally grounded with SKILL.md instructions)
@@ -777,7 +782,7 @@ class StatisticsAgent(BaseAgent):
             ]
             if alt_method:
                 query_terms += [alt_method["method_id"], alt_method.get("r_function", "")]
-            references = self._reference_library.retrieve(query_terms, top_k=2)
+            references = self._reference_library.retrieve(query_terms, top_k=4)
             provenance["knowledge_references"] = [r.title for r in references]
 
         skill_id = _METHOD_TO_SKILL_ID.get(method["method_id"])
@@ -936,7 +941,7 @@ class StatisticsAgent(BaseAgent):
                 intent_obj.get("objective", ""),
                 intent_obj.get("outcome_type", ""),
             ]
-            references = self._reference_library.retrieve(query_terms, top_k=2)
+            references = self._reference_library.retrieve(query_terms, top_k=4)
             provenance["knowledge_references"] = [r.title for r in references]
 
         skill_id = _METHOD_TO_SKILL_ID.get(method["method_id"])
