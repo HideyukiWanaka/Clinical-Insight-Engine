@@ -770,6 +770,175 @@ body {
   font-weight: 600;
 }
 
+/* ── Phase 9: knowledge (参考資料) 入口 — §5 で解析データと視覚的に峻別 ─── */
+.header__entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+/* 解析データ＝患者データ入口: アクセント枠で「データ」を示す。 */
+.header__entry--data {
+  color: var(--accent);
+}
+.header__entry--data:hover {
+  background: var(--accent-weak) !important;
+  color: var(--accent) !important;
+}
+/* 参考資料＝文献入口: 別配色（緑系）で患者データ入口と取り違えを防ぐ（K-1）。 */
+.header__entry--knowledge {
+  color: var(--ok);
+}
+.header__entry--knowledge:hover {
+  background: color-mix(in srgb, var(--ok) 14%, transparent) !important;
+  color: var(--ok) !important;
+}
+/* 参考資料モーダルは上枠を緑系にして、解析データモーダルと一目で区別できる。 */
+.knowledge-modal {
+  width: min(720px, 100%);
+}
+.knowledge-modal__header {
+  border-bottom: 2px solid var(--ok);
+}
+.knowledge-section {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg-pane);
+}
+.knowledge-section__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.knowledge-section__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.btn--small {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.msg--ok {
+  align-self: stretch;
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  border: 1px solid var(--ok);
+}
+.knowledge-failed-checks {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--danger);
+}
+.knowledge-error-detail {
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.85;
+}
+.knowledge-block {
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.knowledge-block__label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+}
+.knowledge-item {
+  border-left: 3px solid var(--border-strong);
+  padding: 4px 0 4px 10px;
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.knowledge-item__statement {
+  font-weight: 600;
+}
+.knowledge-item__quote {
+  margin: 0;
+  padding: 4px 8px;
+  border-left: 2px solid var(--border);
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 12px;
+}
+.knowledge-item__meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.knowledge-limitations {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.knowledge-selectors {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.knowledge-selectors label,
+.knowledge-reject-reason {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.knowledge-selectors select,
+.knowledge-reject-reason input {
+  padding: 5px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+.knowledge-registry {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.knowledge-registry__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: 13px;
+}
+.knowledge-registry__badge {
+  flex: 0 0 auto;
+}
+.knowledge-registry__title {
+  font-weight: 600;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.knowledge-registry__meta {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 /* ── Phase 8: file tree (§3.4 read-only) ───────────────────────────────── */
 .filetree {
   display: flex;

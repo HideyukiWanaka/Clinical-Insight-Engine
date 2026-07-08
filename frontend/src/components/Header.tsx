@@ -10,6 +10,8 @@ interface HeaderProps {
   onOpenDataset: () => void;
   /** True once a dataset is registered — shows a small "取り込み済み" badge. */
   datasetUploaded: boolean;
+  /** Open the 参考資料 (knowledge ingestion) modal — a separate 入口 (§5). */
+  onOpenKnowledge: () => void;
 }
 
 /** Top bar: project name / menu / connection status / security status
@@ -23,6 +25,7 @@ export function Header({
   onToggleTheme,
   onOpenDataset,
   datasetUploaded,
+  onOpenKnowledge,
 }: HeaderProps) {
   return (
     <header className="header">
@@ -30,20 +33,31 @@ export function Header({
         {projectName} <span>Workbench</span>
       </div>
       <nav className="header__menu" aria-label="メニュー">
-        <button type="button">プロジェクト</button>
+        {/* 解析データ入口（患者データ）— §5 で参考資料入口と視覚的に峻別。 */}
         <button
           type="button"
+          className="header__entry header__entry--data"
           data-testid="open-dataset"
           onClick={onOpenDataset}
+          title="患者データ（CSV）の取り込み"
         >
-          解析データ
+          <span aria-hidden="true">🗂️</span> 解析データ
           {datasetUploaded && (
             <span className="header__badge" data-testid="dataset-badge">
               取り込み済み
             </span>
           )}
         </button>
-        <button type="button">参考資料</button>
+        {/* 参考資料入口（文献）— 別アイコン・別配色で解析データと区別（§5, K-1）。 */}
+        <button
+          type="button"
+          className="header__entry header__entry--knowledge"
+          data-testid="open-knowledge"
+          onClick={onOpenKnowledge}
+          title="参考文献・ガイドラインの取り込み（患者データではありません）"
+        >
+          <span aria-hidden="true">📚</span> 参考資料
+        </button>
       </nav>
       <div className="header__spacer" />
 

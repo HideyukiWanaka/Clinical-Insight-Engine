@@ -17,6 +17,13 @@ import type {
   FilesResponse,
   IntentRequest,
   IntentResponse,
+  KnowledgeApproveRequest,
+  KnowledgeApproveResponse,
+  KnowledgeIngestResponse,
+  KnowledgeListResponse,
+  KnowledgeRejectRequest,
+  KnowledgeRejectResponse,
+  KnowledgeReindexResponse,
   ProposeRequest,
   ProposeResponse,
   ReportRequest,
@@ -35,6 +42,8 @@ export class ApiError extends Error {
   readonly errorCode: string;
   readonly detail: string | null;
   readonly status: number;
+  /** PII check names from a knowledge ingest 422 (§3.8); null otherwise. */
+  readonly failedChecks: string[] | null;
 
   constructor(status: number, envelope: Partial<ErrorEnvelope>) {
     const detail = envelope.detail ?? null;
@@ -43,6 +52,7 @@ export class ApiError extends Error {
     this.status = status;
     this.errorCode = envelope.error_code || "UNKNOWN";
     this.detail = detail;
+    this.failedChecks = envelope.failed_checks ?? null;
   }
 }
 
@@ -135,12 +145,16 @@ export class CieApiClient {
           obj.detail && typeof obj.detail === "object"
             ? (obj.detail as Record<string, unknown>)
             : obj;
+        const failedChecks =
+          (inner.failed_checks as string[] | undefined) ??
+          (obj.failed_checks as string[] | undefined);
         return {
           error_code: String(inner.error_code ?? obj.error_code ?? "ERROR"),
           message: String(inner.message ?? obj.message ?? "リクエストに失敗しました。"),
           detail:
             (inner.detail as string | undefined) ??
             (typeof obj.detail === "string" ? (obj.detail as string) : null),
+          failed_checks: Array.isArray(failedChecks) ? failedChecks : null,
         };
       }
     } catch {
@@ -248,6 +262,73 @@ export class CieApiClient {
    *  next run starts from an empty workspace (workspace-persistence spec §3). */
   resetWorkspace(): Promise<WorkspaceResetResponse> {
     return this.post<WorkspaceResetResponse>("/api/workspace/reset", {});
+  }
+
+  // ── Knowledge Ingestion Pipeline (§3.8/§3.9, ADR-0003) ────────────────────
+  // Reference-material entry, kept separate from the 解析データ (patient) path
+  // (§5). AI proposes; the human approve() call is the only registration
+  // trigger — the frontend never sends approved_by_human (server always True).
+
+  /** POST /api/knowledge/ingest — upload a reference document (pdf/md/txt/docx)
+   *  and receive an AI-extracted draft for human review. Sent as multipart;
+   *  we attach ONLY X-CIE-Token and let the browser set the Content-Type with
+   *  its boundary — never set it by hand (K-4). A PII-contaminated document is
+   *  rejected with 422; the resulting ApiError carries `failedChecks` so the
+   *  rejection is shown explicitly, never silently (§5). */
+  async ingestKnowledge(file: File): Promise<KnowledgeIngestResponse> {
+    const form = new FormData();
+    form.append("file", file);
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/api/knowledge/ingest`, {
+        method: "POST",
+        headers: { "X-CIE-Token": this.token },
+        body: form,
+      });
+    } catch (cause) {
+      throw new ApiError(0, {
+        error_code: "NETWORK_ERROR",
+        message: "APIサーバに接続できません。",
+        detail: `${this.baseUrl}/api/knowledge/ingest への接続に失敗しました (${String(
+          (cause as Error)?.message ?? cause,
+        )})。cie/api を 127.0.0.1 で起動しているか確認してください。`,
+      });
+    }
+    if (!res.ok) {
+      const envelope = await this.readErrorEnvelope(res);
+      throw new ApiError(res.status, envelope);
+    }
+    return (await res.json()) as KnowledgeIngestResponse;
+  }
+
+  /** POST /api/knowledge/approve — register a human-approved draft into
+   *  institutional/ (ADR-0003). The selected domain/trust_level ride in the
+   *  body; corrections is optional (v1 minimal). Returns the new entry_id. */
+  approveKnowledge(
+    body: KnowledgeApproveRequest,
+  ): Promise<KnowledgeApproveResponse> {
+    return this.post<KnowledgeApproveResponse>("/api/knowledge/approve", body);
+  }
+
+  /** POST /api/knowledge/reject — reject a pending draft (reason required). */
+  rejectKnowledge(
+    body: KnowledgeRejectRequest,
+  ): Promise<KnowledgeRejectResponse> {
+    return this.post<KnowledgeRejectResponse>("/api/knowledge/reject", body);
+  }
+
+  /** GET /api/knowledge — read-only registry listing (§3.8). No archive
+   *  endpoint exists in REST (K-3), so the UI only browses these entries. */
+  listKnowledge(): Promise<KnowledgeListResponse> {
+    return this.getJson<KnowledgeListResponse>("/api/knowledge");
+  }
+
+  /** POST /api/knowledge/reindex — rebuild the local embedding index (§3.9).
+   *  Returns {status,chunks}; a 501 (no retriever wired) surfaces as an
+   *  ApiError the UI shows as "対応retriever未配線" without over-stating it —
+   *  the approval itself already succeeded (K-6). */
+  reindexKnowledge(): Promise<KnowledgeReindexResponse> {
+    return this.post<KnowledgeReindexResponse>("/api/knowledge/reindex", {});
   }
 
   /** GET /api/files/content — fetch a workspace image as an object URL.

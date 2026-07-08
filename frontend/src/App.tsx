@@ -7,6 +7,7 @@ import { DatasetModal } from "./components/DatasetModal";
 import { EditorPane, type EditorHandle } from "./components/EditorPane";
 import { FileTree } from "./components/FileTree";
 import { Header } from "./components/Header";
+import { KnowledgeModal } from "./components/KnowledgeModal";
 import { WorkspacePane } from "./components/WorkspacePane";
 import { applyTheme, getInitialTheme, type Theme } from "./theme";
 import type { DatasetUploadResponse } from "./api/types";
@@ -31,6 +32,8 @@ export default function App() {
   // Registered dataset (§3.1 前提) and the 解析データ modal open state.
   const [datasetInfo, setDatasetInfo] = useState<DatasetUploadResponse | null>(null);
   const [datasetOpen, setDatasetOpen] = useState(false);
+  // 参考資料（知識取り込み）modal — a separate 入口 from 解析データ (§5).
+  const [knowledgeOpen, setKnowledgeOpen] = useState(false);
   // Bumped when a run completes so the FileTree re-lists new generated files.
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -81,6 +84,7 @@ export default function App() {
         onToggleTheme={toggleTheme}
         onOpenDataset={() => setDatasetOpen(true)}
         datasetUploaded={datasetInfo != null}
+        onOpenKnowledge={() => setKnowledgeOpen(true)}
       />
 
       {datasetOpen && (
@@ -90,6 +94,14 @@ export default function App() {
           current={datasetInfo}
           onClose={() => setDatasetOpen(false)}
           onUploaded={setDatasetInfo}
+        />
+      )}
+
+      {knowledgeOpen && (
+        <KnowledgeModal
+          client={apiClient}
+          connected={connected}
+          onClose={() => setKnowledgeOpen(false)}
         />
       )}
 

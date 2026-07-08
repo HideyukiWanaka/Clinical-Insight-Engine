@@ -7,6 +7,10 @@ export interface ErrorEnvelope {
   error_code: string;
   message: string;
   detail?: string | null;
+  // POST /api/knowledge/ingest returns a 422 whose HTTPException detail carries
+  // the PII check names that failed (cie/api/routes/knowledge.py). We surface
+  // them so the rejection is explicit, never silent (§5).
+  failed_checks?: string[] | null;
 }
 
 // POST /api/dataset (rest-api-contract §3.1 前提 / cie/api/routes/dataset.py).
@@ -161,6 +165,89 @@ export interface FilesResponse {
 export interface FileContentResponse {
   text: string;
   language: string;
+}
+
+// ── Knowledge Ingestion Pipeline (§3.8/§3.9, ADR-0003) ──────────────────────
+// Mirrors cie/api/models.py Knowledge*. The reference-material entry is kept
+// deliberately separate from the 解析データ (patient) entry (§5, ADR-0005 原則4).
+
+// POST /api/knowledge/ingest — extracted draft metadata (free-form on the wire).
+export interface KnowledgeSourceInfo {
+  title?: string | null;
+  year?: string | number | null;
+  doi?: string | null;
+  url?: string | null;
+  [key: string]: unknown;
+}
+
+// One AI-extracted knowledge item awaiting human review. confidence < 0.7 is
+// flagged 🟡 in the UI (cie/ui/components/knowledge_review.py threshold).
+export interface KnowledgeItem {
+  statement?: string;
+  direct_quote?: string;
+  confidence?: number;
+  caveats?: string;
+  [key: string]: unknown;
+}
+
+export interface KnowledgeExtracted {
+  source_info: KnowledgeSourceInfo;
+  domain: string;
+  trust_level: string;
+  knowledge_items: KnowledgeItem[];
+}
+
+export interface KnowledgeIngestResponse {
+  draft_id: string;
+  extracted: KnowledgeExtracted;
+  extraction_limitations: string[];
+}
+
+// POST /api/knowledge/approve — the human-in-the-loop registration trigger.
+// approved_by_human is NEVER sent by the frontend (the server always sets True,
+// ADR-0002/0003). corrections is optional; v1 sends only domain/trust_level.
+export interface KnowledgeApproveRequest {
+  draft_id: string;
+  domain: string;
+  trust_level: string;
+  corrections?: Record<string, unknown>;
+}
+
+export interface KnowledgeApproveResponse {
+  entry_id: string;
+  indexed_docs?: number | null;
+  chunks?: number | null;
+}
+
+// POST /api/knowledge/reject — reason is required (無言失敗禁止 §5).
+export interface KnowledgeRejectRequest {
+  draft_id: string;
+  reason: string;
+}
+
+export interface KnowledgeRejectResponse {
+  draft_id: string;
+  status: string;
+}
+
+// GET /api/knowledge — read-only registry (the REST list returns these 5 fields
+// only; no archive endpoint exists, so the UI is view-only — K-3).
+export interface KnowledgeListEntry {
+  entry_id: string | null;
+  domain: string | null;
+  status: string | null;
+  trust_level: string | null;
+  title: string | null;
+}
+
+export interface KnowledgeListResponse {
+  entries: KnowledgeListEntry[];
+}
+
+// POST /api/knowledge/reindex — {status,chunks}; 501 when no retriever is wired.
+export interface KnowledgeReindexResponse {
+  status: string;
+  chunks: number;
 }
 
 // WS /ws/console (§4.1) — sanitized console frames.
