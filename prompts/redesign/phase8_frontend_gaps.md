@@ -140,29 +140,37 @@ git checkout -b feature/redesign-phase-8-frontend-gaps
 - frontend/src/components/ChatPane.tsx（現状は初回 intent_object のみ送信）
 - frontend/src/useRunner.ts（lastIntent の追加パターンを踏襲）
 
+### 採用モデル（R-1 確定）: 継続を既定＋明示「新しい解析」リセット＋土台チップ
+- 実行結果が有る間は既定で継続。毎ターン分類させない。話題変更時のみ「＋ 新しい解析」を1操作。
+- 現在の基準（土台）は composer 直上のチップで常時可視化 → 意図ズレに即気づける。
+
 ### 実装範囲
 - ✅ useRunner.ts: lastScript を追加（runCode で実行したコードを保持）。返り値に含める。
 - ✅ App.tsx: ChatPane へ priorStats(=runner.result?.statistical_results) と
      priorScript(=runner.lastScript) を供給。
-- ✅ ChatPane.tsx: 送信モード分岐。
-     - 実行結果が有る間は「追加解析として送信」/「新しい解析として送信」の**明示切替**（R-1: 暗黙推論しない）。
-     - 追加解析時: client.propose({continuation_query, prior_statistical_results, prior_r_script}) を呼び、
+- ✅ ChatPane.tsx: 「継続既定＋リセット」で送信先を決める。
+     - **既定は継続**: priorStats（統計結果）が有る間、送信は自動的に continuation として扱う。
+     - **明示リセット**: 上部に常時「＋ 新しい解析」。押すと文脈（priorStats/priorScript 紐付け）を解除し、
+       次の1通を新規 intent に戻す（その後 run が走れば再び継続が既定＝新系譜に sticky）。
+     - **土台チップ**: composer 直上に「土台: 〈intentSummary＋直近検定名〉」を常時表示（横に「新しい解析」併置）。
+     - **継続の実行**: client.propose({continuation_query, prior_statistical_results, prior_r_script}) を呼び、
        返った analysis_proposal を**既存の proposal 描画（候補＋挿入/実行）で再利用**。候補実行の intent は lastIntent を継承。
-     - 新規時: 従来の intent→propose フロー。
+     - **継続不可時**: 直近 run 失敗／統計結果なし（priorStats 空）は継続を有効化せず intent モードのまま（チップに「統計結果なし」）。
      - 生成失敗は r_script_provenance.reason を吹き出し表示（無言失敗禁止）。
-- ❌ バックエンド・propose の契約は無改修（型は既存を使用）。
+- ❌ バックエンド・propose の契約は無改修（型は既存を使用）。毎回2択ボタンや自動判定は採用しない（R-1）。
 
 ### 踏襲パターン
 - lastScript は lastIntent（Phase 6 で追加）と同じ「runCode で状態保持→返却」パターン。
 - proposal の描画・挿入/実行ボタンは既存 MessageView を再利用（新規ロジックを作らない）。
+- 土台チップ文言は既存 intentSummary() を流用。
 
 ### ハーネス（実データE2E）
 - Playwright + 実API:
-  1. 初回 intent→propose→run で statistical_results 取得
-  2. 「追加解析として送信」で追送→ POST /api/propose body に
+  1. 初回 intent→propose→run で statistical_results 取得 → 土台チップに要約が出る
+  2. 続けて送信（無操作で継続）→ POST /api/propose body に
      continuation_query＋prior_statistical_results＋prior_r_script が載る
-  3. 新しい候補が描画され、挿入/実行が従来通り動く
-  4. 「新しい解析として送信」を選ぶと POST /api/intent に戻る
+  3. 新しい候補が描画され、挿入/実行が従来通り動く / 実行後は土台チップが更新される
+  4. 「＋ 新しい解析」を押す→次の1通は POST /api/intent に戻る（文脈リセット）
   5. 生成失敗時に reason が表示される（無言失敗しない）
 
 ### 仕様→実装マッピング（完了基準）
@@ -170,12 +178,15 @@ git checkout -b feature/redesign-phase-8-frontend-gaps
 |------|------|------|
 | lastScript 保持 | useRunner | ⬜ |
 | prior_* 供給 | App→ChatPane | ⬜ |
-| 継続/新規の明示切替 | ChatPane | ⬜ |
+| 継続既定の送信 | ChatPane（priorStats 有→continuation） | ⬜ |
+| 「新しい解析」リセット | ChatPane | ⬜ |
+| 土台チップ表示 | ChatPane（intentSummary 流用） | ⬜ |
 | propose 継続呼び出し | client.propose(continuation) | ⬜ |
 | 候補描画の再利用 | 既存 MessageView | ⬜ |
 
 ### 検証（必須）
-- 追加解析で continuation_query＋prior_* が API に載る。新規選択で intent に戻る。
+- 実行後は無操作で継続（continuation_query＋prior_* が API に載る）。「新しい解析」で intent に戻る。
+- 土台チップが現在の基準を常時表示し、実行のたび更新される。
 - 失敗時に reason が必ず表示される。
 - 既存E2E回帰なし・tsc/vite build 成功・バックエンド pytest 緑を維持。
 ```

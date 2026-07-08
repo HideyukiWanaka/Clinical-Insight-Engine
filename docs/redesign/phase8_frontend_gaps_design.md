@@ -144,24 +144,33 @@ POST /api/dataset① · GET /api/files② · GET /api/files/content② · POST /
 - `App.tsx`: ChatPane へ以下を供給:
   - `priorStats={runner.result?.statistical_results ?? null}`
   - `priorScript={runner.lastScript}`
-- `components/ChatPane.tsx`: 送信時のモード分岐を実装。
-  - **モード判定**: 直近に実行結果（`priorStats`）が有るときは「追加解析」が可能。
-    ただし新規解析も継続できるよう、**明示的な UI 切替**（トグル or 送信ボタン2択:
-    「追加解析として送信」/「新しい解析として送信」）で曖昧さを排す（後述リスク R-1）。
-  - 追加解析時: `client.propose({ continuation_query: text,
+- `components/ChatPane.tsx`: **「継続を既定＋明示リセット」モデル**で送信先を決める（R-1 で確定）。
+  - **既定は継続**: 直近実行で `priorStats`（統計結果）が有る間は、以降の送信を自動的に
+    **追加解析（continuation_query）**として扱う。毎ターンの分類操作は課さない。
+  - **明示リセット**: チャット上部に常時 **「＋ 新しい解析」** コントロールを置く。押すと
+    文脈（priorStats/priorScript の紐付け）を解除し、**次の1通を新規 intent** に戻す。
+    その後 run が走れば再び継続が既定になる（新しい系譜に対して sticky）。
+  - **土台チップ（基準の可視化）**: composer 直上に「いま何を土台にしているか」を常時表示。
+    文言は既存 `intentSummary()`（`natural_language_summary`／objective 等）＋直近の検定名などから
+    生成（例: 「土台: 男女間で収縮期血圧を比較 / t検定」）。土台チップ横に「新しい解析」を併置。
+  - **継続の実行**: `client.propose({ continuation_query: text,
     prior_statistical_results: priorStats, prior_r_script: priorScript })` を呼び、
     返った `analysis_proposal` を**既存の proposal 描画（候補＋挿入/実行ボタン）で再利用**。
     候補の実行時 intent は `runner.lastIntent` を引き継ぐ。
+  - **継続が使えない場合**: 直近 run が失敗／統計結果なし（`priorStats` が空）のときは継続を有効化せず、
+    intent モードのまま（土台チップに「統計結果なし」を示す）。
   - 生成失敗は既存同様 `r_script_provenance.reason` を吹き出し表示（無言失敗禁止）。
 
-### 4.3 会話フロー（確定像）
+### 4.3 会話フロー（確定像: 継続既定＋リセット）
 ```
-[初回]      user prompt ─POST /api/intent→ confirm/clarify ─→ propose(intent_object)
-                         → 候補 → 挿入/実行 → run → statistical_results
-[2回目以降] user「タイトルを変えて」
-             ├ (追加解析) POST /api/propose(continuation_query, prior_stats, prior_script)
-             └ (新規)     POST /api/intent（従来フロー）
+[初回]        user prompt ─POST /api/intent→ confirm/clarify ─→ propose(intent_object)
+                           → 候補 → 挿入/実行 → run → statistical_results
+[結果あり]    以降の送信は既定で継続:
+              user「タイトルを変えて」─POST /api/propose(continuation_query, prior_stats, prior_script)
+                           → 候補 → 実行 → 新しい statistical_results（土台が更新される）
+[話題を変える] [＋ 新しい解析] を押す → 文脈リセット → 次の1通は POST /api/intent（新規系譜へ）
 ```
+ユーザーが意識的に操作するのは**話題を変える瞬間だけ**。現在の土台はチップで常時可視化される。
 
 ---
 
@@ -169,7 +178,7 @@ POST /api/dataset① · GET /api/files② · GET /api/files/content② · POST /
 
 | ID | 論点 | 判断 / 推奨 |
 |----|------|------------|
-| R-1 | 継続 vs 新規の判定 | **暗黙推論は誤爆する**。実行結果が有る間は送信を2択（追加/新規）にする明示 UI を推奨。 |
+| R-1 | 継続 vs 新規の判定 | **確定: 継続を既定＋明示「新しい解析」リセット＋土台チップ**。毎ターン分類させず、話題変更時のみ1操作。現在の基準はチップで常時可視化し意図ズレに即気づける（自動判定＝誤爆大、毎回2択＝操作過多を排す）。 |
 | R-2 | データ投入の入口形態 | §5「別入口」に沿い **Header「解析データ」→モーダル**（ペイン増設より軽い）。 |
 | R-3 | ファイルプレビューの重さ | テキストは `<pre>` で十分（Monaco 読み取り専用は任意）。画像 object URL は revoke 必須。 |
 | R-4 | multipart 送信 | `uploadDataset` で **Content-Type を手動設定しない**（境界崩れ防止）。 |
