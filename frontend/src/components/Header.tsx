@@ -33,7 +33,6 @@ export function Header({
         {projectName} <span>Workbench</span>
       </div>
       <nav className="header__menu" aria-label="メニュー">
-        <button type="button">プロジェクト</button>
         {/* 解析データ入口（患者データ）— §5 で参考資料入口と視覚的に峻別。 */}
         <button
           type="button"
