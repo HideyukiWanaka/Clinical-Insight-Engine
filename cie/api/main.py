@@ -15,6 +15,7 @@ stdout and, for tests, on ``app.state.session_token``.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import secrets
@@ -27,6 +28,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from cie.api.models import ErrorResponse
+from cie.api.rate_limit import FixedWindowLimiter, RateLimitMiddleware
 from cie.api.routes import (
     dataset,
     files,
@@ -47,6 +49,26 @@ TOKEN_HEADER = "X-CIE-Token"
 # route authenticates via its first message, not this HTTP middleware.
 _PROTECTED_PREFIXES = ("/api/",)
 _CORS_ORIGIN_REGEX = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Attach baseline hardening headers to every response (OWASP A05:2025).
+
+    Defense in depth alongside the 127.0.0.1-only bind: these headers cost
+    nothing here but matter the moment the app is ever fronted by a proxy or
+    opened in a browser tab that also has other origins loaded.
+    """
+
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        """Add security headers to the response."""
+        response = await call_next(request)
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Content-Security-Policy"] = "default-src 'self'"
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
+        return response
 
 
 class SessionTokenMiddleware(BaseHTTPMiddleware):
@@ -82,13 +104,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if not getattr(app.state, "services", None):
         # build_services() uses asyncio.run internally; run it off this loop.
         app.state.services = await asyncio.to_thread(_build_services_safe)
-    if not getattr(app.state, "session_token", None):
+    minted_here = not getattr(app.state, "session_token", None)
+    if minted_here:
         app.state.session_token = os.environ.get(
             "CIE_API_SESSION_TOKEN"
         ) or secrets.token_urlsafe(32)
     _log.info("CIE API ready. Session token issued (X-CIE-Token).")
-    # The launcher hands this to the frontend exactly once (§2).
-    print(f"[CIE-API] {TOKEN_HEADER}={app.state.session_token}", flush=True)  # noqa: T201
+    if minted_here:
+        # The launcher hands this to the frontend exactly once (§2) — stdout
+        # is the only channel a human operator has to read it, so it must be
+        # printed in full here. Callers that already hold the token (tests,
+        # CIE_API_SESSION_TOKEN) don't need — and shouldn't get — a repeat
+        # copy in every log line (OWASP A02:2025 — avoid needless disclosure).
+        print(f"[CIE-API] {TOKEN_HEADER}={app.state.session_token}", flush=True)  # noqa: T201
+    else:
+        token_hash = hashlib.sha256(app.state.session_token.encode()).hexdigest()[:8]
+        _log.info("CIE API session token already set (sha256:%s...).", token_hash)
     yield
 
 
@@ -120,15 +151,20 @@ def create_app(services: dict | None = None, session_token: str | None = None) -
         app.state.services = services
     if session_token is not None:
         app.state.session_token = session_token
+    # ws_console.py rate-limits itself directly (BaseHTTPMiddleware only sees
+    # "http"-scope requests, never "websocket").
+    app.state.ws_rate_limiter = FixedWindowLimiter()
 
     app.add_middleware(SessionTokenMiddleware)
+    app.add_middleware(RateLimitMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=_CORS_ORIGIN_REGEX,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type", TOKEN_HEADER],
     )
+    app.add_middleware(SecurityHeadersMiddleware)
 
     app.include_router(dataset.router)
     app.include_router(intent.router)

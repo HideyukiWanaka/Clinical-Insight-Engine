@@ -53,6 +53,21 @@ async def ws_console(websocket: WebSocket) -> None:
         await websocket.close()
         return
 
+    # Same quota shape as POST /api/run (OWASP A04:2025) — this route bypasses
+    # RateLimitMiddleware entirely since BaseHTTPMiddleware never sees
+    # "websocket"-scope connections, so it has to self-limit.
+    client = websocket.client.host if websocket.client else "unknown"
+    retry_after = websocket.app.state.ws_rate_limiter.check(
+        client, "/ws/console", max_requests=20, window_seconds=60
+    )
+    if retry_after is not None:
+        await websocket.send_json(
+            {"type": "stderr", "text": "rate limited: too many executions, "
+             f"retry in {int(retry_after)}s", "exit_code": None}
+        )
+        await websocket.close(code=1008)
+        return
+
     execution_id = first.get("execution_id") or new_execution_id()
     context_guard = services["context_guard"]
 

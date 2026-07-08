@@ -274,6 +274,48 @@ class TestBaseAgentRun:
         assert "Internal compute failure" in (result.error_message or "")
         assert result.error_code == "AGENT_ERROR"
 
+    async def test_execution_error_logged_server_side(
+        self,
+        mock_policy_engine: MagicMock,
+        mock_schema_registry: MagicMock,
+        mock_audit: MagicMock,
+        agent_input: AgentInput,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """An unexpected exception must be logged (with traceback) server-side,
+        not only returned in the API-facing error_message (OWASP A09:2025 —
+        logging failures: previously only the HTTP response carried any trace
+        of the failure)."""
+
+        class FailingAgent(BaseAgent):
+            @property
+            def agent_id(self) -> str:
+                return "planner"
+
+            @property
+            def input_schema_ref(self) -> str:
+                return INPUT_SCHEMA
+
+            @property
+            def output_schema_ref(self) -> str:
+                return OUTPUT_SCHEMA
+
+            @property
+            def required_scopes(self) -> list[CapabilityScope]:
+                return [CapabilityScope.AUDIT_WRITE_ENTRY]
+
+            async def _execute(self, agent_input: AgentInput) -> AgentOutput:
+                raise AgentError("Internal compute failure", agent_id="planner")
+
+        fa = FailingAgent(mock_policy_engine, mock_schema_registry, mock_audit)
+        with caplog.at_level("ERROR"):
+            await fa.run(agent_input)
+
+        assert any(
+            "Internal compute failure" in r.message and r.levelname == "ERROR"
+            for r in caplog.records
+        )
+
     async def test_failed_output_carries_error_fields(
         self,
         agent: ConcreteTestAgent,

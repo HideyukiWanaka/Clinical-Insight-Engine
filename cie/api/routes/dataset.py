@@ -11,8 +11,13 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request, UploadFile
 
 from cie.api.dataset import build_dataset_context
+from cie.api.upload_limits import read_upload_bounded
 
 router = APIRouter(prefix="/api", tags=["dataset"])
+
+# 100 MB — generous for tabular clinical datasets while bounding memory use
+# against an oversized upload (OWASP A03:2025).
+MAX_CSV_BYTES = 100 * 1024 * 1024
 
 
 @router.post("/dataset")
@@ -21,7 +26,7 @@ async def register_dataset(request: Request, file: UploadFile) -> dict:
 
     Returns an aggregate-only summary — never row values.
     """
-    csv_bytes = await file.read()
+    csv_bytes = await read_upload_bounded(file, MAX_CSV_BYTES)
     if not csv_bytes:
         raise HTTPException(
             status_code=400,
