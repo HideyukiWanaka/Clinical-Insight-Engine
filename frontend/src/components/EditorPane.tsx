@@ -3,6 +3,7 @@ import { forwardRef, useImperativeHandle, useRef } from "react";
 import type { editor } from "monaco-editor";
 import type { RunResponse } from "../api/types";
 import type { Theme } from "../theme";
+import { explainRunError } from "../runErrorGuidance";
 import { Pane } from "./Pane";
 
 /** Imperative surface the chat uses to insert code at the cursor (§3.2). */
@@ -137,10 +138,27 @@ function ResultView({ result }: { result: RunResponse | null }) {
   }
 
   if (result.error_detail) {
+    const guidance = explainRunError(result.error_detail);
     return (
       <div className="result-error" data-testid="result-error">
         <strong>実行に失敗しました。</strong>
         <div className="result-error__detail">理由: {result.error_detail}</div>
+        {guidance && (
+          <div className="result-fix" data-testid="result-fix">
+            <div className="result-fix__title">💡 {guidance.title}</div>
+            <div className="result-fix__row">
+              <span className="result-fix__label">原因</span>
+              <span>{guidance.cause}</span>
+            </div>
+            <div className="result-fix__row">
+              <span className="result-fix__label">対処</span>
+              <span>{guidance.fix}</span>
+            </div>
+            {guidance.example && (
+              <pre className="result-fix__example">{guidance.example}</pre>
+            )}
+          </div>
+        )}
       </div>
     );
   }

@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, type CieApiClient } from "./api/client";
+import { explainRunError } from "./runErrorGuidance";
 import type { ConsoleMessage, RunResponse } from "./api/types";
 
 export type ConsoleStream = "stdout" | "stderr" | "exit" | "info";
@@ -160,6 +161,10 @@ export function useRunner(client: CieApiClient): Runner {
           if (res.error_detail) {
             // Mirror the reason into the console so it is impossible to miss (§5).
             push("stderr", res.error_detail);
+            // …and, when the reason maps to a known fixable pattern, add a
+            // concrete "how to fix" line so a first-time user isn't stuck.
+            const guidance = explainRunError(res.error_detail);
+            if (guidance) push("info", `対処: ${guidance.fix}`);
           } else {
             await loadFigures(res, intent);
           }
