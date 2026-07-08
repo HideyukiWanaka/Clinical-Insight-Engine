@@ -64,3 +64,22 @@ def test_ws_subscribe_without_script_closes_cleanly(client: TestClient) -> None:
         ws.send_json({"token": TOKEN})
         msg = ws.receive_json()
         assert msg["type"] == "exit"
+
+
+def test_ws_rate_limited_after_quota_exceeded(client: TestClient) -> None:
+    """The 21st execution within the window must be rejected (OWASP A04:2025) —
+    this route bypasses RateLimitMiddleware entirely (websocket scope), so it
+    has to enforce its own quota via app.state.ws_rate_limiter."""
+    for _ in range(20):
+        with client.websocket_connect("/ws/console") as ws:
+            ws.send_json({"token": TOKEN, "r_script": "print(1)"})
+            while ws.receive_json()["type"] != "exit":
+                pass
+
+    with client.websocket_connect("/ws/console") as ws:
+        ws.send_json({"token": TOKEN, "r_script": "print(1)"})
+        msg = ws.receive_json()
+        assert msg["type"] == "stderr"
+        assert "rate limited" in msg["text"]
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_json()

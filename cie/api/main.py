@@ -28,7 +28,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from cie.api.models import ErrorResponse
-from cie.api.rate_limit import RateLimitMiddleware
+from cie.api.rate_limit import FixedWindowLimiter, RateLimitMiddleware
 from cie.api.routes import (
     dataset,
     files,
@@ -151,6 +151,9 @@ def create_app(services: dict | None = None, session_token: str | None = None) -
         app.state.services = services
     if session_token is not None:
         app.state.session_token = session_token
+    # ws_console.py rate-limits itself directly (BaseHTTPMiddleware only sees
+    # "http"-scope requests, never "websocket").
+    app.state.ws_rate_limiter = FixedWindowLimiter()
 
     app.add_middleware(SessionTokenMiddleware)
     app.add_middleware(RateLimitMiddleware)
@@ -158,8 +161,8 @@ def create_app(services: dict | None = None, session_token: str | None = None) -
         CORSMiddleware,
         allow_origin_regex=_CORS_ORIGIN_REGEX,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type", TOKEN_HEADER],
     )
     app.add_middleware(SecurityHeadersMiddleware)
 
