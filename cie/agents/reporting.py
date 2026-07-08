@@ -409,7 +409,7 @@ class ReportingAgent(BaseAgent):
                 checklist_id or "",
                 journal_style,
             ]
-            references = self._reference_library.retrieve(query_terms, top_k=3)
+            references = self._reference_library.retrieve(query_terms, top_k=4)
             provenance["knowledge_references"] = [r.title for r in references]
 
         # Build prompt (optionally grounded with reporting SKILL.md instructions).

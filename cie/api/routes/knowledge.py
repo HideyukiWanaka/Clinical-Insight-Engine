@@ -102,8 +102,23 @@ async def approve(
         knowledge_items=knowledge_items,
     )
     _draft_store(request).pop(body.draft_id, None)
-    # Embedding reindex is Phase 5 (ADR-0005) — not performed here.
+    # Phase 5 (ADR-0005): refresh the local embedding index so the newly
+    # registered institutional/ entry is immediately searchable. Best-effort —
+    # a reindex failure must not undo a successful human-approved registration.
+    _reindex_quietly(services)
     return KnowledgeApproveResponse(entry_id=entry.entry_id)
+
+
+def _reindex_quietly(services: dict) -> int | None:
+    """Rebuild the embedding index if a retriever supporting it is wired in."""
+    library = services.get("reference_library")
+    reindex = getattr(library, "reindex", None)
+    if reindex is None:
+        return None
+    try:
+        return reindex()
+    except Exception:  # noqa: BLE001 — indexing must not break the approval path
+        return None
 
 
 @router.post("/reject", response_model=KnowledgeRejectResponse)
@@ -144,16 +159,22 @@ async def list_entries(request: Request) -> KnowledgeListResponse:
 
 @router.post("/reindex")
 async def reindex(request: Request) -> dict:
-    """Rebuild the local embedding index (§3.9).
+    """Rebuild the local embedding index (§2.2 / §3.9, ADR-0005 Phase 5).
 
-    Deferred to Phase 5 (ADR-0005 local embedding RAG). Returns 501 so callers
-    get an explicit, non-silent signal rather than a fabricated count.
+    Re-chunks and re-embeds official/**/*.md plus approved institutional/
+    entries into the offline vector store. Fully local — no network I/O.
     """
-    raise HTTPException(
-        status_code=501,
-        detail={
-            "error_code": "NOT_IMPLEMENTED",
-            "message": "Embedding reindex arrives in Phase 5 (ADR-0005).",
-            "detail": "The Phase 1 API keeps the existing MarkdownReferenceLibrary.",
-        },
-    )
+    services = get_services(request)
+    library = services.get("reference_library")
+    reindex_fn = getattr(library, "reindex", None)
+    if reindex_fn is None:
+        raise HTTPException(
+            status_code=501,
+            detail={
+                "error_code": "NOT_IMPLEMENTED",
+                "message": "The wired retriever does not support reindexing.",
+                "detail": "Expected an EmbeddingReferenceLibrary (ADR-0005).",
+            },
+        )
+    chunk_count = reindex_fn()
+    return {"status": "reindexed", "chunks": chunk_count}

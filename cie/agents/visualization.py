@@ -452,7 +452,7 @@ class VisualizationAgent(BaseAgent):
                 intent_obj.get("outcome_type", ""),
                 "ggplot2",
             ]
-            references = self._reference_library.retrieve(query_terms, top_k=2)
+            references = self._reference_library.retrieve(query_terms, top_k=4)
             provenance["knowledge_references"] = [r.title for r in references]
 
         # 3. Build prompt (optionally grounded with SKILL.md instructions)

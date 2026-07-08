@@ -6,17 +6,31 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from cie.core.exceptions import CIEError
+from cie.security.pii_detector import PIIDetectorLayer1
 
+# Reference material accepts only prose/document formats (embedding-rag-spec §3.1,
+# ADR-0005 原則4). Tabular / statistical-data formats belong in the *dataset*
+# uploader (POST /api/dataset), never in knowledge ingestion.
 ALLOWED_EXTENSIONS: frozenset[str] = frozenset({".pdf", ".md", ".txt", ".docx"})
+# "Weak first wall": these are patient-data shaped and are rejected up front with
+# a targeted message routing the user to the dataset entrance.
+TABULAR_DATA_EXTENSIONS: frozenset[str] = frozenset(
+    {".csv", ".tsv", ".xlsx", ".xls", ".sav", ".dta", ".por", ".sas7bdat", ".parquet"}
+)
 MAX_FILE_SIZE_BYTES: int = 50 * 1024 * 1024  # 50MB
 
-# Lightweight PII patterns for raw document text.
-# PIIDetectorLayer1 targets column names / category labels, not free-form text,
-# so we maintain a minimal set of signals here for the document quarantine layer.
+# Lightweight PII patterns for raw document text. These complement the shared
+# Layer-1 column-name detector (PIIDetectorLayer1) with document-body-specific
+# signals (raw ID digit runs, date-near-subject) that the column-name patterns
+# do not carry.
 _PII_TEXT_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\d{8,}"),                          # 8+ consecutive digits (patient ID)
     re.compile(r"(氏名|患者名|患者ID|生年月日|住所)", re.IGNORECASE),  # Japanese PII keywords
     re.compile(r"\b\d{4}-\d{2}-\d{2}\b.*\b(患者|subject|patient)\b", re.IGNORECASE),
+    # English patient identifiers with separators (patient_id / patient-id) and
+    # medical record numbers — the shared column patterns only match the
+    # whitespace form, so cover the underscore/hyphen forms here for bodies.
+    re.compile(r"patient[\s_\-]*id|medical\s*record\s*(?:number|no)\b|\bmrn\b", re.IGNORECASE),
 ]
 
 
@@ -62,6 +76,8 @@ class IngestionGuard:
 
     def __init__(self, known_hashes: set[str] | None = None) -> None:
         self._known_hashes: set[str] = known_hashes or set()
+        # Reuse the shared Layer-1 regex detector for document-body scanning.
+        self._pii_layer1 = PIIDetectorLayer1()
 
     def inspect(self, file_path: Path, file_bytes: bytes) -> InspectionResult:
         sha256 = hashlib.sha256(file_bytes).hexdigest()
@@ -92,14 +108,24 @@ class IngestionGuard:
 
     def _check_extension(self, suffix: str) -> InspectionCheck:
         passed = suffix in ALLOWED_EXTENSIONS
+        if passed:
+            reason = f"Extension '{suffix}' is allowed."
+        elif suffix in TABULAR_DATA_EXTENSIONS:
+            reason = (
+                f"Extension '{suffix}' is tabular/statistical data and is not a "
+                "reference document. Patient data must be uploaded via the "
+                "dataset entrance (POST /api/dataset), not knowledge ingestion. "
+                f"Reference material accepts only: {sorted(ALLOWED_EXTENSIONS)}."
+            )
+        else:
+            reason = (
+                f"Extension '{suffix}' is not in the allowed list: "
+                f"{sorted(ALLOWED_EXTENSIONS)}"
+            )
         return InspectionCheck(
             check_name="FILE_TYPE_NOT_ALLOWED",
             passed=passed,
-            reason=(
-                f"Extension '{suffix}' is allowed."
-                if passed
-                else f"Extension '{suffix}' is not in the allowed list: {sorted(ALLOWED_EXTENSIONS)}"
-            ),
+            reason=reason,
         )
 
     def _check_file_size(self, file_bytes: bytes) -> InspectionCheck:
@@ -147,14 +173,43 @@ class IngestionGuard:
         )
 
     def _check_pii(self, file_bytes: bytes) -> InspectionCheck:
+        """Scan the full document body for PII (embedding-rag-spec §3.2).
+
+        Layers the existing PII assets over the raw text so a patient-data
+        document is rejected *before* it is written anywhere (not even pending/):
+
+        1. ``PIIDetectorLayer1.detect_column_name`` — the shared column-name
+           regex set (patient/case IDs, name, DOB, phone, address, email …),
+           applied to the whole body.
+        2. ``_PII_TEXT_PATTERNS`` — document-body signals (long ID digit runs,
+           date-near-subject) not covered by the column-name set.
+
+        Only the *signal identity* is reported (pattern id / description); the
+        matched text is never surfaced, to avoid echoing PII into logs.
+        """
         text = file_bytes.decode("utf-8", errors="ignore")
+        signals: list[str] = []
+
+        for finding in self._pii_layer1.detect_column_name(text):
+            if finding.severity == "CRITICAL" and finding.pattern_id:
+                signals.append(finding.pattern_id)
+
         for pattern in _PII_TEXT_PATTERNS:
             if pattern.search(text):
-                return InspectionCheck(
-                    check_name="PII_DETECTED_IN_DOCUMENT",
-                    passed=False,
-                    reason="Potential PII signal detected in document text.",
-                )
+                signals.append("document_text_pattern")
+                break
+
+        if signals:
+            # De-duplicate while preserving order for a stable reason string.
+            unique = list(dict.fromkeys(signals))
+            return InspectionCheck(
+                check_name="PII_DETECTED_IN_DOCUMENT",
+                passed=False,
+                reason=(
+                    "Potential PII detected in document text; rejected before "
+                    f"staging. Signals: {unique}"
+                ),
+            )
         return InspectionCheck(
             check_name="PII_DETECTED_IN_DOCUMENT",
             passed=True,
