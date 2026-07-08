@@ -104,6 +104,27 @@ export interface VisualizeResponse {
   error_detail?: string | null;
 }
 
+// POST /api/report (§3.5)
+export interface ReportRequest {
+  statistical_results: Record<string, unknown>;
+  intent_object: Record<string, unknown>;
+  reporting_checklist_id?: string | null;
+  target_journal_style?: string;
+  reporting_skill_id?: string | null;
+}
+
+export interface ManuscriptSection {
+  section_id: string;
+  text: string;
+  is_ai_generated: boolean;
+}
+
+export interface ReportResponse {
+  execution_id: string;
+  manuscript_sections: ManuscriptSection[];
+  error_detail?: string | null;
+}
+
 // WS /ws/console (§4.1) — sanitized console frames.
 export interface ConsoleMessage {
   type: "stdout" | "stderr" | "exit";

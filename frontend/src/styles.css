@@ -582,3 +582,108 @@ body {
   margin: 0;
   font-family: ui-monospace, monospace;
 }
+
+/* ---- Output & Format (Phase 6) ---- */
+.format {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-size: 13px;
+}
+.format__controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.format__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.format__label {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 12px;
+}
+.format__field select,
+.format__field input[type="text"],
+.format__field input:not([type]) {
+  font-size: 12px;
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+}
+.format__radios {
+  display: flex;
+  gap: 14px;
+}
+.format__radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+.format__hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.format .btn {
+  align-self: flex-start;
+}
+.format__error {
+  border-radius: 8px;
+  padding: 8px 11px;
+  background: var(--bubble-ai);
+  border: 1px solid var(--danger, #c0392b);
+  color: var(--text);
+}
+.format__error-detail {
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.85;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.format__sections {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.manuscript {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.manuscript__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.manuscript__title {
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: capitalize;
+}
+.manuscript__ai {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--warn);
+  border: 1px solid var(--warn);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.manuscript__text {
+  margin: 0;
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, monospace;
+  user-select: text;
+}
