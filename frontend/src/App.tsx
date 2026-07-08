@@ -3,11 +3,13 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { apiClient } from "./api/client";
 import { ChatPane } from "./components/ChatPane";
 import { ConsolePane } from "./components/ConsolePane";
+import { DatasetModal } from "./components/DatasetModal";
 import { EditorPane, type EditorHandle } from "./components/EditorPane";
 import { FileTree } from "./components/FileTree";
 import { Header } from "./components/Header";
 import { WorkspacePane } from "./components/WorkspacePane";
 import { applyTheme, getInitialTheme, type Theme } from "./theme";
+import type { DatasetUploadResponse } from "./api/types";
 import { useRunner } from "./useRunner";
 
 const INITIAL_SCRIPT = `# CIE Workbench — R スクリプト
@@ -26,6 +28,11 @@ export default function App() {
   const editorRef = useRef<EditorHandle>(null);
   // Bumps whenever the session token changes so the header status refreshes.
   const [, setTokenTick] = useState(0);
+  // Registered dataset (§3.1 前提) and the 解析データ modal open state.
+  const [datasetInfo, setDatasetInfo] = useState<DatasetUploadResponse | null>(null);
+  const [datasetOpen, setDatasetOpen] = useState(false);
+  // Bumped when a run completes so the FileTree re-lists new generated files.
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const runner = useRunner(apiClient);
 
@@ -52,9 +59,13 @@ export default function App() {
     [runner],
   );
 
-  // Surface the structured result on the Result tab once it lands (§3.2, §4).
+  // Surface the structured result on the Result tab once it lands (§3.2, §4),
+  // and refresh the file tree (a run may have generated new files, §3.4).
   useEffect(() => {
-    if (runner.result) setEditorTab("result");
+    if (runner.result) {
+      setEditorTab("result");
+      setRefreshKey((n) => n + 1);
+    }
   }, [runner.result]);
 
   const onConnectedChange = useCallback(() => setTokenTick((n) => n + 1), []);
@@ -68,7 +79,19 @@ export default function App() {
         apiBaseUrl={apiClient.getBaseUrl()}
         theme={theme}
         onToggleTheme={toggleTheme}
+        onOpenDataset={() => setDatasetOpen(true)}
+        datasetUploaded={datasetInfo != null}
       />
+
+      {datasetOpen && (
+        <DatasetModal
+          client={apiClient}
+          connected={connected}
+          current={datasetInfo}
+          onClose={() => setDatasetOpen(false)}
+          onUploaded={setDatasetInfo}
+        />
+      )}
 
       <PanelGroup direction="horizontal" className="panels" autoSaveId="cie.layout.h">
         <Panel defaultSize={26} minSize={16} order={1}>
@@ -78,6 +101,10 @@ export default function App() {
             onConnectedChange={onConnectedChange}
             onInsertCode={insertCode}
             onRunCode={runCode}
+            datasetUploaded={datasetInfo != null}
+            priorStats={runner.result?.statistical_results ?? null}
+            priorScript={runner.lastScript}
+            priorIntent={runner.lastIntent}
           />
         </Panel>
 
@@ -115,7 +142,11 @@ export default function App() {
         <Panel defaultSize={28} minSize={16} order={3}>
           <PanelGroup direction="vertical" autoSaveId="cie.layout.right">
             <Panel defaultSize={50} minSize={15} order={1}>
-              <FileTree />
+              <FileTree
+                client={apiClient}
+                connected={connected}
+                refreshKey={refreshKey}
+              />
             </Panel>
             <PanelResizeHandle className="resize-handle" />
             <Panel defaultSize={50} minSize={15} order={2}>

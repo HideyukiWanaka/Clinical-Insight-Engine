@@ -11,7 +11,10 @@
 
 import type {
   ConsoleMessage,
+  DatasetUploadResponse,
   ErrorEnvelope,
+  FileContentResponse,
+  FilesResponse,
   IntentRequest,
   IntentResponse,
   ProposeRequest,
@@ -144,6 +147,72 @@ export class CieApiClient {
       // fall through to a generic envelope
     }
     return { error_code: `HTTP_${res.status}`, message: res.statusText };
+  }
+
+  /** Authenticated GET returning JSON, with the same error framing as post(). */
+  private async getJson<T>(path: string): Promise<T> {
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}${path}`, {
+        headers: { "X-CIE-Token": this.token },
+      });
+    } catch (cause) {
+      throw new ApiError(0, {
+        error_code: "NETWORK_ERROR",
+        message: "APIサーバに接続できません。",
+        detail: `${this.baseUrl}${path} への接続に失敗しました (${String(
+          (cause as Error)?.message ?? cause,
+        )})。cie/api を 127.0.0.1 で起動しているか確認してください。`,
+      });
+    }
+    if (!res.ok) {
+      const envelope = await this.readErrorEnvelope(res);
+      throw new ApiError(res.status, envelope);
+    }
+    return (await res.json()) as T;
+  }
+
+  /** POST /api/dataset — register the working CSV (rest-api-contract §3.1 前提).
+   *  Sent as multipart/form-data; we attach ONLY X-CIE-Token and let the browser
+   *  set Content-Type (with its multipart boundary) — never set it by hand (R-4).
+   *  The response is aggregate-only column metadata — no row values (§5). */
+  async uploadDataset(file: File): Promise<DatasetUploadResponse> {
+    const form = new FormData();
+    form.append("file", file);
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/api/dataset`, {
+        method: "POST",
+        headers: { "X-CIE-Token": this.token },
+        body: form,
+      });
+    } catch (cause) {
+      throw new ApiError(0, {
+        error_code: "NETWORK_ERROR",
+        message: "APIサーバに接続できません。",
+        detail: `${this.baseUrl}/api/dataset への接続に失敗しました (${String(
+          (cause as Error)?.message ?? cause,
+        )})。cie/api を 127.0.0.1 で起動しているか確認してください。`,
+      });
+    }
+    if (!res.ok) {
+      const envelope = await this.readErrorEnvelope(res);
+      throw new ApiError(res.status, envelope);
+    }
+    return (await res.json()) as DatasetUploadResponse;
+  }
+
+  /** GET /api/files — read-only workspace listing (§3.6). */
+  listFiles(): Promise<FilesResponse> {
+    return this.getJson<FilesResponse>("/api/files");
+  }
+
+  /** GET /api/files/content — a text file's content + language (§3.7).
+   *  Images use fetchImageObjectUrl instead (raw bytes, must be revoked). */
+  fetchFileContent(path: string): Promise<FileContentResponse> {
+    return this.getJson<FileContentResponse>(
+      `/api/files/content?path=${encodeURIComponent(path)}`,
+    );
   }
 
   /** POST /api/intent — natural-language prompt → intent_object (Planner). */

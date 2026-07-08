@@ -34,6 +34,9 @@ export interface Runner {
   figures: RunFigure[];
   /** The intent_object of the most recent run — fed to POST /api/report (§3.5). */
   lastIntent: Record<string, unknown>;
+  /** The R script of the most recent run — fed to POST /api/propose as
+   *  prior_r_script for continuation (§3.2 / phase8 design §4.2). */
+  lastScript: string;
   runCode: (code: string, intent?: Record<string, unknown>) => void;
   clearConsole: () => void;
   resetWorkspace: () => void;
@@ -47,6 +50,7 @@ export function useRunner(client: CieApiClient): Runner {
   const [result, setResult] = useState<RunResponse | null>(null);
   const [figures, setFigures] = useState<RunFigure[]>([]);
   const [lastIntent, setLastIntent] = useState<Record<string, unknown>>({});
+  const [lastScript, setLastScript] = useState("");
 
   // Track the live socket and any object URLs so we can tear them down cleanly.
   const wsRef = useRef<WebSocket | null>(null);
@@ -133,8 +137,10 @@ export function useRunner(client: CieApiClient): Runner {
       if (!script || running) return;
 
       // Remember the intent behind this run so the Output & Format pane can
-      // draft a manuscript from the resulting statistics (§3.5).
+      // draft a manuscript from the resulting statistics (§3.5), and the script
+      // so a continuation proposal can carry it as prior_r_script (§3.2).
       setLastIntent(intent);
+      setLastScript(script);
       revokeFigures();
       setFigures([]);
       setResult(null);
@@ -196,6 +202,7 @@ export function useRunner(client: CieApiClient): Runner {
     result,
     figures,
     lastIntent,
+    lastScript,
     runCode,
     clearConsole,
     resetWorkspace,

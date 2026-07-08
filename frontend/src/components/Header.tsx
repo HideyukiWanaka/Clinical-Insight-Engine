@@ -6,6 +6,10 @@ interface HeaderProps {
   apiBaseUrl: string;
   theme: Theme;
   onToggleTheme: () => void;
+  /** Open the 解析データ (dataset upload) modal (§5 別入口). */
+  onOpenDataset: () => void;
+  /** True once a dataset is registered — shows a small "取り込み済み" badge. */
+  datasetUploaded: boolean;
 }
 
 /** Top bar: project name / menu / connection status / security status
@@ -17,6 +21,8 @@ export function Header({
   apiBaseUrl,
   theme,
   onToggleTheme,
+  onOpenDataset,
+  datasetUploaded,
 }: HeaderProps) {
   return (
     <header className="header">
@@ -25,7 +31,18 @@ export function Header({
       </div>
       <nav className="header__menu" aria-label="メニュー">
         <button type="button">プロジェクト</button>
-        <button type="button">解析データ</button>
+        <button
+          type="button"
+          data-testid="open-dataset"
+          onClick={onOpenDataset}
+        >
+          解析データ
+          {datasetUploaded && (
+            <span className="header__badge" data-testid="dataset-badge">
+              取り込み済み
+            </span>
+          )}
+        </button>
         <button type="button">参考資料</button>
       </nav>
       <div className="header__spacer" />
