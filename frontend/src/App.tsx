@@ -123,6 +123,9 @@ export default function App() {
                 result={runner.result}
                 onResetWorkspace={runner.resetWorkspace}
                 resetting={runner.running}
+                client={apiClient}
+                connected={connected}
+                intent={runner.lastIntent}
               />
             </Panel>
           </PanelGroup>

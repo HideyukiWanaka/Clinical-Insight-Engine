@@ -1,6 +1,8 @@
 import { useState } from "react";
+import type { CieApiClient } from "../api/client";
 import type { RunResponse } from "../api/types";
-import { Pane, PhasePlaceholder } from "./Pane";
+import { FormatPane } from "./FormatPane";
+import { Pane } from "./Pane";
 
 interface WorkspacePaneProps {
   result: RunResponse | null;
@@ -8,6 +10,11 @@ interface WorkspacePaneProps {
   onResetWorkspace: () => void;
   /** Disable the reset control while a run is in flight. */
   resetting: boolean;
+  /** API client + connection state for the Output & Format pane (POST /api/report). */
+  client: CieApiClient;
+  connected: boolean;
+  /** intent_object of the last run — passed through to the Reporting agent (§3.5). */
+  intent: Record<string, unknown>;
 }
 
 /** One variable descriptor from workspace_summary (name → {class, summary}). */
@@ -20,8 +27,16 @@ interface VarDescriptor {
  *  (spec/ui/ide-workbench-spec.md §3.5). Workspace/Data shows the persisted R
  *  variables (name・型・要約) and generated files from the last POST /api/run,
  *  reading `workspace_summary` written by the .RData wrapper
- *  (spec/runtime-workspace-persistence.md §2). Output & Format stays Phase 6. */
-export function WorkspacePane({ result, onResetWorkspace, resetting }: WorkspacePaneProps) {
+ *  (spec/runtime-workspace-persistence.md §2). Output & Format (Phase 6) draws
+ *  the last run's statistics into a manuscript via POST /api/report. */
+export function WorkspacePane({
+  result,
+  onResetWorkspace,
+  resetting,
+  client,
+  connected,
+  intent,
+}: WorkspacePaneProps) {
   const [tab, setTab] = useState("workspace");
   return (
     <Pane
@@ -40,10 +55,12 @@ export function WorkspacePane({ result, onResetWorkspace, resetting }: Workspace
           resetting={resetting}
         />
       ) : (
-        <PhasePlaceholder phase="Phase 6">
-          報告チェックリスト / 雑誌スタイル / ユーザーSkill を選び「原稿に変換」
-          （<code>POST /api/report</code>）します。
-        </PhasePlaceholder>
+        <FormatPane
+          client={client}
+          connected={connected}
+          result={result}
+          intent={intent}
+        />
       )}
     </Pane>
   );

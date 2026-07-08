@@ -32,6 +32,8 @@ export interface Runner {
   consoleLines: ConsoleLine[];
   result: RunResponse | null;
   figures: RunFigure[];
+  /** The intent_object of the most recent run — fed to POST /api/report (§3.5). */
+  lastIntent: Record<string, unknown>;
   runCode: (code: string, intent?: Record<string, unknown>) => void;
   clearConsole: () => void;
   resetWorkspace: () => void;
@@ -44,6 +46,7 @@ export function useRunner(client: CieApiClient): Runner {
   const [consoleLines, setConsoleLines] = useState<ConsoleLine[]>([]);
   const [result, setResult] = useState<RunResponse | null>(null);
   const [figures, setFigures] = useState<RunFigure[]>([]);
+  const [lastIntent, setLastIntent] = useState<Record<string, unknown>>({});
 
   // Track the live socket and any object URLs so we can tear them down cleanly.
   const wsRef = useRef<WebSocket | null>(null);
@@ -129,6 +132,9 @@ export function useRunner(client: CieApiClient): Runner {
       const script = code.trim();
       if (!script || running) return;
 
+      // Remember the intent behind this run so the Output & Format pane can
+      // draft a manuscript from the resulting statistics (§3.5).
+      setLastIntent(intent);
       revokeFigures();
       setFigures([]);
       setResult(null);
@@ -184,7 +190,16 @@ export function useRunner(client: CieApiClient): Runner {
     })();
   }, [client, running, push]);
 
-  return { running, consoleLines, result, figures, runCode, clearConsole, resetWorkspace };
+  return {
+    running,
+    consoleLines,
+    result,
+    figures,
+    lastIntent,
+    runCode,
+    clearConsole,
+    resetWorkspace,
+  };
 }
 
 function describeError(err: unknown): string {

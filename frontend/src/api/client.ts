@@ -16,6 +16,8 @@ import type {
   IntentResponse,
   ProposeRequest,
   ProposeResponse,
+  ReportRequest,
+  ReportResponse,
   RunRequest,
   RunResponse,
   VisualizeRequest,
@@ -163,6 +165,14 @@ export class CieApiClient {
   /** POST /api/visualize — statistical_results → figures (Visualization, §3.4). */
   visualize(body: VisualizeRequest): Promise<VisualizeResponse> {
     return this.post<VisualizeResponse>("/api/visualize", body);
+  }
+
+  /** POST /api/report — statistical_results + intent → manuscript sections
+   *  (Reporting, §3.5). Calls the existing ReportingAgent unchanged; the format
+   *  selection (checklist / journal style / user Skill) rides in the payload.
+   *  Failure is never silent: `error_detail` is populated on any failure (§5). */
+  report(body: ReportRequest): Promise<ReportResponse> {
+    return this.post<ReportResponse>("/api/report", body);
   }
 
   /** POST /api/workspace/reset — delete the persisted .RData + summary so the
