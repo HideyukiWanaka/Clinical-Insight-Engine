@@ -991,6 +991,98 @@ body {
   flex-direction: column;
   gap: 8px;
 }
+/* 解析対象データの固定バナー — 生成物・ログに埋もれない常時表示。 */
+.filetree__dataset {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent-weak);
+}
+.filetree__dataset--empty {
+  border-style: dashed;
+  border-color: var(--border-strong);
+  background: var(--bg-pane);
+  justify-content: space-between;
+}
+.filetree__dataset-icon {
+  flex: 0 0 auto;
+}
+.filetree__dataset-meta {
+  flex: 1;
+  min-width: 0;
+}
+.filetree__dataset-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filetree__dataset-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+/* 種別フィルタチップ — ログ等を絞り込んでデータを探しやすく。 */
+.filetree__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.chip:hover {
+  background: var(--bg-pane);
+}
+.chip--active {
+  background: var(--accent-weak);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.filetree__groups {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.filetree__group-title {
+  margin: 0 0 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.filetree__group-count {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--bg-pane);
+  border: 1px solid var(--border);
+  font-weight: 500;
+  font-size: 10px;
+}
+.filetree__target-badge {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-weak);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+}
 .filetree__list {
   list-style: none;
   margin: 0;

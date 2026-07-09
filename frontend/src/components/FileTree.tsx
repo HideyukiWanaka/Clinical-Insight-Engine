@@ -1,6 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, type CieApiClient } from "../api/client";
-import type { FileContentResponse, FileEntry } from "../api/types";
+import type {
+  DatasetUploadResponse,
+  FileContentResponse,
+  FileEntry,
+} from "../api/types";
 import { Pane } from "./Pane";
 
 interface FileTreeProps {
@@ -8,6 +12,32 @@ interface FileTreeProps {
   connected: boolean;
   /** Bumped by App when a run completes so the listing refreshes (§3.4). */
   refreshKey: number;
+  /** The registered 解析対象 dataset — pinned as a banner at the top so the
+   *  current analysis target never gets buried under generated files. */
+  dataset: DatasetUploadResponse | null;
+  /** Opens the 解析データ modal (register / change the dataset). */
+  onOpenDataset: () => void;
+}
+
+/** Listing category — data first so logs/scripts can't bury the dataset. */
+type Category = "data" | "figure" | "script" | "other";
+
+const CATEGORY_ORDER: Category[] = ["data", "figure", "script", "other"];
+
+const CATEGORY_META: Record<Category, { icon: string; label: string }> = {
+  data: { icon: "🗂", label: "データ" },
+  figure: { icon: "🖼", label: "図" },
+  script: { icon: "📜", label: "スクリプト" },
+  other: { icon: "🗒", label: "ログ・その他" },
+};
+
+/** dataset.csv（登録済み解析データ）と uploads/（ユーザー持ち込み）が「データ」。
+ *  実行のたびに増える生成スクリプト・ログはここに混ざらない。 */
+function categorize(f: FileEntry): Category {
+  if (f.path === "dataset.csv" || f.path.startsWith("uploads/")) return "data";
+  if (f.kind === "image") return "figure";
+  if (/\.r$/i.test(f.path)) return "script";
+  return "other";
 }
 
 // A loaded preview: either image bytes (object URL) or decoded text.
@@ -34,8 +64,17 @@ function clampCsv(text: string, language: string): string {
  *  text → <pre><code>), and downloads. No delete/overwrite UI (§3.4); the one
  *  write path is「＋ 追加」— POST /api/files puts a user-chosen local file
  *  under uploads/. Failures surface ApiError.detail (無言失敗禁止 §5). */
-export function FileTree({ client, connected, refreshKey }: FileTreeProps) {
+export function FileTree({
+  client,
+  connected,
+  refreshKey,
+  dataset,
+  onOpenDataset,
+}: FileTreeProps) {
   const [files, setFiles] = useState<FileEntry[]>([]);
+  // Category filter — "all" shows every group (data first); a specific
+  // category narrows the list so e.g. logs can be hidden entirely.
+  const [filter, setFilter] = useState<Category | "all">("all");
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const uploadInputRef = useRef<HTMLInputElement>(null);
@@ -112,6 +151,19 @@ export function FileTree({ client, connected, refreshKey }: FileTreeProps) {
 
   // Revoke any outstanding object URL on unmount.
   useEffect(() => () => revokePreview(), [revokePreview]);
+
+  // Non-empty categories in fixed order (data → 図 → スクリプト → ログ・その他),
+  // most-recent-first within each (the API already sorts by mtime).
+  const groups = useMemo(
+    () =>
+      CATEGORY_ORDER.map((category) => ({
+        category,
+        items: files.filter((f) => categorize(f) === category),
+      })).filter((g) => g.items.length > 0),
+    [files],
+  );
+  const visibleGroups =
+    filter === "all" ? groups : groups.filter((g) => g.category === filter);
 
   const openFile = useCallback(
     async (entry: FileEntry) => {
@@ -209,6 +261,53 @@ export function FileTree({ client, connected, refreshKey }: FileTreeProps) {
           </div>
         )}
 
+        {/* 解析対象データを常に最上部へ固定表示 — 一覧に埋もれない（§3.4改）。 */}
+        {connected &&
+          (dataset ? (
+            <div className="filetree__dataset" data-testid="active-dataset">
+              <span className="filetree__dataset-icon" aria-hidden="true">
+                📌
+              </span>
+              <div className="filetree__dataset-meta">
+                <div
+                  className="filetree__dataset-name"
+                  title={dataset.source_name ?? dataset.dataset_id}
+                >
+                  {dataset.source_name ?? dataset.dataset_id}
+                </div>
+                <div className="filetree__dataset-sub">
+                  解析対象データ ・ {dataset.row_count}行 × {dataset.column_count}列
+                </div>
+              </div>
+              <button
+                type="button"
+                className="mini-btn"
+                data-testid="active-dataset-change"
+                onClick={onOpenDataset}
+                title="解析データを変更（列メタの確認もこちら）"
+              >
+                変更
+              </button>
+            </div>
+          ) : (
+            <div
+              className="filetree__dataset filetree__dataset--empty"
+              data-testid="active-dataset-empty"
+            >
+              <span className="filetree__dataset-sub">
+                解析対象データは未登録です
+              </span>
+              <button
+                type="button"
+                className="mini-btn"
+                data-testid="active-dataset-register"
+                onClick={onOpenDataset}
+              >
+                取り込む
+              </button>
+            </div>
+          ))}
+
         {error && (
           <div className="msg msg--error" data-testid="files-error">
             <span className="msg__role">エラー</span>
@@ -229,27 +328,82 @@ export function FileTree({ client, connected, refreshKey }: FileTreeProps) {
         )}
 
         {files.length > 0 && (
-          <ul className="filetree__list" data-testid="files-list">
-            {files.map((f) => (
-              <li key={f.path}>
-                <button
-                  type="button"
-                  className={
-                    "filetree__item" +
-                    (selected === f.path ? " filetree__item--active" : "")
-                  }
-                  data-testid="file-item"
-                  title={f.path}
-                  onClick={() => void openFile(f)}
-                >
-                  <span className="filetree__kind" aria-hidden="true">
-                    {f.kind === "image" ? "🖼" : f.kind === "text" ? "📄" : "📦"}
-                  </span>
-                  <span className="filetree__path">{f.path}</span>
-                </button>
-              </li>
+          <div className="filetree__chips" data-testid="files-filter" role="group" aria-label="ファイル種別フィルタ">
+            <button
+              type="button"
+              className={"chip" + (filter === "all" ? " chip--active" : "")}
+              data-testid="files-filter-all"
+              onClick={() => setFilter("all")}
+            >
+              すべて ({files.length})
+            </button>
+            {groups.map((g) => (
+              <button
+                key={g.category}
+                type="button"
+                className={"chip" + (filter === g.category ? " chip--active" : "")}
+                data-testid={`files-filter-${g.category}`}
+                onClick={() =>
+                  setFilter((prev) => (prev === g.category ? "all" : g.category))
+                }
+              >
+                {CATEGORY_META[g.category].icon} {CATEGORY_META[g.category].label} (
+                {g.items.length})
+              </button>
             ))}
-          </ul>
+          </div>
+        )}
+
+        {files.length > 0 && (
+          <div className="filetree__groups" data-testid="files-list">
+            {visibleGroups.map((g) => (
+              <section
+                key={g.category}
+                className="filetree__group"
+                data-testid={`files-group-${g.category}`}
+              >
+                <h3 className="filetree__group-title">
+                  <span aria-hidden="true">{CATEGORY_META[g.category].icon}</span>{" "}
+                  {CATEGORY_META[g.category].label}
+                  <span className="filetree__group-count">{g.items.length}</span>
+                </h3>
+                <ul className="filetree__list">
+                  {g.items.map((f) => (
+                    <li key={f.path}>
+                      <button
+                        type="button"
+                        className={
+                          "filetree__item" +
+                          (selected === f.path ? " filetree__item--active" : "")
+                        }
+                        data-testid="file-item"
+                        title={f.path}
+                        onClick={() => void openFile(f)}
+                      >
+                        <span className="filetree__kind" aria-hidden="true">
+                          {f.kind === "image"
+                            ? "🖼"
+                            : f.kind === "text"
+                              ? "📄"
+                              : "📦"}
+                        </span>
+                        <span className="filetree__path">{f.path}</span>
+                        {dataset && f.path === "dataset.csv" && (
+                          <span
+                            className="filetree__target-badge"
+                            data-testid="file-target-badge"
+                            title="現在の解析対象データ"
+                          >
+                            解析対象
+                          </span>
+                        )}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))}
+          </div>
         )}
 
         {previewErr && (

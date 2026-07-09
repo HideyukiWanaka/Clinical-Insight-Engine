@@ -312,3 +312,33 @@ def test_knowledge_reindex_is_501_phase5(client: TestClient) -> None:
     resp = client.post("/api/knowledge/reindex", headers=AUTH)
     assert resp.status_code == 501
     assert resp.json()["detail"]["error_code"] == "NOT_IMPLEMENTED"
+
+
+# ---------------------------------------------------------------------------
+# §3.1 前提 — dataset registration (source_name / GET status)
+# ---------------------------------------------------------------------------
+
+def test_dataset_registration_roundtrip(client: TestClient, tmp_path, monkeypatch) -> None:
+    """POST /api/dataset keeps the origin filename; GET /api/dataset restores
+    the registered summary (UI reload) — aggregate-only, no row values."""
+    monkeypatch.setenv("CIE_WORKSPACE_DIRECTORY", str(tmp_path))
+
+    resp = client.get("/api/dataset", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["dataset"] is None
+
+    resp = client.post(
+        "/api/dataset", headers=AUTH,
+        files={"file": ("clinical_trial_2026.csv", b"sex,age\nM,41\nF,38\n", "text/csv")},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source_name"] == "clinical_trial_2026.csv"
+    assert body["row_count"] == 2
+
+    resp = client.get("/api/dataset", headers=AUTH)
+    dataset = resp.json()["dataset"]
+    assert dataset["source_name"] == "clinical_trial_2026.csv"
+    assert dataset["column_count"] == 2
+    # Aggregate-only (DQ-001): row values never leak through the status endpoint.
+    assert "41" not in str(dataset)

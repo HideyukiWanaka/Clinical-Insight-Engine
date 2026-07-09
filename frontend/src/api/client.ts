@@ -11,6 +11,7 @@
 
 import type {
   ConsoleMessage,
+  DatasetStatusResponse,
   DatasetUploadResponse,
   ErrorEnvelope,
   ExcelConfirmRequest,
@@ -263,6 +264,12 @@ export class CieApiClient {
    *  Excel upload. Returns the same aggregate-only shape as uploadDataset. */
   confirmExcelDataset(body: ExcelConfirmRequest): Promise<DatasetUploadResponse> {
     return this.post<DatasetUploadResponse>("/api/dataset/excel/confirm", body);
+  }
+
+  /** GET /api/dataset — the currently registered dataset (null until an
+   *  upload). Restores the 解析対象データ indicator after a page reload. */
+  getDatasetStatus(): Promise<DatasetStatusResponse> {
+    return this.getJson<DatasetStatusResponse>("/api/dataset");
   }
 
   /** POST /api/files — add a local file to the workspace under uploads/.

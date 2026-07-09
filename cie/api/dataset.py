@@ -47,8 +47,15 @@ def excel_sheet_to_csv_bytes(excel_bytes: bytes, sheet_name: str) -> bytes:
     return df.to_csv(index=False).encode("utf-8")
 
 
-def build_dataset_context(csv_bytes: bytes | None) -> dict:
+def build_dataset_context(
+    csv_bytes: bytes | None, source_name: str | None = None
+) -> dict:
     """Place the uploaded dataset where R can read it and derive column metadata.
+
+    ``source_name`` is the user-facing origin label (original filename, plus
+    the sheet name for Excel) kept only so the UI can show *which* file is the
+    current 解析対象 — it is echoed back in dataset summaries and never enters
+    the LLM/agents payload.
 
     Writes the CSV to ``<workspace>/dataset.csv`` (the path the generated R
     script reads via WORKSPACE_DIR) and returns a ``dataset_context`` dict that
@@ -126,6 +133,7 @@ def build_dataset_context(csv_bytes: bytes | None) -> dict:
         # (validate_dataset / classify_variables / detect_missing_values /
         # detect_outliers). Aggregates only — DQ-001.
         "dataset_id": "uploaded_dataset",
+        "source_name": source_name,
         "metadata_type": "validated_structural",
         "row_count": row_count,
         "column_count": len(dq_columns),
