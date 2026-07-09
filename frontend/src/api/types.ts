@@ -19,6 +19,10 @@ export interface ErrorEnvelope {
 // mirrors build_dataset_context()'s `columns` output verbatim (§5, CLAUDE.md).
 export interface DatasetColumn {
   var_n: string;
+  // Original column header. Local-UI-only — never forwarded to the LLM (the
+  // agents pipeline only ever sees var_n); shown so the user can confirm
+  // which real column the AI's var_n reference points to.
+  original_name: string;
   inferred_type: string;
   missing_count: number;
   missing_rate_pct: number;
@@ -29,6 +33,45 @@ export interface DatasetUploadResponse {
   row_count: number;
   column_count: number;
   columns: DatasetColumn[];
+}
+
+// POST /api/dataset/excel/inspect → sheet names of a pending Excel upload;
+// POST /api/dataset/excel/confirm registers the chosen sheet and returns the
+// same DatasetUploadResponse shape as the CSV path.
+export interface ExcelInspectResponse {
+  upload_id: string;
+  sheet_names: string[];
+}
+
+export interface ExcelConfirmRequest {
+  upload_id: string;
+  sheet_name: string;
+}
+
+// /api/settings/llm — AI provider + API key management (distinct from the
+// X-CIE-Token session auth). Never carries a key value in responses.
+export interface LlmProviderStatus {
+  provider: string;
+  label: string;
+  has_key: boolean;
+}
+
+export interface LlmSettingsResponse {
+  active_provider: string;
+  providers: LlmProviderStatus[];
+}
+
+export interface LlmProviderRequest {
+  provider: string;
+}
+
+export interface LlmApiKeyRequest {
+  provider: string;
+  api_key: string;
+}
+
+export interface LlmApiKeyClearRequest {
+  provider: string;
 }
 
 // POST /api/intent (§3.1)

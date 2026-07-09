@@ -39,8 +39,10 @@ const INGEST_RESPONSE = {
 
 async function connect(page: Page): Promise<void> {
   await page.goto("/");
-  await page.getByLabel("セッショントークン").fill("test-token-abc");
-  await page.getByRole("button", { name: "設定" }).click();
+  await page.getByTestId("open-settings-from-chat").click();
+  await page.getByTestId("settings-token-input").fill("test-token-abc");
+  await page.getByTestId("settings-token-save").click();
+  await page.getByTestId("settings-close").click();
 }
 
 test.describe("Phase 9 — 参考資料 取り込み〜人間承認（§3.8 / §5）", () => {

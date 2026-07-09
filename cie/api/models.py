@@ -180,6 +180,64 @@ class ReportResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# POST /api/dataset/excel/* — two-step Excel intake (inspect → confirm)
+# ---------------------------------------------------------------------------
+
+
+class ExcelInspectResponse(BaseModel):
+    """Sheet names of a pending Excel upload awaiting sheet selection."""
+
+    upload_id: str
+    sheet_names: list[str] = Field(default_factory=list)
+
+
+class ExcelConfirmRequest(BaseModel):
+    """Request body for ``POST /api/dataset/excel/confirm``."""
+
+    upload_id: str
+    sheet_name: str
+
+
+# ---------------------------------------------------------------------------
+# /api/settings/llm — AI provider + API key management
+# ---------------------------------------------------------------------------
+
+
+class LlmProviderStatus(BaseModel):
+    """One provider's selectability — never the key value itself."""
+
+    provider: str
+    label: str
+    has_key: bool
+
+
+class LlmSettingsResponse(BaseModel):
+    """Current active provider and per-provider key presence."""
+
+    active_provider: str
+    providers: list[LlmProviderStatus] = Field(default_factory=list)
+
+
+class LlmProviderRequest(BaseModel):
+    """Request body for ``POST /api/settings/llm/provider``."""
+
+    provider: str
+
+
+class LlmApiKeyRequest(BaseModel):
+    """Request body for ``POST /api/settings/llm/key``."""
+
+    provider: str
+    api_key: str
+
+
+class LlmApiKeyClearRequest(BaseModel):
+    """Request body for ``POST /api/settings/llm/key/clear``."""
+
+    provider: str
+
+
+# ---------------------------------------------------------------------------
 # GET /api/files (§3.6, §3.7)
 # ---------------------------------------------------------------------------
 

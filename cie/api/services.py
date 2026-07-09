@@ -80,8 +80,14 @@ def build_services() -> dict:
     policy_engine = PolicyEngine(token_manager, audit)
     schema_registry = SchemaRegistry(schema_dir=Path("schemas/"))
 
-    # LLM — provider selected via CIE_ACTIVE_AI_PROVIDER env var
-    llm_client = llm_client_from_env()
+    # LLM — provider selected via CIE_ACTIVE_AI_PROVIDER (.env). Pass
+    # config.active_ai_provider explicitly rather than letting
+    # llm_client_from_env() read os.environ directly: CIEConfig loads .env
+    # through pydantic-settings, which does NOT populate the real process
+    # environment, so os.environ.get("CIE_ACTIVE_AI_PROVIDER") is empty even
+    # when .env has it set — every restart would otherwise silently fall back
+    # to "anthropic" regardless of a provider switch made via the settings UI.
+    llm_client = llm_client_from_env(provider=config.active_ai_provider)
 
     # Semantic cache (ADR-0004)
     from cie.cache.store import CacheStore
@@ -243,4 +249,7 @@ def build_services() -> dict:
         # Phase 8: Skill self-improvement
         "skill_lifecycle": skill_lifecycle,
         "session_factory": lambda: get_session(engine),
+        # Exposed so /api/settings/llm can live-swap provider/key on the one
+        # shared instance every agent already holds a reference to (§ below).
+        "llm_client": llm_client,
     }

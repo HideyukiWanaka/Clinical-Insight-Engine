@@ -3,6 +3,10 @@
 Reuses the scan logic of ``cie/ui/components/file_browser.py`` (read-only, no
 writes/deletes). Path traversal is forbidden: ``path`` is normalised and must
 resolve under ``workspace_dir`` (§3.7).
+
+``POST /api/files`` is the one intake exception to the read-only rule: it adds
+a user-chosen local file under ``uploads/`` (never overwriting, no deletes) so
+users can bring their own R scripts / auxiliary files into the workspace.
 """
 
 from __future__ import annotations
@@ -10,11 +14,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
 
 from cie.api.deps import get_services
 from cie.api.models import FileContentResponse, FileEntry, FilesResponse
+from cie.api.upload_limits import read_upload_bounded
 
 router = APIRouter(prefix="/api", tags=["files"])
 
@@ -22,6 +27,8 @@ _MAX_FILES = 200
 _TEXT_SUFFIXES = {".r", ".json", ".txt", ".log", ".csv", ".md"}
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
 _MAX_PREVIEW_BYTES = 200_000
+_MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+_UPLOADS_SUBDIR = "uploads"
 
 
 def _workspace_root(services: dict) -> Path:
@@ -71,6 +78,45 @@ async def list_files(request: Request) -> FilesResponse:
             )
         )
     return FilesResponse(files=entries)
+
+
+@router.post("/files", response_model=FileEntry)
+async def upload_file(request: Request, file: UploadFile) -> FileEntry:
+    """Add a user-chosen local file to the workspace under ``uploads/``.
+
+    Never overwrites: an existing name gets a numbered suffix. The filename is
+    reduced to its base name so the client cannot steer the write path.
+    """
+    data = await read_upload_bounded(file, _MAX_UPLOAD_BYTES)
+    name = Path(file.filename or "").name
+    if not name or name in {".", ".."} or name.startswith("."):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "INVALID_FILENAME",
+                "message": "ファイル名が不正です。",
+                "detail": f"filename={file.filename!r}",
+            },
+        )
+
+    uploads_dir = _workspace_root(get_services(request)) / _UPLOADS_SUBDIR
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+
+    target = uploads_dir / name
+    stem, suffix = target.stem, target.suffix
+    counter = 1
+    while target.exists():
+        target = uploads_dir / f"{stem} ({counter}){suffix}"
+        counter += 1
+    target.write_bytes(data)
+
+    stat = target.stat()
+    return FileEntry(
+        path=f"{_UPLOADS_SUBDIR}/{target.name}",
+        size_bytes=stat.st_size,
+        modified=datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat(),
+        kind=_kind(target.suffix.lower()),
+    )
 
 
 @router.get("/files/content", response_model=None)

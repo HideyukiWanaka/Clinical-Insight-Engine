@@ -129,6 +129,27 @@ class TestRScriptValidator:
         violations = RScriptValidator().validate('path.expand("~/secret")')
         assert any("path.expand" in v for v in violations), violations
 
+    def test_validate_windows_home_shorthand_detected(self) -> None:
+        violations = RScriptValidator().validate('readLines("~\\\\secret")')
+        assert any("Home-directory" in v for v in violations), violations
+
+    def test_validate_formula_string_tilde_not_flagged(self) -> None:
+        """A bare "~" used to build an R formula dynamically (a very common,
+        LLM-generated idiom for wilcox.test/lm/etc.) must not be mistaken for
+        home-directory shorthand — it never touches the filesystem."""
+        violations = RScriptValidator().validate(
+            'wilcox.test(as.formula(paste(outcome_var, "~", group_var)), data = data)'
+        )
+        assert violations == []
+
+    def test_validate_case_when_tilde_not_flagged(self) -> None:
+        """dplyr::case_when(cond ~ result, ...) — the ~ is unquoted here so it
+        was never at risk, but keep it covered alongside the string-tilde case."""
+        violations = RScriptValidator().validate(
+            'dplyr::case_when(x < 0.1 ~ "small", TRUE ~ "large")'
+        )
+        assert violations == []
+
     def test_validate_sys_setenv_detected(self) -> None:
         violations = RScriptValidator().validate("Sys.setenv(HOME='/tmp')")
         assert any("Sys.setenv()" in v for v in violations), violations

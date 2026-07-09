@@ -12,6 +12,11 @@ interface HeaderProps {
   datasetUploaded: boolean;
   /** Open the 参考資料 (knowledge ingestion) modal — a separate 入口 (§5). */
   onOpenKnowledge: () => void;
+  /** Open the セッショントークン設定 modal (local browser↔API auth only). */
+  onOpenSettings: () => void;
+  /** Open the AIプロバイダー設定 modal (provider + API key — the screen people
+   *  actually mean by "API設定"). */
+  onOpenLlmSettings: () => void;
 }
 
 /** Top bar: project name / menu / connection status / security status
@@ -26,6 +31,8 @@ export function Header({
   onOpenDataset,
   datasetUploaded,
   onOpenKnowledge,
+  onOpenSettings,
+  onOpenLlmSettings,
 }: HeaderProps) {
   return (
     <header className="header">
@@ -58,19 +65,48 @@ export function Header({
         >
           <span aria-hidden="true">📚</span> 参考資料
         </button>
+        {/* AIプロバイダー設定 — Gemini/OpenAI/AnthropicのAPIキーを入れる場所は
+            ここだけ、と一目でわかる常設入口（解析データ/参考資料と同格）。 */}
+        <button
+          type="button"
+          className="header__entry"
+          data-testid="open-llm-settings"
+          onClick={onOpenLlmSettings}
+          title="生成AI（Gemini/OpenAI/Anthropic）のプロバイダー・APIキー設定"
+        >
+          <span aria-hidden="true">🤖</span> AIモデル
+        </button>
       </nav>
       <div className="header__spacer" />
 
-      <span
-        className="status"
-        title={`API: ${apiBaseUrl}`}
-        data-testid="status-connection"
-      >
+      {/* セッショントークン（ブラウザ↔ローカルAPI間の認証）は起動スクリプトで
+          自動設定されるため、接続済みなら操作不要 — 非クリックの状態表示のみに
+          して混同を避ける。未接続時だけクリックで設定画面を開けるようにする
+          （トラブルシューティング用の控えめな入口）。 */}
+      {connected ? (
         <span
-          className={"status__dot " + (connected ? "status__dot--ok" : "status__dot--warn")}
-        />
-        {connected ? "API接続済み" : "APIトークン未設定"}
-      </span>
+          className="status"
+          title={`API: ${apiBaseUrl}`}
+          data-testid="status-connection"
+        >
+          <span className="status__dot status__dot--ok" />
+          API接続済み
+        </span>
+      ) : (
+        <button
+          type="button"
+          className="status status--clickable"
+          title={`API: ${apiBaseUrl} — クリックでセッショントークン設定を開く`}
+          data-testid="status-connection"
+          onClick={onOpenSettings}
+        >
+          <span className="status__dot status__dot--warn" />
+          APIトークン未設定
+          <span aria-hidden="true" style={{ opacity: 0.7 }}>
+            ⚙
+          </span>
+        </button>
+      )}
 
       <span className="status" data-testid="status-security" title="生データはUIに出ません（var_n匿名化）">
         <span className="status__dot status__dot--secure" />

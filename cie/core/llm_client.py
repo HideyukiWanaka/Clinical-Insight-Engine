@@ -31,7 +31,15 @@ _ENDPOINTS: dict[str, str] = {
 _DEFAULT_MODELS: dict[str, str] = {
     "anthropic":    "claude-haiku-4-5-20251001",
     "openai":       "gpt-4o-mini",
-    "google_gemini": "gemini-3.5-flash",
+    # Per https://ai.google.dev/gemini-api/docs/models#gemini-3, "Gemini 3.5
+    # Flash" is Google's current stable/GA flash model — but neither
+    # "gemini-3.5-flash" nor the "gemini-flash-latest" alias is reachable
+    # through this OpenAI-compatibility endpoint yet (confirmed directly:
+    # both return a misleading 503 "high demand" here, while GET
+    # /v1beta/models lists them as available on the native endpoint). Until
+    # the compat bridge catches up, gemini-2.5-flash is the newest model that
+    # actually responds 200 through /v1beta/openai/chat/completions.
+    "google_gemini": "gemini-2.5-flash",
 }
 
 _ENV_KEY_NAMES: dict[str, str] = {
@@ -40,12 +48,15 @@ _ENV_KEY_NAMES: dict[str, str] = {
     "google_gemini": "GOOGLE_GEMINI_API_KEY",
 }
 
-# 1024 was too low: reasoning-capable models (e.g. Gemini flash) spend output
-# tokens on internal thinking, truncating the JSON/R-script payload mid-field
-# before the required properties are emitted. This client is shared by the
-# Statistics/Visualization/Reporting agents, whose R-script generation needs
-# even more headroom, so keep a generous ceiling.
-_DEFAULT_MAX_TOKENS = 4096
+# 1024, then 4096, were both too low: reasoning-capable models (e.g. Gemini
+# flash) spend output tokens on internal thinking BEFORE any visible content,
+# truncating the JSON/R-script payload mid-field once that hidden budget
+# eats most of max_tokens (observed: gemini-2.5-flash cut off mid-```r block
+# at 4096, well short of a full explanation + R script). This client is
+# shared by the Statistics/Visualization/Reporting agents, whose two-candidate
+# conversational R-script generation needs the most headroom, so keep a
+# generous ceiling that comfortably covers thinking + full output.
+_DEFAULT_MAX_TOKENS = 16384
 _DEFAULT_TIMEOUT = 60.0
 
 
@@ -109,6 +120,27 @@ class LLMClient:
     @property
     def model(self) -> str:
         return self._model
+
+    def set_credentials(
+        self, provider: str, api_key: str, model: str | None = None
+    ) -> None:
+        """Swap provider/key/model in place on the shared client instance.
+
+        ``build_services()`` constructs one ``LLMClient`` and hands the same
+        reference to every agent (planner/statistics/visualization/reporting).
+        Mutating it here — rather than building a new client — means a
+        settings-screen save takes effect on the very next LLM call, with no
+        API process restart required.
+        """
+        if provider not in _ENDPOINTS:
+            raise ValueError(
+                f"Unsupported LLM provider: '{provider}'. "
+                f"Supported: {sorted(_ENDPOINTS)}"
+            )
+        self._provider = provider
+        self._api_key = api_key
+        self._model = model or _DEFAULT_MODELS[provider]
+        self._endpoint = _ENDPOINTS[provider]
 
     async def complete(
         self, system: str, user: str, assistant_prefill: str | None = None

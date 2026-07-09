@@ -29,13 +29,16 @@ function clampCsv(text: string, language: string): string {
   return lines.slice(0, 20).join("\n") + "\n… [先頭20行のみ表示] …";
 }
 
-/** Right-top: read-only workspace file tree (spec/ui/ide-workbench-spec.md §3.4).
+/** Right-top: workspace file tree (spec/ui/ide-workbench-spec.md §3.4).
  *  Lists GET /api/files, previews via GET /api/files/content (image → <img>,
- *  text → <pre><code>), and downloads. Read-only: no delete UI (§3.4). Failures
- *  surface ApiError.detail (無言失敗禁止 §5). */
+ *  text → <pre><code>), and downloads. No delete/overwrite UI (§3.4); the one
+ *  write path is「＋ 追加」— POST /api/files puts a user-chosen local file
+ *  under uploads/. Failures surface ApiError.detail (無言失敗禁止 §5). */
 export function FileTree({ client, connected, refreshKey }: FileTreeProps) {
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<{ message: string; detail?: string | null } | null>(
     null,
   );
@@ -80,6 +83,32 @@ export function FileTree({ client, connected, refreshKey }: FileTreeProps) {
   useEffect(() => {
     void refresh();
   }, [refresh, refreshKey]);
+
+  // 「＋ 追加」: bring a local file into the workspace (uploads/), then re-list.
+  const uploadLocalFile = useCallback(
+    async (file: File) => {
+      setUploading(true);
+      setError(null);
+      try {
+        await client.uploadWorkspaceFile(file);
+        await refresh();
+      } catch (err) {
+        if (err instanceof ApiError) {
+          setError({ message: err.message, detail: err.detail });
+        } else {
+          setError({
+            message: "ファイルの追加に失敗しました。",
+            detail: String((err as Error)?.message ?? err),
+          });
+        }
+      } finally {
+        setUploading(false);
+        // Allow re-selecting the same filename to re-trigger onChange.
+        if (uploadInputRef.current) uploadInputRef.current.value = "";
+      }
+    },
+    [client, refresh],
+  );
 
   // Revoke any outstanding object URL on unmount.
   useEffect(() => () => revokePreview(), [revokePreview]);
@@ -138,16 +167,39 @@ export function FileTree({ client, connected, refreshKey }: FileTreeProps) {
     <Pane
       title="ファイル"
       headerExtra={
-        <button
-          type="button"
-          className="mini-btn"
-          data-testid="files-refresh"
-          onClick={() => void refresh()}
-          disabled={loading || !connected}
-          title="一覧を更新（GET /api/files）"
-        >
-          更新
-        </button>
+        <>
+          <input
+            ref={uploadInputRef}
+            type="file"
+            style={{ display: "none" }}
+            aria-label="ワークスペースに追加するファイル"
+            data-testid="files-upload-input"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void uploadLocalFile(f);
+            }}
+          />
+          <button
+            type="button"
+            className="mini-btn"
+            data-testid="files-upload"
+            onClick={() => uploadInputRef.current?.click()}
+            disabled={uploading || !connected}
+            title="PC上のファイルをワークスペース（uploads/）に追加（POST /api/files）"
+          >
+            {uploading ? "追加中…" : "＋ 追加"}
+          </button>
+          <button
+            type="button"
+            className="mini-btn"
+            data-testid="files-refresh"
+            onClick={() => void refresh()}
+            disabled={loading || !connected}
+            title="一覧を更新（GET /api/files）"
+          >
+            更新
+          </button>
+        </>
       }
     >
       <div className="filetree" data-testid="filetree">

@@ -81,7 +81,12 @@ FORBIDDEN_R_PATTERNS: list[_PatternEntry] = [
 _ABSOLUTE_PATH_PATTERNS: list[_PatternEntry] = [
     (re.compile(r"""["'][A-Za-z]:[\\/]"""), "Hard-coded Windows absolute path (<drive>:\\...)"),
     (re.compile(r"""["']/"""), "Hard-coded Unix absolute path (string literal starting with /)"),
-    (re.compile(r"""["']~"""), "Home-directory shorthand (~) not permitted"),
+    # Require a path separator right after the tilde: a bare "~" string is a
+    # common, harmless way to build an R formula dynamically (e.g.
+    # as.formula(paste(outcome_var, "~", group_var))) or a dplyr::case_when()
+    # clause (cond ~ result) — neither touches the filesystem. "~/..." or
+    # "~\..." is what actually resolves to the home directory.
+    (re.compile(r"""["']~[/\\]"""), "Home-directory shorthand (~) not permitted"),
     (re.compile(r"\bpath\.expand\s*\("), "path.expand() — home-directory resolution not permitted"),
 ]
 

@@ -21,6 +21,11 @@ dependencies = [
     "pyyaml>=6.0",
     "jsonschema>=4.19",
     "psutil>=5.9",
+    # cie/api/dataset.py parses uploaded datasets unconditionally with pandas
+    # (CSV and, as of the Excel intake feature, .xlsx/.xls).
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "xlrd>=2.0",
 ]
 
 [project.optional-dependencies]
@@ -34,9 +39,6 @@ dev = [
 ]
 pdf = [
     "pymupdf4llm>=0.0.17",
-]
-ui = [
-    "streamlit>=1.35",
 ]
 rag = [
     "onnxruntime>=1.17",

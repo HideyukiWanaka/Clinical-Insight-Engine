@@ -21,7 +21,8 @@ type Msg =
 interface ChatPaneProps {
   client: CieApiClient;
   connected: boolean;
-  onConnectedChange: () => void;
+  /** Open the API 接続設定 modal (single place to set the session token). */
+  onOpenSettings: () => void;
   onInsertCode: (code: string) => void;
   onRunCode: (code: string, intent?: Record<string, unknown>) => void;
   /** Real dataset state — rides in POST /api/intent (replaces the hardcode). */
@@ -36,6 +37,9 @@ interface ChatPaneProps {
 
 let seq = 0;
 const nextId = () => `m${++seq}`;
+
+// Send-shortcut label: ⌘ on macOS, Ctrl elsewhere (both are accepted).
+const modKeyLabel = /Mac|iP(hone|ad|od)/.test(navigator.platform) ? "⌘" : "Ctrl";
 
 function optionLabel(opt: Record<string, unknown>, i: number): string {
   const cand =
@@ -68,7 +72,7 @@ function statTestName(stats: Record<string, unknown> | null): string | null {
 export function ChatPane({
   client,
   connected,
-  onConnectedChange,
+  onOpenSettings,
   onInsertCode,
   onRunCode,
   datasetUploaded,
@@ -85,7 +89,6 @@ export function ChatPane({
   ]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [tokenDraft, setTokenDraft] = useState("");
   // When true, the next free-text send starts a NEW intent lineage even though
   // priorStats is still present. Cleared once a run in the new lineage lands
   // (sticky to the new lineage — phase8 design §4.2 / R-1).
@@ -249,33 +252,21 @@ export function ChatPane({
     }
   }
 
-  function applyToken() {
-    const t = tokenDraft.trim();
-    if (!t) return;
-    client.setToken(t);
-    setTokenDraft("");
-    onConnectedChange();
-    add({ id: nextId(), kind: "system", text: "セッショントークンを設定しました。" });
-  }
-
   return (
     <div className="chat">
       <div className="chat__log" ref={logRef} data-testid="chat-log">
         {!connected && (
           <div className="msg msg--ai" data-testid="token-setter">
             <span className="msg__role">接続</span>
-            APIのセッショントークン（起動時に <code>[CIE-API] X-CIE-Token=…</code>{" "}
-            で表示）を貼り付けてください。
+            APIに未接続です。接続設定でセッショントークンを設定してください
+            （ヘッダー右上のステータスからも開けます）。
             <div className="confirm-row">
-              <input
-                aria-label="セッショントークン"
-                value={tokenDraft}
-                onChange={(e) => setTokenDraft(e.target.value)}
-                placeholder="X-CIE-Token"
-                style={{ flex: 1, minWidth: 0 }}
-              />
-              <button className="btn btn--ghost" onClick={applyToken}>
-                設定
+              <button
+                className="btn btn--ghost"
+                data-testid="open-settings-from-chat"
+                onClick={onOpenSettings}
+              >
+                接続設定を開く
               </button>
             </div>
           </div>
@@ -329,11 +320,20 @@ export function ChatPane({
           data-testid="chat-input"
           value={input}
           placeholder={
-            continuationActive ? "追加の解析を入力（継続）…" : "解析したい内容を入力…"
+            (continuationActive
+              ? "追加の解析を入力（継続）…"
+              : "解析したい内容を入力…") + `（${modKeyLabel}+Enterで送信）`
           }
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
+            // Send only on Cmd/Ctrl+Enter. A plain Enter inserts a newline —
+            // and, critically, an Enter that confirms an IME conversion
+            // (isComposing) never sends the message mid-composition.
+            if (
+              e.key === "Enter" &&
+              (e.metaKey || e.ctrlKey) &&
+              !e.nativeEvent.isComposing
+            ) {
               e.preventDefault();
               send();
             }
@@ -344,6 +344,7 @@ export function ChatPane({
           data-testid="chat-send"
           disabled={busy || !input.trim()}
           onClick={send}
+          title={`${modKeyLabel}+Enter でも送信できます`}
         >
           {continuationActive ? "継続送信" : "送信"}
         </button>

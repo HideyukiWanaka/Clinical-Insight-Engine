@@ -17,9 +17,9 @@ const DATASET_RESPONSE = {
   row_count: 2,
   column_count: 3,
   columns: [
-    { var_n: "var_1", inferred_type: "categorical_binary", missing_count: 0, missing_rate_pct: 0 },
-    { var_n: "var_2", inferred_type: "continuous", missing_count: 0, missing_rate_pct: 0 },
-    { var_n: "var_3", inferred_type: "continuous", missing_count: 1, missing_rate_pct: 50 },
+    { var_n: "var_1", original_name: "sex", inferred_type: "categorical_binary", missing_count: 0, missing_rate_pct: 0 },
+    { var_n: "var_2", original_name: "sbp_mmhg", inferred_type: "continuous", missing_count: 0, missing_rate_pct: 0 },
+    { var_n: "var_3", original_name: "age", inferred_type: "continuous", missing_count: 1, missing_rate_pct: 50 },
   ],
 };
 
@@ -36,8 +36,10 @@ const INTENT_RESPONSE = {
 
 async function connect(page: Page): Promise<void> {
   await page.goto("/");
-  await page.getByLabel("セッショントークン").fill("test-token-abc");
-  await page.getByRole("button", { name: "設定" }).click();
+  await page.getByTestId("open-settings-from-chat").click();
+  await page.getByTestId("settings-token-input").fill("test-token-abc");
+  await page.getByTestId("settings-token-save").click();
+  await page.getByTestId("settings-close").click();
 }
 
 test.describe("Phase 8 — データセット投入（§3.1 前提 / §5）", () => {
@@ -64,7 +66,8 @@ test.describe("Phase 8 — データセット投入（§3.1 前提 / §5）", ()
 
     // 生データ（セル値）が DOM に一切出ない（§5）。
     await expect(page.locator("body")).not.toContainText("SECRET_PATIENT_VALUE");
-    await expect(page.locator("body")).not.toContainText("sbp_mmhg"); // real col name is aliased
+    // 実列名はデフォルトでは出ない — トグルで明示的に開くまでは var_n のみ（次のテスト）。
+    await expect(page.locator("body")).not.toContainText("sbp_mmhg");
 
     // Header にバッジ、閉じる。
     await expect(page.getByTestId("dataset-badge")).toBeVisible();
@@ -84,6 +87,31 @@ test.describe("Phase 8 — データセット投入（§3.1 前提 / §5）", ()
     expect(intentBody!.dataset_uploaded).toBe(true);
 
     expect(pageErrors, `uncaught page errors: ${pageErrors.join("\n")}`).toEqual([]);
+  });
+
+  test("実列名はトグルを押すまで出ない、押すと var_n との対応が確認できる", async ({
+    page,
+  }) => {
+    await connect(page);
+    await page.route("**/api/dataset", (r) => r.fulfill({ json: DATASET_RESPONSE }));
+
+    await page.getByTestId("open-dataset").click();
+    await page.getByTestId("dataset-file-input").setInputFiles(CSV_FIXTURE);
+    await expect(page.getByTestId("dataset-columns")).toBeVisible();
+
+    // デフォルト非表示。
+    await expect(page.getByTestId("dataset-real-name")).toHaveCount(0);
+    await expect(page.locator("body")).not.toContainText("sbp_mmhg");
+
+    // トグルを押すと実列名が現れる。
+    await page.getByTestId("dataset-toggle-real-names").click();
+    const realNames = page.getByTestId("dataset-real-name");
+    await expect(realNames).toHaveCount(3);
+    await expect(page.getByTestId("dataset-columns")).toContainText("sbp_mmhg");
+
+    // もう一度押すと隠れる。
+    await page.getByTestId("dataset-toggle-real-names").click();
+    await expect(page.getByTestId("dataset-real-name")).toHaveCount(0);
   });
 
   test("空/不正CSVで 400 → 理由が画面に出る（無言失敗禁止 §5）", async ({ page }) => {

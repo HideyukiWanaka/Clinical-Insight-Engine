@@ -8,7 +8,43 @@ API layer.
 
 from __future__ import annotations
 
+import io
 from datetime import UTC
+
+
+class ExcelParseError(ValueError):
+    """Raised when an uploaded Excel file cannot be parsed as a workbook."""
+
+
+def list_excel_sheets(excel_bytes: bytes) -> list[str]:
+    """Return the sheet names of an uploaded Excel workbook (.xlsx/.xls).
+
+    Raises :class:`ExcelParseError` when the bytes are not a readable workbook
+    so the API layer can surface an explicit 400 (無言失敗禁止).
+    """
+    import pandas as pd
+
+    try:
+        with pd.ExcelFile(io.BytesIO(excel_bytes)) as workbook:
+            return [str(name) for name in workbook.sheet_names]
+    except Exception as exc:
+        raise ExcelParseError(str(exc)) from exc
+
+
+def excel_sheet_to_csv_bytes(excel_bytes: bytes, sheet_name: str) -> bytes:
+    """Convert one sheet of an Excel workbook to CSV bytes.
+
+    The CSV form feeds the existing :func:`build_dataset_context` unchanged, so
+    the downstream contract (workspace dataset.csv, var_n column metadata) is
+    identical to a direct CSV upload.
+    """
+    import pandas as pd
+
+    try:
+        df = pd.read_excel(io.BytesIO(excel_bytes), sheet_name=sheet_name)
+    except Exception as exc:
+        raise ExcelParseError(str(exc)) from exc
+    return df.to_csv(index=False).encode("utf-8")
 
 
 def build_dataset_context(csv_bytes: bytes | None) -> dict:
@@ -63,6 +99,11 @@ def build_dataset_context(csv_bytes: bytes | None) -> dict:
             missing_count = int(series.isna().sum())
             dq_columns.append({
                 "var_n": var_n,
+                # Original header, shown only in the local UI (never sent to
+                # the LLM/agents pipeline — DQ-001 is about row *values*, not
+                # column names) so the user can verify which real column the
+                # AI's var_n reference actually points to.
+                "original_name": str(col),
                 "inferred_type": inferred,
                 "missing_count": missing_count,
                 "missing_rate_pct": (

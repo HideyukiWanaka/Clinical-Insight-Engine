@@ -33,8 +33,10 @@ async function connectAndRunWith(page: Page, errorDetail: string) {
     });
   });
   await page.goto("/");
-  await page.getByLabel("セッショントークン").fill("test-token-abc");
-  await page.getByRole("button", { name: "設定" }).click();
+  await page.getByTestId("open-settings-from-chat").click();
+  await page.getByTestId("settings-token-input").fill("test-token-abc");
+  await page.getByTestId("settings-token-save").click();
+  await page.getByTestId("settings-close").click();
   await page.route("**/api/intent", (r) => r.fulfill({ json: INTENT_RESPONSE }));
   await page.route("**/api/propose", (r) => r.fulfill({ json: PROPOSE_RESPONSE }));
   await page.route("**/api/run", (r) =>

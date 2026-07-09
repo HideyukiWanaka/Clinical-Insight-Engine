@@ -60,8 +60,10 @@ async function connectAndRun(page: Page): Promise<void> {
     });
   });
   await page.goto("/");
-  await page.getByLabel("セッショントークン").fill("test-token-abc");
-  await page.getByRole("button", { name: "設定" }).click();
+  await page.getByTestId("open-settings-from-chat").click();
+  await page.getByTestId("settings-token-input").fill("test-token-abc");
+  await page.getByTestId("settings-token-save").click();
+  await page.getByTestId("settings-close").click();
   await page.route("**/api/intent", (r) => r.fulfill({ json: INTENT_RESPONSE }));
   await page.route("**/api/propose", (r) => r.fulfill({ json: PROPOSE_RESPONSE }));
   await page.route("**/api/run", (r) => r.fulfill({ json: RUN_RESPONSE }));
@@ -119,8 +121,10 @@ test.describe("Phase 6 — Output & Format 原稿生成", () => {
 
   test("統計結果が無ければ生成ボタンは無効", async ({ page }) => {
     await page.goto("/");
-    await page.getByLabel("セッショントークン").fill("test-token-abc");
-    await page.getByRole("button", { name: "設定" }).click();
+    await page.getByTestId("open-settings-from-chat").click();
+    await page.getByTestId("settings-token-input").fill("test-token-abc");
+    await page.getByTestId("settings-token-save").click();
+    await page.getByTestId("settings-close").click();
 
     await page.getByRole("tab", { name: "Output & Format" }).click();
     await expect(page.getByTestId("format-generate")).toBeDisabled();

@@ -57,7 +57,7 @@ def client(tmp_path) -> TestClient:
 
 
 def test_dataset_upload_under_limit_succeeds(client: TestClient, monkeypatch) -> None:
-    monkeypatch.setattr(dataset_route, "MAX_CSV_BYTES", 1000)
+    monkeypatch.setattr(dataset_route, "MAX_DATASET_BYTES", 1000)
     resp = client.post(
         "/api/dataset",
         headers=AUTH,
@@ -67,7 +67,7 @@ def test_dataset_upload_under_limit_succeeds(client: TestClient, monkeypatch) ->
 
 
 def test_dataset_upload_over_limit_rejected(client: TestClient, monkeypatch) -> None:
-    monkeypatch.setattr(dataset_route, "MAX_CSV_BYTES", 100)
+    monkeypatch.setattr(dataset_route, "MAX_DATASET_BYTES", 100)
     resp = client.post(
         "/api/dataset",
         headers=AUTH,

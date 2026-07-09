@@ -13,7 +13,10 @@ import type {
   ConsoleMessage,
   DatasetUploadResponse,
   ErrorEnvelope,
+  ExcelConfirmRequest,
+  ExcelInspectResponse,
   FileContentResponse,
+  FileEntry,
   FilesResponse,
   IntentRequest,
   IntentResponse,
@@ -24,6 +27,10 @@ import type {
   KnowledgeRejectRequest,
   KnowledgeRejectResponse,
   KnowledgeReindexResponse,
+  LlmApiKeyClearRequest,
+  LlmApiKeyRequest,
+  LlmProviderRequest,
+  LlmSettingsResponse,
   ProposeRequest,
   ProposeResponse,
   ReportRequest,
@@ -67,10 +74,28 @@ function resolveBaseUrl(explicit?: string): string {
   return (fromEnv && fromEnv.trim()) || DEFAULT_BASE_URL;
 }
 
+const TOKEN_STORAGE_KEY = "cie.session_token";
+
 function resolveToken(explicit?: string): string {
   if (explicit) return explicit;
+  // scripts/dev.sh mints one token per machine and writes it to both
+  // frontend/.env.local (VITE_CIE_TOKEN) and the API's env — so the env var
+  // always reflects the CURRENT API instance. It must win over a stored
+  // token: otherwise, once the API is restarted with a fresh random token
+  // (no dev.sh, or CIE_API_SESSION_TOKEN unset), a stale localStorage value
+  // would keep shadowing the correct one forever, and every request would
+  // 401 with no obvious way to recover short of manually clearing storage.
   const fromEnv = import.meta.env.VITE_CIE_TOKEN as string | undefined;
-  return (fromEnv && fromEnv.trim()) || "";
+  if (fromEnv && fromEnv.trim()) return fromEnv.trim();
+  // No build-time token configured (e.g. pointed at a remote API without
+  // dev.sh) — fall back to whatever the user last pasted in 接続設定.
+  try {
+    const stored = window.localStorage.getItem(TOKEN_STORAGE_KEY);
+    if (stored && stored.trim()) return stored.trim();
+  } catch {
+    // Storage unavailable (private mode etc.) — no token available.
+  }
+  return "";
 }
 
 export class CieApiClient {
@@ -82,9 +107,16 @@ export class CieApiClient {
     this.token = resolveToken(opts.token);
   }
 
-  /** Update the session token at runtime (e.g. pasted from the launcher). */
+  /** Update the session token at runtime (e.g. pasted from the launcher) and
+   *  persist it so a page reload keeps the connection. */
   setToken(token: string): void {
     this.token = token.trim();
+    try {
+      if (this.token) window.localStorage.setItem(TOKEN_STORAGE_KEY, this.token);
+      else window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+    } catch {
+      // Storage unavailable — the token still works for this session.
+    }
   }
 
   hasToken(): boolean {
@@ -186,16 +218,15 @@ export class CieApiClient {
     return (await res.json()) as T;
   }
 
-  /** POST /api/dataset — register the working CSV (rest-api-contract §3.1 前提).
-   *  Sent as multipart/form-data; we attach ONLY X-CIE-Token and let the browser
-   *  set Content-Type (with its multipart boundary) — never set it by hand (R-4).
-   *  The response is aggregate-only column metadata — no row values (§5). */
-  async uploadDataset(file: File): Promise<DatasetUploadResponse> {
+  /** Authenticated multipart file POST. We attach ONLY X-CIE-Token and let the
+   *  browser set Content-Type (with its multipart boundary) — never set it by
+   *  hand (R-4/K-4). Same error framing as post(). */
+  private async postFile<T>(path: string, file: File): Promise<T> {
     const form = new FormData();
     form.append("file", file);
     let res: Response;
     try {
-      res = await fetch(`${this.baseUrl}/api/dataset`, {
+      res = await fetch(`${this.baseUrl}${path}`, {
         method: "POST",
         headers: { "X-CIE-Token": this.token },
         body: form,
@@ -204,7 +235,7 @@ export class CieApiClient {
       throw new ApiError(0, {
         error_code: "NETWORK_ERROR",
         message: "APIサーバに接続できません。",
-        detail: `${this.baseUrl}/api/dataset への接続に失敗しました (${String(
+        detail: `${this.baseUrl}${path} への接続に失敗しました (${String(
           (cause as Error)?.message ?? cause,
         )})。cie/api を 127.0.0.1 で起動しているか確認してください。`,
       });
@@ -213,7 +244,56 @@ export class CieApiClient {
       const envelope = await this.readErrorEnvelope(res);
       throw new ApiError(res.status, envelope);
     }
-    return (await res.json()) as DatasetUploadResponse;
+    return (await res.json()) as T;
+  }
+
+  /** POST /api/dataset — register the working CSV (rest-api-contract §3.1 前提).
+   *  The response is aggregate-only column metadata — no row values (§5). */
+  uploadDataset(file: File): Promise<DatasetUploadResponse> {
+    return this.postFile<DatasetUploadResponse>("/api/dataset", file);
+  }
+
+  /** POST /api/dataset/excel/inspect — upload an Excel workbook and get its
+   *  sheet names back; the file is held server-side pending confirm. */
+  inspectExcelDataset(file: File): Promise<ExcelInspectResponse> {
+    return this.postFile<ExcelInspectResponse>("/api/dataset/excel/inspect", file);
+  }
+
+  /** POST /api/dataset/excel/confirm — register the chosen sheet of a pending
+   *  Excel upload. Returns the same aggregate-only shape as uploadDataset. */
+  confirmExcelDataset(body: ExcelConfirmRequest): Promise<DatasetUploadResponse> {
+    return this.post<DatasetUploadResponse>("/api/dataset/excel/confirm", body);
+  }
+
+  /** POST /api/files — add a local file to the workspace under uploads/.
+   *  Never overwrites (the server suffixes duplicate names). */
+  uploadWorkspaceFile(file: File): Promise<FileEntry> {
+    return this.postFile<FileEntry>("/api/files", file);
+  }
+
+  // ── AI provider / API key settings (/api/settings/llm) ─────────────────────
+  // Distinct from the session token: this is "which LLM, and its key" — never
+  // returns a key value, only per-provider has_key booleans.
+
+  /** GET /api/settings/llm — active provider + which providers have a key. */
+  getLlmSettings(): Promise<LlmSettingsResponse> {
+    return this.getJson<LlmSettingsResponse>("/api/settings/llm");
+  }
+
+  /** POST /api/settings/llm/provider — switch the active provider. Takes
+   *  effect on the next LLM call; no API restart needed. */
+  setLlmProvider(body: LlmProviderRequest): Promise<LlmSettingsResponse> {
+    return this.post<LlmSettingsResponse>("/api/settings/llm/provider", body);
+  }
+
+  /** POST /api/settings/llm/key — save a provider's API key (OS keyring). */
+  saveLlmApiKey(body: LlmApiKeyRequest): Promise<LlmSettingsResponse> {
+    return this.post<LlmSettingsResponse>("/api/settings/llm/key", body);
+  }
+
+  /** POST /api/settings/llm/key/clear — remove a provider's stored key. */
+  clearLlmApiKey(body: LlmApiKeyClearRequest): Promise<LlmSettingsResponse> {
+    return this.post<LlmSettingsResponse>("/api/settings/llm/key/clear", body);
   }
 
   /** GET /api/files — read-only workspace listing (§3.6). */
@@ -270,35 +350,11 @@ export class CieApiClient {
   // trigger — the frontend never sends approved_by_human (server always True).
 
   /** POST /api/knowledge/ingest — upload a reference document (pdf/md/txt/docx)
-   *  and receive an AI-extracted draft for human review. Sent as multipart;
-   *  we attach ONLY X-CIE-Token and let the browser set the Content-Type with
-   *  its boundary — never set it by hand (K-4). A PII-contaminated document is
-   *  rejected with 422; the resulting ApiError carries `failedChecks` so the
-   *  rejection is shown explicitly, never silently (§5). */
-  async ingestKnowledge(file: File): Promise<KnowledgeIngestResponse> {
-    const form = new FormData();
-    form.append("file", file);
-    let res: Response;
-    try {
-      res = await fetch(`${this.baseUrl}/api/knowledge/ingest`, {
-        method: "POST",
-        headers: { "X-CIE-Token": this.token },
-        body: form,
-      });
-    } catch (cause) {
-      throw new ApiError(0, {
-        error_code: "NETWORK_ERROR",
-        message: "APIサーバに接続できません。",
-        detail: `${this.baseUrl}/api/knowledge/ingest への接続に失敗しました (${String(
-          (cause as Error)?.message ?? cause,
-        )})。cie/api を 127.0.0.1 で起動しているか確認してください。`,
-      });
-    }
-    if (!res.ok) {
-      const envelope = await this.readErrorEnvelope(res);
-      throw new ApiError(res.status, envelope);
-    }
-    return (await res.json()) as KnowledgeIngestResponse;
+   *  and receive an AI-extracted draft for human review. A PII-contaminated
+   *  document is rejected with 422; the resulting ApiError carries
+   *  `failedChecks` so the rejection is shown explicitly, never silently (§5). */
+  ingestKnowledge(file: File): Promise<KnowledgeIngestResponse> {
+    return this.postFile<KnowledgeIngestResponse>("/api/knowledge/ingest", file);
   }
 
   /** POST /api/knowledge/approve — register a human-approved draft into

@@ -8,6 +8,8 @@ import { EditorPane, type EditorHandle } from "./components/EditorPane";
 import { FileTree } from "./components/FileTree";
 import { Header } from "./components/Header";
 import { KnowledgeModal } from "./components/KnowledgeModal";
+import { LlmSettingsModal } from "./components/LlmSettingsModal";
+import { SettingsModal } from "./components/SettingsModal";
 import { WorkspacePane } from "./components/WorkspacePane";
 import { applyTheme, getInitialTheme, type Theme } from "./theme";
 import type { DatasetUploadResponse } from "./api/types";
@@ -34,6 +36,10 @@ export default function App() {
   const [datasetOpen, setDatasetOpen] = useState(false);
   // 参考資料（知識取り込み）modal — a separate 入口 from 解析データ (§5).
   const [knowledgeOpen, setKnowledgeOpen] = useState(false);
+  // セッショントークン設定 modal — opened from the header connection status.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // AIプロバイダー設定 modal — opened from the header "🤖 AIモデル" entry.
+  const [llmSettingsOpen, setLlmSettingsOpen] = useState(false);
   // Bumped when a run completes so the FileTree re-lists new generated files.
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -85,7 +91,26 @@ export default function App() {
         onOpenDataset={() => setDatasetOpen(true)}
         datasetUploaded={datasetInfo != null}
         onOpenKnowledge={() => setKnowledgeOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenLlmSettings={() => setLlmSettingsOpen(true)}
       />
+
+      {settingsOpen && (
+        <SettingsModal
+          client={apiClient}
+          connected={connected}
+          onClose={() => setSettingsOpen(false)}
+          onConnectedChange={onConnectedChange}
+        />
+      )}
+
+      {llmSettingsOpen && (
+        <LlmSettingsModal
+          client={apiClient}
+          connected={connected}
+          onClose={() => setLlmSettingsOpen(false)}
+        />
+      )}
 
       {datasetOpen && (
         <DatasetModal
@@ -110,7 +135,7 @@ export default function App() {
           <ChatPane
             client={apiClient}
             connected={connected}
-            onConnectedChange={onConnectedChange}
+            onOpenSettings={() => setSettingsOpen(true)}
             onInsertCode={insertCode}
             onRunCode={runCode}
             datasetUploaded={datasetInfo != null}

@@ -143,6 +143,15 @@ body {
   border-radius: 999px;
   background: var(--bg-pane);
 }
+/* The connection status is a button that opens the 接続設定 modal. */
+.status--clickable {
+  font-family: inherit;
+  cursor: pointer;
+}
+.status--clickable:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
 .status__dot {
   width: 8px;
   height: 8px;

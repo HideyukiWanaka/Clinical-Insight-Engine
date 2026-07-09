@@ -37,6 +37,7 @@ from cie.api.routes import (
     propose,
     report,
     run,
+    settings,
     visualize,
     workspace,
     ws_console,
@@ -175,6 +176,7 @@ def create_app(services: dict | None = None, session_token: str | None = None) -
     app.include_router(report.router)
     app.include_router(files.router)
     app.include_router(knowledge.router)
+    app.include_router(settings.router)
     app.include_router(ws_console.router)
 
     return app

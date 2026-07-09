@@ -52,8 +52,10 @@ test.describe("CIE Workbench shell", () => {
     await expect(page.getByTestId("status-connection")).toContainText(
       "APIトークン未設定",
     );
-    await page.getByLabel("セッショントークン").fill("test-token-abc");
-    await page.getByRole("button", { name: "設定" }).click();
+    await page.getByTestId("open-settings-from-chat").click();
+    await page.getByTestId("settings-token-input").fill("test-token-abc");
+    await page.getByTestId("settings-token-save").click();
+    await page.getByTestId("settings-close").click();
     await expect(page.getByTestId("status-connection")).toContainText(
       "API接続済み",
     );
@@ -98,8 +100,10 @@ test.describe("CIE Workbench shell", () => {
     page,
   }) => {
     await page.goto("/");
-    await page.getByLabel("セッショントークン").fill("test-token-abc");
-    await page.getByRole("button", { name: "設定" }).click();
+    await page.getByTestId("open-settings-from-chat").click();
+    await page.getByTestId("settings-token-input").fill("test-token-abc");
+    await page.getByTestId("settings-token-save").click();
+    await page.getByTestId("settings-close").click();
 
     // Intent succeeds, propose fails with a reason in provenance.
     await page.route("**/api/intent", (route) =>
