@@ -14,6 +14,8 @@ The active provider is additionally persisted to ``.env`` so it survives one.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException, Request
 
 from cie.api.deps import get_services
@@ -23,6 +25,8 @@ from cie.api.models import (
     LlmProviderRequest,
     LlmProviderStatus,
     LlmSettingsResponse,
+    StorageDirectoryRequest,
+    StorageSettingsResponse,
 )
 from cie.core.env_file import set_env_var
 from cie.core.secrets_store import delete_api_key, has_api_key, load_api_key, save_api_key
@@ -153,3 +157,84 @@ async def clear_llm_key(
     if llm_client.provider == body.provider:
         llm_client.set_credentials(body.provider, "")
     return _status(llm_client.provider)
+
+
+# ---------------------------------------------------------------------------
+# /api/settings/storage — 保存先ルートの表示・変更
+#
+# workspace_directory is wired into every R executor/agent once at process
+# startup (cie/api/services.py), so unlike the LLM provider above there is no
+# single object to hot-swap. A change here only edits .env for the *next*
+# launch; the running process keeps using its current path (see the
+# build_dataset_context docstring for why re-reading config mid-process would
+# create an inconsistent split between "where new uploads land" and "where
+# the R executors look").
+# ---------------------------------------------------------------------------
+
+
+def _storage_status(request: Request) -> StorageSettingsResponse:
+    services = get_services(request)
+    return StorageSettingsResponse(
+        workspace_directory=str(services["workspace_dir"]),
+        database_filepath=str(services["database_filepath"]),
+        pending_workspace_directory=getattr(
+            request.app.state, "pending_workspace_directory", None
+        ),
+    )
+
+
+@router.get("/storage", response_model=StorageSettingsResponse)
+async def get_storage_settings(request: Request) -> StorageSettingsResponse:
+    """Current storage roots this process writes to (§ display only)."""
+    return _storage_status(request)
+
+
+@router.post("/storage/workspace_directory", response_model=StorageSettingsResponse)
+async def set_workspace_directory(
+    request: Request, body: StorageDirectoryRequest
+) -> StorageSettingsResponse:
+    """Persist a new workspace root to ``.env`` — takes effect on next launch.
+
+    Validates the path is absolute and creatable/writable *now* (so a typo is
+    caught immediately rather than at the next startup), but does not touch
+    the running process's own workspace_dir.
+    """
+    raw = body.directory.strip()
+    if not raw:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "EMPTY_DIRECTORY",
+                "message": "保存先のパスが空です。",
+                "detail": None,
+            },
+        )
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "RELATIVE_PATH_REJECTED",
+                "message": "絶対パスを指定してください。",
+                "detail": f"received={raw!r}",
+            },
+        )
+    try:
+        candidate.mkdir(parents=True, exist_ok=True)
+        probe = candidate / ".cie_write_check"
+        probe.write_text("", encoding="utf-8")
+        probe.unlink()
+    except OSError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "DIRECTORY_NOT_WRITABLE",
+                "message": "指定されたフォルダに書き込めません。",
+                "detail": str(exc),
+            },
+        ) from exc
+
+    resolved = str(candidate.resolve())
+    set_env_var("CIE_WORKSPACE_DIRECTORY", resolved)
+    request.app.state.pending_workspace_directory = resolved
+    return _storage_status(request)

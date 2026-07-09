@@ -238,6 +238,32 @@ class LlmApiKeyClearRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# /api/settings/storage — 保存先ルートの表示・変更
+# ---------------------------------------------------------------------------
+
+
+class StorageSettingsResponse(BaseModel):
+    """Current storage roots, plus the pending value if one was just saved.
+
+    ``workspace_directory`` / ``database_filepath`` are the paths this
+    *running* process actually writes to (already wired into every R
+    executor/agent at startup). ``pending_workspace_directory`` is set only
+    right after a successful ``POST .../workspace_directory`` call, to let the
+    UI show "次回起動から有効: <new path>" alongside the still-active one.
+    """
+
+    workspace_directory: str
+    database_filepath: str
+    pending_workspace_directory: str | None = None
+
+
+class StorageDirectoryRequest(BaseModel):
+    """Request body for ``POST /api/settings/storage/workspace_directory``."""
+
+    directory: str
+
+
+# ---------------------------------------------------------------------------
 # GET /api/files (§3.6, §3.7)
 # ---------------------------------------------------------------------------
 

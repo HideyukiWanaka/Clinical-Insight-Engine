@@ -85,6 +85,20 @@ export interface LlmApiKeyClearRequest {
   provider: string;
 }
 
+// /api/settings/storage — 保存先ルートの表示・変更。workspace_directory /
+// database_filepath are the paths *this running process* actually writes to
+// (already wired into every R executor/agent at startup — changing it only
+// takes effect on next launch, see cie/api/routes/settings.py).
+export interface StorageSettingsResponse {
+  workspace_directory: string;
+  database_filepath: string;
+  pending_workspace_directory?: string | null;
+}
+
+export interface StorageDirectoryRequest {
+  directory: string;
+}
+
 // POST /api/intent (§3.1)
 export interface IntentRequest {
   prompt: string;

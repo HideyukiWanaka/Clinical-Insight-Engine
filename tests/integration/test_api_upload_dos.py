@@ -45,6 +45,7 @@ def client(tmp_path) -> TestClient:
     services = {
         "token_manager": CapabilityTokenManager(),
         "knowledge_ingestion": FakeKnowledgeIngestion(),
+        "workspace_dir": tmp_path,
     }
     app = create_app(services=services, session_token=TOKEN)
     with TestClient(app) as c:

@@ -26,6 +26,7 @@ from cie.api.dataset import (
     excel_sheet_to_csv_bytes,
     list_excel_sheets,
 )
+from cie.api.deps import get_services
 from cie.api.models import ExcelConfirmRequest, ExcelInspectResponse
 from cie.api.upload_limits import read_upload_bounded
 
@@ -80,7 +81,9 @@ async def register_dataset(request: Request, file: UploadFile) -> dict:
             },
         )
     context = build_dataset_context(
-        csv_bytes, source_name=Path(file.filename or "").name or None
+        csv_bytes,
+        workspace_dir=get_services(request)["workspace_dir"],
+        source_name=Path(file.filename or "").name or None,
     )
     request.app.state.dataset_context = context
     return _dataset_summary(context)
@@ -157,7 +160,11 @@ async def confirm_excel_dataset(request: Request, body: ExcelConfirmRequest) -> 
 
     filename = pending.get("filename") or ""
     source_name = f"{filename} / {body.sheet_name}" if filename else body.sheet_name
-    context = build_dataset_context(csv_bytes, source_name=source_name)
+    context = build_dataset_context(
+        csv_bytes,
+        workspace_dir=get_services(request)["workspace_dir"],
+        source_name=source_name,
+    )
     request.app.state.dataset_context = context
     request.app.state.dataset_excel_pending = None
     return _dataset_summary(context)

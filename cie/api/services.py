@@ -246,6 +246,9 @@ def build_services() -> dict:
         # Phase 1 (API): shared services need the sanitizer + workspace root
         "context_guard": context_guard,
         "workspace_dir": workspace,
+        # /api/settings/storage: display-only, current-process values (a
+        # change only takes effect after restart — see build_dataset_context).
+        "database_filepath": config.database_filepath,
         # Phase 8: Skill self-improvement
         "skill_lifecycle": skill_lifecycle,
         "session_factory": lambda: get_session(engine),

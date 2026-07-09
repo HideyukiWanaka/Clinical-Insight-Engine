@@ -4,6 +4,7 @@ import type {
   DatasetUploadResponse,
   FileContentResponse,
   FileEntry,
+  StorageSettingsResponse,
 } from "../api/types";
 import { Pane } from "./Pane";
 
@@ -86,6 +87,63 @@ export function FileTree({
   const [previewErr, setPreviewErr] = useState<
     { message: string; detail?: string | null } | null
   >(null);
+
+  // 保存先ルート（常時表示バー）— どのフォルダに保存されているか一目で分かるように。
+  const [storage, setStorage] = useState<StorageSettingsResponse | null>(null);
+  const [storageEditing, setStorageEditing] = useState(false);
+  const [storageDraft, setStorageDraft] = useState("");
+  const [storageSaving, setStorageSaving] = useState(false);
+  const [storageError, setStorageError] = useState<
+    { message: string; detail?: string | null } | null
+  >(null);
+  const [storageCopied, setStorageCopied] = useState(false);
+
+  useEffect(() => {
+    if (!connected) return;
+    let cancelled = false;
+    client
+      .getStorageSettings()
+      .then((res) => {
+        if (!cancelled) setStorage(res);
+      })
+      .catch(() => {
+        /* footer just stays hidden — the file listing itself still works */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, connected]);
+
+  const copyStoragePath = useCallback(() => {
+    if (!storage) return;
+    void navigator.clipboard.writeText(storage.workspace_directory).then(() => {
+      setStorageCopied(true);
+      setTimeout(() => setStorageCopied(false), 1500);
+    });
+  }, [storage]);
+
+  const saveStorageDirectory = useCallback(async () => {
+    const dir = storageDraft.trim();
+    if (!dir) return;
+    setStorageSaving(true);
+    setStorageError(null);
+    try {
+      const res = await client.setWorkspaceDirectory({ directory: dir });
+      setStorage(res);
+      setStorageEditing(false);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setStorageError({ message: err.message, detail: err.detail });
+      } else {
+        setStorageError({
+          message: "保存先の変更に失敗しました。",
+          detail: String((err as Error)?.message ?? err),
+        });
+      }
+    } finally {
+      setStorageSaving(false);
+    }
+  }, [client, storageDraft]);
 
   // Track the live image object URL so we always revoke it before replacing
   // (same discipline as useRunner's figures).
@@ -218,6 +276,102 @@ export function FileTree({
   return (
     <Pane
       title="ファイル"
+      footer={
+        connected && storage ? (
+          <div className="storage-bar" data-testid="storage-bar">
+            {!storageEditing ? (
+              <>
+                <span className="storage-bar__icon" aria-hidden="true">
+                  💾
+                </span>
+                <span
+                  className="storage-bar__path"
+                  data-testid="storage-bar-path"
+                  title={storage.workspace_directory}
+                >
+                  保存先: {storage.workspace_directory}
+                </span>
+                <button
+                  type="button"
+                  className="mini-btn"
+                  data-testid="storage-bar-copy"
+                  onClick={copyStoragePath}
+                  title="パスをコピー"
+                >
+                  {storageCopied ? "✓ コピー済み" : "コピー"}
+                </button>
+                <button
+                  type="button"
+                  className="mini-btn"
+                  data-testid="storage-bar-edit"
+                  onClick={() => {
+                    setStorageDraft(
+                      storage.pending_workspace_directory ??
+                        storage.workspace_directory,
+                    );
+                    setStorageError(null);
+                    setStorageEditing(true);
+                  }}
+                  title="保存先フォルダを変更"
+                >
+                  変更
+                </button>
+              </>
+            ) : (
+              <>
+                <input
+                  className="storage-bar__input"
+                  aria-label="新しい保存先フォルダの絶対パス"
+                  data-testid="storage-bar-input"
+                  value={storageDraft}
+                  disabled={storageSaving}
+                  onChange={(e) => setStorageDraft(e.target.value)}
+                  placeholder="/Users/name/Documents/CIE/workspace"
+                />
+                <button
+                  type="button"
+                  className="mini-btn"
+                  data-testid="storage-bar-save"
+                  disabled={storageSaving || !storageDraft.trim()}
+                  onClick={() => void saveStorageDirectory()}
+                >
+                  {storageSaving ? "保存中…" : "保存"}
+                </button>
+                <button
+                  type="button"
+                  className="mini-btn"
+                  data-testid="storage-bar-cancel"
+                  disabled={storageSaving}
+                  onClick={() => {
+                    setStorageEditing(false);
+                    setStorageError(null);
+                  }}
+                >
+                  キャンセル
+                </button>
+              </>
+            )}
+            {!storageEditing && storage.pending_workspace_directory && (
+              <div
+                className="storage-bar__pending"
+                data-testid="storage-bar-pending"
+              >
+                変更を保存済み。次回起動から反映されます:{" "}
+                <code>{storage.pending_workspace_directory}</code>
+              </div>
+            )}
+            {storageError && (
+              <div
+                className="storage-bar__error"
+                data-testid="storage-bar-error"
+              >
+                {storageError.message}
+                {storageError.detail && <>（{storageError.detail}）</>}
+              </div>
+            )}
+          </div>
+        ) : undefined
+      }
       headerExtra={
         <>
           <input
