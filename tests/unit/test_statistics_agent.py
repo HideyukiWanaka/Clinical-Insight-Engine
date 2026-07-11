@@ -259,6 +259,56 @@ class TestMethodSelection:
         methods = result.output_payload["selected_methods"]
         assert any(m["method_id"] == "pearson_correlation" for m in methods)
 
+    # --- off-catalogue detection ---------------------------------------------
+
+    def test_select_method_matched_for_catalog_objective(
+        self, agent: StatisticsAgent
+    ) -> None:
+        method, matched = agent._select_method(
+            "between_group_comparison", "continuous", 2, False, "assumed_normal"
+        )
+        assert matched is True
+        assert method["method_id"] == "independent_samples_t_test"
+
+    def test_select_method_unmatched_for_uncatalogued_objective(
+        self, agent: StatisticsAgent
+    ) -> None:
+        # prediction_model has no modelled method → falls to the generic default
+        # but is reported as off-catalogue.
+        method, matched = agent._select_method(
+            "prediction_model", "continuous", 2, False, "assumed_normal"
+        )
+        assert matched is False
+        assert method["method_id"] == "independent_samples_t_test"
+
+    def test_skill_grounding_off_catalog_injects_no_skill(
+        self, agent: StatisticsAgent
+    ) -> None:
+        # Off-catalogue must never inject a (mismatched) Skill block.
+        block, grounded = agent._skill_grounding("independent_samples_t_test", True)
+        assert block == ""
+        assert grounded is False
+
+    async def test_provenance_off_catalog_false_for_catalog_request(
+        self, agent: StatisticsAgent, token: CapabilityToken
+    ) -> None:
+        result = await agent.run(_make_input(_BASE_PAYLOAD, token))
+        prov = result.output_payload["r_script_provenance"]
+        assert prov["off_catalog"] is False
+        assert prov["grounded_by_skill"] is True
+
+    async def test_provenance_off_catalog_true_for_uncatalogued_request(
+        self, agent: StatisticsAgent, token: CapabilityToken
+    ) -> None:
+        payload = {
+            **_BASE_PAYLOAD,
+            "intent_object": {**_BASE_INTENT, "objective": "prediction_model"},
+        }
+        result = await agent.run(_make_input(payload, token))
+        prov = result.output_payload["r_script_provenance"]
+        assert prov["off_catalog"] is True
+        assert prov["grounded_by_skill"] is False
+
 
 # ---------------------------------------------------------------------------
 # Output contract tests (ST-002, ST-003, ST-004)
@@ -423,6 +473,35 @@ class TestConversationalProposal:
         assert len(proposal["code_candidates"]) == 2
         assert result.output_payload["r_script"] == proposal["code_candidates"][0]["r_code"]
         assert result.output_payload["r_script_provenance"]["conversational"] is True
+
+    async def test_off_catalog_conversational_proposal_has_caveat(
+        self,
+        mock_policy_engine: MagicMock,
+        mock_schema_registry: MagicMock,
+        mock_audit: MagicMock,
+        token: CapabilityToken,
+    ) -> None:
+        """Off-catalogue conversational proposal flags off_catalog + caveat."""
+        mock_llm = MagicMock()
+        mock_llm.provider = "anthropic"
+        mock_llm.model = "test-model"
+        mock_llm.complete = AsyncMock(return_value=_CONVERSATIONAL_LLM_RESPONSE)
+
+        agent = StatisticsAgent(
+            mock_policy_engine, mock_schema_registry, mock_audit, llm_client=mock_llm,
+        )
+        payload = {
+            **_BASE_PAYLOAD,
+            "conversational_mode": True,
+            "intent_object": {**_BASE_INTENT, "objective": "prediction_model"},
+        }
+        result = await agent.run(_make_input(payload, token))
+
+        proposal = result.output_payload["analysis_proposal"]
+        assert proposal["off_catalog"] is True
+        assert "caveat_markdown" in proposal and proposal["caveat_markdown"]
+        assert result.output_payload["r_script_provenance"]["off_catalog"] is True
+        assert result.output_payload["r_script_provenance"]["grounded_by_skill"] is False
 
     async def test_conversational_mode_without_llm_client_surfaces_reason(
         self, agent: StatisticsAgent, token: CapabilityToken

@@ -27,6 +27,8 @@ type Msg =
       candidates: CodeCandidate[];
       recommendedId?: string;
       intent: Record<string, unknown>;
+      offCatalog?: boolean;
+      caveat?: string;
     };
 
 interface ChatPaneProps {
@@ -196,6 +198,8 @@ export function ChatPane({
         recommendedId: p.recommended_candidate_id,
         // Inherit the lineage intent so a re-run still drafts the manuscript.
         intent: priorIntent,
+        offCatalog: p.off_catalog,
+        caveat: p.caveat_markdown,
       });
     } catch (err) {
       pushError(err);
@@ -318,6 +322,8 @@ export function ChatPane({
         candidates: p.code_candidates ?? [],
         recommendedId: p.recommended_candidate_id,
         intent,
+        offCatalog: p.off_catalog,
+        caveat: p.caveat_markdown,
       });
     } catch (err) {
       pushError(err);
@@ -542,6 +548,12 @@ function MessageView({
       return (
         <div className="msg msg--ai" data-testid="chat-proposal">
           <span className="msg__role">AI</span>
+          {msg.offCatalog && (
+            <div className="msg msg--warn" data-testid="off-catalog-warning" role="alert">
+              {msg.caveat ??
+                "⚠️ この解析は標準Skillに無いパターンです。生成コードの統計的妥当性を必ずご確認ください。"}
+            </div>
+          )}
           {msg.explanation && (
             <div data-testid="proposal-explanation">{msg.explanation}</div>
           )}

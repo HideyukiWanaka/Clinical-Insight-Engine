@@ -157,6 +157,10 @@ export interface AnalysisProposal {
   explanation_markdown?: string;
   code_candidates?: CodeCandidate[];
   recommended_candidate_id?: string;
+  // True when the request did not map onto a vetted Skill (off-catalogue). The
+  // chat shows caveat_markdown as a warning above the code candidates.
+  off_catalog?: boolean;
+  caveat_markdown?: string;
 }
 
 export interface RScriptProvenance {
@@ -165,6 +169,9 @@ export interface RScriptProvenance {
   knowledge_references?: unknown[];
   // Always present when generation failed (§3.2) — the frontend must show it.
   reason?: string;
+  // Off-catalogue transparency: whether a vetted Skill grounded the generation.
+  off_catalog?: boolean;
+  grounded_by_skill?: boolean;
 }
 
 export interface ProposeResponse {

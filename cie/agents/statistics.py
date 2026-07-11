@@ -174,6 +174,24 @@ STRICT REQUIREMENTS:
    abort the analysis.
 """
 
+# Appended (instead of a SKILL block) when the request is off-catalogue — no
+# vetted Skill grounds this analysis. We ask for extra methodological rigor and
+# an explicit caveat so the user knows the code is not Skill-backed.
+_R_OFFCATALOG_GUIDANCE = """\
+
+=== OFF-CATALOGUE ANALYSIS (NO VETTED SKILL) ===
+This request does not map onto a CIE core Skill, so there is no vetted procedure
+grounding it. Rely ONLY on standard, defensible statistical practice and any
+KNOWLEDGE REFERENCE PATTERNS provided above. You MUST:
+- Explicitly implement and report the assumption checks the chosen method
+  requires (e.g. normality, variance homogeneity, independence, sample size).
+- Prefer base R; guard any non-base package with requireNamespace and a fallback.
+- State the method's assumptions and limitations, and note in a comment (and, in
+  conversational mode, in the explanation) that this analysis is NOT backed by a
+  vetted CIE Skill and its statistical validity must be reviewed by the user.
+Never fabricate results — compute everything from the data.
+"""
+
 # ---------------------------------------------------------------------------
 # Method catalogue (statistics.yaml method_selection_framework)
 # ---------------------------------------------------------------------------
@@ -529,8 +547,13 @@ class StatisticsAgent(BaseAgent):
         if agent_input.node_id == "select_nonparametric":
             distribution = "non_parametric"
 
-        # Step 3 — method selection
-        method = self._select_method(objective, outcome_type, n_groups, paired, distribution)
+        # Step 3 — method selection. ``matched`` is False when the request did
+        # not map onto a modelled objective (off-catalogue): the chosen method is
+        # only a safety-net default and must be flagged for the user.
+        method, matched = self._select_method(
+            objective, outcome_type, n_groups, paired, distribution
+        )
+        off_catalog = not matched
         method_with_justification = {
             **method,
             "justification": (
@@ -595,16 +618,19 @@ class StatisticsAgent(BaseAgent):
                 continuation_query=continuation_query,
                 prior_statistical_results=payload.get("prior_statistical_results"),
                 prior_r_script=payload.get("prior_r_script"),
+                off_catalog=off_catalog,
             )
         elif conversational_mode:
             analysis_proposal, r_script, provenance = await self._generate_conversational_proposal(
-                method=method, intent_obj=intent_obj, payload=payload
+                method=method, intent_obj=intent_obj, payload=payload,
+                off_catalog=off_catalog,
             )
             if analysis_proposal is not None:
                 output_payload["analysis_proposal"] = analysis_proposal
         else:
             r_script, provenance = await self._generate_r_script(
-                method=method, intent_obj=intent_obj, payload=payload
+                method=method, intent_obj=intent_obj, payload=payload,
+                off_catalog=off_catalog,
             )
         output_payload["r_script"] = r_script
         output_payload["r_script_provenance"] = provenance
@@ -622,7 +648,7 @@ class StatisticsAgent(BaseAgent):
     # ------------------------------------------------------------------
 
     async def _generate_r_script(
-        self, method: dict, intent_obj: dict, payload: dict
+        self, method: dict, intent_obj: dict, payload: dict, off_catalog: bool = False
     ) -> tuple[str | None, dict]:
         """Generate an executable R script for *method* via the LLM.
 
@@ -639,6 +665,8 @@ class StatisticsAgent(BaseAgent):
             "llm_generated": False,
             "from_cache": False,
             "knowledge_references": [],
+            "off_catalog": off_catalog,
+            "grounded_by_skill": not off_catalog,
         }
 
         if self._llm_client is None:
@@ -657,8 +685,15 @@ class StatisticsAgent(BaseAgent):
         # 1. Cache lookup (token-saving for common analyses)
         signature = ""
         if self._script_cache is not None:
+            # Keep off-catalogue (no-Skill) scripts in a distinct cache slot so a
+            # Skill-grounded script is never served for an off-catalogue request.
+            cache_method_id = (
+                f"{method['method_id']}|offcatalog"
+                if off_catalog
+                else method["method_id"]
+            )
             signature = RScriptCache.make_signature(
-                method["method_id"], intent_obj, column_signature
+                cache_method_id, intent_obj, column_signature
             )
             cached = self._script_cache.get(
                 signature,
@@ -683,14 +718,14 @@ class StatisticsAgent(BaseAgent):
             references = self._reference_library.retrieve(query_terms, top_k=4)
             provenance["knowledge_references"] = [r.title for r in references]
 
-        # 3. Build prompt (optionally grounded with SKILL.md instructions)
-        skill_id = _METHOD_TO_SKILL_ID.get(method["method_id"])
-        skill_block = (
-            self._skill_loader.get_skill_prompt_block(skill_id)
-            if self._skill_loader is not None and skill_id
-            else ""
+        # 3. Build prompt (grounded with SKILL.md, or off-catalogue guidance)
+        skill_block, grounded_by_skill = self._skill_grounding(
+            method["method_id"], off_catalog
         )
+        provenance["grounded_by_skill"] = grounded_by_skill
         system_prompt = _R_GEN_SYSTEM_PROMPT + skill_block
+        if off_catalog:
+            system_prompt += _R_OFFCATALOG_GUIDANCE
         user_message = self._build_r_gen_user_message(
             method, intent_obj, column_metadata, references, alias_map
         )
@@ -793,8 +828,27 @@ class StatisticsAgent(BaseAgent):
     # Conversational proposal generation (Workbench chat mode)
     # ------------------------------------------------------------------
 
+    def _skill_grounding(self, method_id: str, off_catalog: bool) -> tuple[str, bool]:
+        """Resolve the Skill prompt block for a method.
+
+        Returns ``(skill_block, grounded_by_skill)``. When the analysis is
+        off-catalogue we return ``("", False)`` on purpose: injecting the
+        safety-net method's Skill (e.g. the t-test Skill for a request that is
+        not actually a t-test) would mis-ground the LLM. Off-catalogue callers
+        append ``_R_OFFCATALOG_GUIDANCE`` instead.
+        """
+        if off_catalog:
+            return "", False
+        skill_id = _METHOD_TO_SKILL_ID.get(method_id)
+        block = (
+            self._skill_loader.get_skill_prompt_block(skill_id)
+            if self._skill_loader is not None and skill_id
+            else ""
+        )
+        return block, bool(block)
+
     async def _generate_conversational_proposal(
-        self, method: dict, intent_obj: dict, payload: dict
+        self, method: dict, intent_obj: dict, payload: dict, off_catalog: bool = False
     ) -> tuple[dict | None, str | None, dict]:
         """Generate a natural-language explanation + selectable R code candidates.
 
@@ -816,6 +870,8 @@ class StatisticsAgent(BaseAgent):
             "from_cache": False,
             "knowledge_references": [],
             "conversational": True,
+            "off_catalog": off_catalog,
+            "grounded_by_skill": False,
         }
 
         if self._llm_client is None:
@@ -846,13 +902,13 @@ class StatisticsAgent(BaseAgent):
             references = self._reference_library.retrieve(query_terms, top_k=4)
             provenance["knowledge_references"] = [r.title for r in references]
 
-        skill_id = _METHOD_TO_SKILL_ID.get(method["method_id"])
-        skill_block = (
-            self._skill_loader.get_skill_prompt_block(skill_id)
-            if self._skill_loader is not None and skill_id
-            else ""
+        skill_block, grounded_by_skill = self._skill_grounding(
+            method["method_id"], off_catalog
         )
+        provenance["grounded_by_skill"] = grounded_by_skill
         system_prompt = _R_GEN_CHAT_SYSTEM_PROMPT + skill_block
+        if off_catalog:
+            system_prompt += _R_OFFCATALOG_GUIDANCE
         user_message = self._build_conversational_user_message(
             method, alt_method, intent_obj, column_metadata, references, alias_map,
             conversation_history=payload.get("conversation_history") or [],
@@ -875,7 +931,13 @@ class StatisticsAgent(BaseAgent):
             "explanation_markdown": explanation,
             "code_candidates": candidates,
             "recommended_candidate_id": candidates[0]["candidate_id"],
+            "off_catalog": off_catalog,
         }
+        if off_catalog:
+            analysis_proposal["caveat_markdown"] = (
+                "⚠️ この解析は標準Skillに無いパターンです。生成コードは検証済み手順に"
+                "基づかないため、統計的妥当性（手法・前提条件・引数）を必ずご確認ください。"
+            )
         provenance["llm_generated"] = True
         return analysis_proposal, candidates[0]["r_code"], provenance
 
@@ -986,6 +1048,7 @@ class StatisticsAgent(BaseAgent):
         continuation_query: str,
         prior_statistical_results: dict | None,
         prior_r_script: str | None,
+        off_catalog: bool = False,
     ) -> tuple[str | None, dict]:
         """Generate a follow-up R script using the prior analysis as context.
 
@@ -1002,6 +1065,8 @@ class StatisticsAgent(BaseAgent):
             "from_cache": False,
             "knowledge_references": [],
             "continuation": True,
+            "off_catalog": off_catalog,
+            "grounded_by_skill": not off_catalog,
         }
 
         if self._llm_client is None:
@@ -1028,13 +1093,13 @@ class StatisticsAgent(BaseAgent):
             references = self._reference_library.retrieve(query_terms, top_k=4)
             provenance["knowledge_references"] = [r.title for r in references]
 
-        skill_id = _METHOD_TO_SKILL_ID.get(method["method_id"])
-        skill_block = (
-            self._skill_loader.get_skill_prompt_block(skill_id)
-            if self._skill_loader is not None and skill_id
-            else ""
+        skill_block, grounded_by_skill = self._skill_grounding(
+            method["method_id"], off_catalog
         )
+        provenance["grounded_by_skill"] = grounded_by_skill
         system_prompt = _R_CONTINUATION_SYSTEM_PROMPT + skill_block
+        if off_catalog:
+            system_prompt += _R_OFFCATALOG_GUIDANCE
         user_message = self._build_continuation_r_gen_user_message(
             method=method,
             intent_obj=intent_obj,
@@ -1150,6 +1215,20 @@ class StatisticsAgent(BaseAgent):
         ]
         return "\n".join(parts)
 
+    # Objectives the catalogue explicitly models (drive off_catalog detection).
+    _GROUP_COMPARISON_OBJECTIVES = frozenset(
+        {"between_group_comparison", "paired_comparison"}
+    )
+    _CATALOG_OBJECTIVES = frozenset(
+        {
+            "between_group_comparison",
+            "paired_comparison",
+            "correlation_analysis",
+            "regression_analysis",
+            "survival_analysis",
+        }
+    )
+
     def _select_method(
         self,
         objective: str,
@@ -1157,53 +1236,65 @@ class StatisticsAgent(BaseAgent):
         n_groups: int | None,
         paired: bool | None,
         distribution: str,
-    ) -> dict:
+    ) -> tuple[dict, bool]:
         """Map intent_object properties to a method from the catalogue.
 
         Follows statistics.yaml method_selection_framework.  Falls back to
         mann_whitney_u_test (safest non-parametric default) when no exact
         match is found so the agent always produces a result (ST-003 declares
         assumption checks when the match is ambiguous).
+
+        Returns:
+            ``(method, matched)``. ``matched`` is False when the request did not
+            map onto a modelled objective and we fell back to the generic
+            two-group default — i.e. the analysis is "off-catalogue" and the
+            chosen method (and its Skill grounding) may not actually fit. Callers
+            use this to flag the result and skip mismatched Skill injection.
         """
         is_parametric = distribution == "assumed_normal"
 
         if objective == "survival_analysis" or outcome_type == "survival":
-            return _METHODS["kaplan_meier_estimator"]
+            return _METHODS["kaplan_meier_estimator"], True
 
         if objective in {"correlation_analysis"}:
             return (
                 _METHODS["pearson_correlation"]
                 if is_parametric
                 else _METHODS["spearman_rank_correlation"]
-            )
+            ), True
 
         if objective in {"regression_analysis"}:
             if outcome_type in {"categorical_binary"}:
-                return _METHODS["logistic_regression"]
-            return _METHODS["multiple_linear_regression"]
+                return _METHODS["logistic_regression"], True
+            return _METHODS["multiple_linear_regression"], True
 
         if outcome_type in {
             "categorical_binary", "categorical_nominal", "categorical_ordinal"
         }:
-            return _METHODS["chi_square_test_or_fishers_exact"]
+            return _METHODS["chi_square_test_or_fishers_exact"], True
 
-        # Continuous outcome — group comparison
+        # Continuous outcome — group comparison. This branch is only a *modelled*
+        # match when the objective is actually a group comparison; any other
+        # objective (diagnostic_accuracy, prediction_model, descriptive_only,
+        # systematic_review, unknown/empty) merely lands here as a safety net and
+        # is reported as off-catalogue.
+        matched = objective in self._GROUP_COMPARISON_OBJECTIVES
         groups = n_groups if n_groups is not None else 2
         if paired:
             return (
                 _METHODS["paired_t_test"]
                 if is_parametric
                 else _METHODS["wilcoxon_signed_rank_test"]
-            )
+            ), matched
         if groups > 2:
             return (
                 _METHODS["one_way_anova"]
                 if is_parametric
                 else _METHODS["kruskal_wallis_test"]
-            )
+            ), matched
         # Default: two-group independent comparison
         return (
             _METHODS["independent_samples_t_test"]
             if is_parametric
             else _METHODS["mann_whitney_u_test"]
-        )
+        ), matched

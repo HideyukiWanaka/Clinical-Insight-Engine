@@ -79,3 +79,14 @@ Before any Skill file is modified:
 - `human_review_required = True` — All proposals require human approval
 - Core Skill `versions/` directories are append-only — no deletion permitted
 - `skill_lifecycle` agent is the sole agent with `skill.update_core` scope
+
+---
+
+## Authoring a new statistics Skill
+
+For a concrete, copy-pasteable template of a statistics SKILL.md — its required
+`# Version:` header, section structure (Overview / Applies when / Procedure /
+Validation Rules), the directory layout `SkillLoader.discover()` expects, and
+the `cie/agents/statistics.py` wiring (`_METHODS` / `_METHOD_TO_SKILL_ID` /
+`_select_method`) that clears the off-catalogue (`off_catalog`) warning — see
+[docs/authoring-a-statistics-skill.md](../docs/authoring-a-statistics-skill.md).
