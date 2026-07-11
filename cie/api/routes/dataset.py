@@ -27,7 +27,11 @@ from cie.api.dataset import (
     list_excel_sheets,
 )
 from cie.api.deps import get_services
-from cie.api.models import ExcelConfirmRequest, ExcelInspectResponse
+from cie.api.models import (
+    DatasetFromExistingRequest,
+    ExcelConfirmRequest,
+    ExcelInspectResponse,
+)
 from cie.api.upload_limits import read_upload_bounded
 
 router = APIRouter(prefix="/api", tags=["dataset"])
@@ -36,6 +40,9 @@ router = APIRouter(prefix="/api", tags=["dataset"])
 # against an oversized upload (OWASP A03:2025). Shared by the CSV and Excel
 # intake paths.
 MAX_DATASET_BYTES = 100 * 1024 * 1024
+
+_CSV_SUFFIXES = {".csv"}
+_EXCEL_SUFFIXES = {".xlsx", ".xls"}
 
 
 def _dataset_summary(context: dict) -> dict:
@@ -168,3 +175,88 @@ async def confirm_excel_dataset(request: Request, body: ExcelConfirmRequest) -> 
     request.app.state.dataset_context = context
     request.app.state.dataset_excel_pending = None
     return _dataset_summary(context)
+
+
+@router.post("/dataset/from_existing")
+async def register_existing_dataset(
+    request: Request, body: DatasetFromExistingRequest
+) -> dict:
+    """Register a file already sitting in the workspace as the dataset.
+
+    Lets the user pick a CSV/Excel file that's already on disk (e.g. dropped
+    into ``uploads/`` outside the browser, or ``dataset.csv`` itself) instead
+    of re-uploading it. Same path-traversal guard as ``GET /api/files/content``
+    (``cie/api/routes/files.py``): the resolved path must stay under the
+    workspace root.
+
+    - ``.csv`` → registered immediately, same response shape as
+      ``POST /api/dataset``.
+    - ``.xlsx``/``.xls`` → sheet names only (same response shape as
+      ``POST /api/dataset/excel/inspect``); the existing
+      ``POST /api/dataset/excel/confirm`` completes registration once a sheet
+      is chosen — no changes needed there.
+    """
+    workspace_dir = get_services(request)["workspace_dir"]
+    root = Path(workspace_dir).resolve()
+    target = (root / body.path).resolve()
+    if not target.is_relative_to(root):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "PATH_TRAVERSAL",
+                "message": "Path escapes the workspace directory.",
+                "detail": None,
+            },
+        )
+    if not target.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error_code": "FILE_NOT_FOUND",
+                "message": f"No such file: {body.path}",
+                "detail": None,
+            },
+        )
+
+    suffix = target.suffix.lower()
+    if suffix in _CSV_SUFFIXES:
+        context = build_dataset_context(
+            target.read_bytes(),
+            workspace_dir=workspace_dir,
+            source_name=body.path,
+        )
+        request.app.state.dataset_context = context
+        return _dataset_summary(context)
+
+    if suffix in _EXCEL_SUFFIXES:
+        excel_bytes = target.read_bytes()
+        try:
+            sheet_names = list_excel_sheets(excel_bytes)
+        except ExcelParseError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error_code": "EXCEL_PARSE_ERROR",
+                    "message": "Excelファイルを読み込めませんでした。",
+                    "detail": str(exc),
+                },
+            ) from exc
+
+        upload_id = uuid4().hex
+        request.app.state.dataset_excel_pending = {
+            "upload_id": upload_id,
+            "bytes": excel_bytes,
+            "filename": body.path,
+        }
+        return ExcelInspectResponse(
+            upload_id=upload_id, sheet_names=sheet_names
+        ).model_dump()
+
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error_code": "UNSUPPORTED_FILE_TYPE",
+            "message": "CSV または Excel (.xlsx/.xls) のみ解析データとして選択できます。",
+            "detail": f"path={body.path!r}",
+        },
+    )

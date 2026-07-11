@@ -11,6 +11,7 @@
 
 import type {
   ConsoleMessage,
+  DatasetFromExistingRequest,
   DatasetStatusResponse,
   DatasetUploadResponse,
   ErrorEnvelope,
@@ -272,6 +273,19 @@ export class CieApiClient {
    *  upload). Restores the 解析対象データ indicator after a page reload. */
   getDatasetStatus(): Promise<DatasetStatusResponse> {
     return this.getJson<DatasetStatusResponse>("/api/dataset");
+  }
+
+  /** POST /api/dataset/from_existing — register a CSV/Excel file already in
+   *  the workspace (a GET /api/files path) without re-uploading it. CSV
+   *  resolves to a DatasetUploadResponse; Excel resolves to an
+   *  ExcelInspectResponse awaiting POST /api/dataset/excel/confirm. */
+  registerExistingDataset(
+    body: DatasetFromExistingRequest,
+  ): Promise<DatasetUploadResponse | ExcelInspectResponse> {
+    return this.post<DatasetUploadResponse | ExcelInspectResponse>(
+      "/api/dataset/from_existing",
+      body,
+    );
   }
 
   /** POST /api/files — add a local file to the workspace under uploads/.

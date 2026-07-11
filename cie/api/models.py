@@ -198,6 +198,18 @@ class ExcelConfirmRequest(BaseModel):
     sheet_name: str
 
 
+class DatasetFromExistingRequest(BaseModel):
+    """Request body for ``POST /api/dataset/from_existing``.
+
+    ``path`` is a workspace-relative path (as returned by ``GET /api/files``)
+    to a CSV/Excel file already sitting in the workspace — lets the user
+    register it as the active dataset without re-uploading bytes through the
+    browser's file picker.
+    """
+
+    path: str
+
+
 # ---------------------------------------------------------------------------
 # /api/settings/llm — AI provider + API key management
 # ---------------------------------------------------------------------------

@@ -405,3 +405,97 @@ def test_storage_directory_change_rejects_unwritable_path(
     )
     assert resp.status_code == 400
     assert resp.json()["detail"]["error_code"] == "DIRECTORY_NOT_WRITABLE"
+
+
+# ---------------------------------------------------------------------------
+# POST /api/dataset/from_existing — ワークスペース内の既存ファイルを解析
+# データとして選択（アップロードなしで登録）
+# ---------------------------------------------------------------------------
+
+def test_from_existing_registers_csv_already_in_workspace(
+    client: TestClient, tmp_path
+) -> None:
+    (tmp_path / "uploads").mkdir()
+    (tmp_path / "uploads" / "cohort.csv").write_text(
+        "sex,age\nM,41\nF,38\n", encoding="utf-8"
+    )
+    resp = client.post(
+        "/api/dataset/from_existing",
+        headers=AUTH, json={"path": "uploads/cohort.csv"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source_name"] == "uploads/cohort.csv"
+    assert body["row_count"] == 2
+    assert body["column_count"] == 2
+    # The registered dataset.csv is written into the workspace root, and
+    # GET /api/dataset reflects the newly-registered source.
+    assert (tmp_path / "dataset.csv").read_text(encoding="utf-8") == (
+        "sex,age\nM,41\nF,38\n"
+    )
+    resp = client.get("/api/dataset", headers=AUTH)
+    assert resp.json()["dataset"]["source_name"] == "uploads/cohort.csv"
+
+
+def test_from_existing_excel_requires_sheet_confirm(
+    client: TestClient, tmp_path
+) -> None:
+    import pandas as pd
+
+    xlsx_path = tmp_path / "trial_data.xlsx"
+    with pd.ExcelWriter(xlsx_path) as writer:
+        pd.DataFrame({"sex": ["M", "F"], "age": [41, 38]}).to_excel(
+            writer, sheet_name="Sheet1", index=False
+        )
+        pd.DataFrame({"x": [1, 2]}).to_excel(writer, sheet_name="Sheet2", index=False)
+
+    resp = client.post(
+        "/api/dataset/from_existing",
+        headers=AUTH, json={"path": "trial_data.xlsx"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["sheet_names"] == ["Sheet1", "Sheet2"]
+    upload_id = body["upload_id"]
+
+    # The existing confirm endpoint completes registration unchanged.
+    resp = client.post(
+        "/api/dataset/excel/confirm",
+        headers=AUTH, json={"upload_id": upload_id, "sheet_name": "Sheet1"},
+    )
+    assert resp.status_code == 200
+    confirmed = resp.json()
+    assert confirmed["source_name"] == "trial_data.xlsx / Sheet1"
+    assert confirmed["row_count"] == 2
+
+
+def test_from_existing_rejects_path_traversal(client: TestClient, tmp_path) -> None:
+    outside = tmp_path.parent / "secret.csv"
+    outside.write_text("leak\n1\n", encoding="utf-8")
+    resp = client.post(
+        "/api/dataset/from_existing",
+        headers=AUTH, json={"path": "../secret.csv"},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["error_code"] == "PATH_TRAVERSAL"
+
+
+def test_from_existing_missing_file_is_404(client: TestClient) -> None:
+    resp = client.post(
+        "/api/dataset/from_existing",
+        headers=AUTH, json={"path": "does_not_exist.csv"},
+    )
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["error_code"] == "FILE_NOT_FOUND"
+
+
+def test_from_existing_rejects_unsupported_extension(
+    client: TestClient, tmp_path
+) -> None:
+    (tmp_path / "notes.txt").write_text("not a dataset", encoding="utf-8")
+    resp = client.post(
+        "/api/dataset/from_existing",
+        headers=AUTH, json={"path": "notes.txt"},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["error_code"] == "UNSUPPORTED_FILE_TYPE"
