@@ -109,9 +109,24 @@ export interface StorageDirectoryRequest {
 }
 
 // POST /api/intent (§3.1)
+export interface ConversationTurn {
+  role: "user" | "assistant";
+  text: string;
+}
+
 export interface IntentRequest {
   prompt: string;
   dataset_uploaded?: boolean;
+  // Recent chat turns (oldest→newest, excluding the current prompt) so the
+  // Planner reads a correction in context instead of as an isolated fragment.
+  conversation_history?: ConversationTurn[];
+}
+
+// One clarification option the Planner offers; clicking applies intent_override.
+export interface ClarificationOption {
+  option_id?: string;
+  label: string;
+  intent_override?: Record<string, unknown>;
 }
 
 export interface IntentResponse {

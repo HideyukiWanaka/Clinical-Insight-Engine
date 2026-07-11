@@ -143,6 +143,25 @@ behavior_rules:
       determined from prompt or metadata. This value drives 2-group vs
       multi-group method selection in the Statistics Agent.
 
+  - rule_id: "PL-007"
+    priority: "CRITICAL"
+    statement: >
+      Resolve outcome/predictor variables by column NAME, not by position.
+      dataset_structural_metadata is keyed by var_n alias; each entry carries
+      inferred_type, unique_count, and — for columns that PASS the Layer-1
+      column-name PII scan (PIIDetectorLayer1) — the real header under "name".
+      Header names are structural metadata (not row values, DQ-001) and are an
+      allowed Planner input per this contract; patient-identifier headers
+      (氏名/患者ID/生年月日 …) never carry a "name" and must never be selected.
+      Match the user's words to a column "name" (e.g. "血圧" → "収縮期血圧_mmHg")
+      and emit that var_n. Never pick a column merely because it is the first of
+      a matching type (a year/ID column is not a "blood pressure" outcome). When
+      no "name" plausibly matches the requested outcome, do not guess: set
+      requires_human_clarification=true and offer the candidate columns as
+      clarification_options. Documents the decision to expose non-PII header
+      names to the Planner (previously the implementation masked all names to
+      var_n, which forced blind guessing).
+
 # -----------------------------------------------------------------------------
 # Progressive Context Loading Configuration
 # -----------------------------------------------------------------------------

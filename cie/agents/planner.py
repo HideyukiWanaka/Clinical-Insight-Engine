@@ -64,6 +64,32 @@ _SUBJECT_ID_OPTION: dict = {
     "intent_override": {"paired": True},
 }
 
+
+def _name_matches_prompt(name: str, prompt: str) -> bool:
+    """Heuristic: does a column ``name`` plausibly appear in the user ``prompt``?
+
+    Used only by the empty-outcome fallback (:meth:`_infer_outcome_variables`)
+    as a safety net when the LLM returns no outcome_variables. Strips unit/format
+    suffixes (``収縮期血圧_mmHg`` → ``収縮期血圧``) and looks for a shared run of
+    ≥2 characters between the column name and the prompt — enough to match
+    ``血圧`` in ``男女の血圧を比較したい`` while rejecting an unrelated ``検査年``.
+    Intentionally conservative: ambiguity (0 or many matches) defers to a human.
+    """
+    if not name or not prompt:
+        return False
+    # Drop a trailing unit/format segment after the last underscore (mmHg, mg_dl…).
+    core = name.split("_", 1)[0].strip().lower()
+    p = prompt.lower()
+    if len(core) >= 2 and core in p:
+        return True
+    # Fall back to any shared contiguous run of ≥2 chars (handles CJK without
+    # word boundaries, e.g. 収縮期血圧 sharing 血圧 with the prompt).
+    for i in range(len(core) - 1):
+        for j in range(i + 2, len(core) + 1):
+            if core[i:j] in p:
+                return True
+    return False
+
 # ---------------------------------------------------------------------------
 # IntentObject schema excerpt — embedded in system prompt so the LLM can
 # produce schema-conforming output without additional context.
@@ -179,6 +205,23 @@ PL-005 [HIGH]: When paired=true, inspect dataset_structural_metadata for a
 PL-006 [MEDIUM]: Infer n_groups_estimate from explicit counts in the prompt
   ("three groups", "baseline + 3 months + 6 months" → 3) or from metadata
   unique_count of the grouping variable. Set null if undeterminable.
+
+PL-007 [CRITICAL]: Map the user's words to columns using the metadata "name".
+  dataset_structural_metadata is keyed by var_n alias; each entry has
+  "inferred_type", "unique_count", and usually "name" (the real header).
+  Select outcome_variables / predictor_variables by matching the user's
+  request to the column "name", then emit that column's var_n.
+    Example: user says "compare blood pressure between men and women" and the
+    metadata contains var_10 with name "収縮期血圧_mmHg" (continuous) and var_6
+    with name "性別" (categorical_binary) → set outcome_variables to var_10
+    (role primary_outcome) and predictor_variables to var_6 (role
+    grouping_variable).
+  NEVER pick a column merely because it is the first of a matching type — a
+  year/ID/date column ("検査年", "exam year") is NOT the outcome for a "blood
+  pressure" request. If NO column "name" plausibly matches the requested
+  outcome, do NOT guess: set requires_human_clarification=true and offer the
+  candidate columns (by name) as clarification_options. Some columns have no
+  "name" (privacy-masked identifiers) — never select those as the outcome.
 
 ADR-0001 [CRITICAL]: DO NOT include "workflow_id" anywhere in your response.
   The Orchestrator selects workflows. The Planner never assigns workflow_id.
@@ -296,10 +339,14 @@ class PlannerAgent(BaseAgent):
 
         user_prompt: str = payload["user_natural_language_prompt"]
         dataset_metadata: dict = payload.get("dataset_structural_metadata", {})
+        conversation_history: list = payload.get("conversation_history") or []
 
-        # Step 1.5 — semantic cache lookup (ADR-0004; keyed per model, CA-005)
+        # Step 1.5 — semantic cache lookup (ADR-0004; keyed per model, CA-005).
+        # Skip the cache entirely when prior turns are present: the same prompt
+        # ("血圧です") means different things depending on what it corrects, so a
+        # prompt-keyed cache entry would be wrong here.
         cache_key: CacheKey | None = None
-        if self._cache_store is not None:
+        if self._cache_store is not None and not conversation_history:
             cache_key = self._cache_store.make_key(user_prompt, dataset_metadata)
             cached = self._cache_store.get(
                 cache_key,
@@ -331,7 +378,9 @@ class PlannerAgent(BaseAgent):
 
         # Step 2 — build LLM request
         system_prompt = self._build_system_prompt()
-        user_message = self._build_user_message(user_prompt, dataset_metadata)
+        user_message = self._build_user_message(
+            user_prompt, dataset_metadata, conversation_history
+        )
 
         # Step 3 — LLM call (raises AgentError on failure)
         llm_response = await self._call_llm(system_prompt, user_message)
@@ -368,11 +417,24 @@ class PlannerAgent(BaseAgent):
         intent_obj.pop("workflow_id", None)
 
         # outcome_variables requires minItems=1 per schema. If LLM returned
-        # empty or missing, infer from dataset metadata as a fallback.
+        # empty or missing, infer from dataset metadata as a fallback — but only
+        # commit silently when the inference is confident. An ambiguous guess
+        # (no clear name match / multiple candidates) must ask the human rather
+        # than picking an arbitrary column (which used to select 検査年).
         if not intent_obj.get("outcome_variables"):
-            intent_obj["outcome_variables"] = self._infer_outcome_variables(
-                intent_obj, dataset_metadata
+            inferred_outcomes, confident = self._infer_outcome_variables(
+                intent_obj, dataset_metadata, user_prompt
             )
+            intent_obj["outcome_variables"] = inferred_outcomes
+            if not confident:
+                requires_clarification = True
+                if not any(
+                    str(o.get("option_id", "")).startswith("outcome:")
+                    for o in clarification_options
+                ):
+                    clarification_options.extend(
+                        self._build_outcome_clarification_options(dataset_metadata)
+                    )
 
         output_payload: dict = {
             "execution_id": agent_input.execution_id,
@@ -630,58 +692,136 @@ class PlannerAgent(BaseAgent):
         )
         return _SYSTEM_PROMPT_TEMPLATE.format(intent_object_schema=schema_text)
 
-    def _infer_outcome_variables(self, intent_obj: dict, dataset_metadata: dict) -> list[dict]:
+    def _infer_outcome_variables(
+        self, intent_obj: dict, dataset_metadata: dict, user_prompt: str = ""
+    ) -> tuple[list[dict], bool]:
         """Fallback: infer outcome_variables from dataset metadata.
 
         Called when the LLM returns an empty or missing outcome_variables list,
-        which would fail schema validation (minItems=1). We pick the first
-        continuous variable as primary_outcome, or var_1 if nothing fits.
+        which would fail schema validation (minItems=1). Rather than blindly
+        grabbing the first column of the matching type (which selected an
+        unrelated year/ID column for a "blood pressure" request), we match the
+        user's words against each candidate column's "name" and only commit
+        when exactly one column matches.
+
+        Returns:
+            (outcome_variables, confident). ``confident`` is False when the
+            match was ambiguous (0 or >1 candidates) — the caller then triggers
+            human clarification instead of silently trusting the guess. A
+            placeholder entry is still returned so schema validation
+            (minItems=1) passes, but never a PII-masked (nameless) column.
         """
         outcome_type = intent_obj.get("outcome_type", "continuous")
 
-        # Prefer continuous vars for continuous outcomes, otherwise any var
+        # Prefer continuous vars for continuous outcomes, otherwise any var.
+        # Never offer a PII-masked (nameless) column as an outcome candidate.
         candidates = [
             var_n for var_n, meta in dataset_metadata.items()
-            if isinstance(meta, dict) and (
+            if isinstance(meta, dict) and meta.get("name") and (
                 (outcome_type == "continuous" and meta.get("inferred_type") == "continuous")
                 or outcome_type != "continuous"
             )
         ]
 
-        # Fall back to all vars if no candidates matched
         if not candidates:
-            candidates = list(dataset_metadata.keys())
+            # No named candidate of the right type — fall back to any named col.
+            candidates = [
+                var_n for var_n, meta in dataset_metadata.items()
+                if isinstance(meta, dict) and meta.get("name")
+            ]
 
         if not candidates:
-            # Absolute fallback — schema will still validate with one entry
-            _log.warning("No dataset variables available; using var_1 as placeholder outcome")
-            return [{"var_n": "var_1", "role": "primary_outcome"}]
+            # Absolute fallback — schema still validates with one entry, but we
+            # cannot verify it, so it is never confident.
+            first = next(iter(dataset_metadata), "var_1")
+            _log.warning("No named dataset variables available; using %s as placeholder", first)
+            return [{"var_n": first, "role": "primary_outcome"}], False
 
+        # Match the user's request against candidate column names.
+        matched = [
+            var_n for var_n in candidates
+            if _name_matches_prompt(str(dataset_metadata[var_n].get("name", "")), user_prompt)
+        ]
+        if len(matched) == 1:
+            _log.info("Inferred outcome %s by name match to prompt", matched[0])
+            return [{"var_n": matched[0], "role": "primary_outcome"}], True
+
+        # 0 or >1 name matches → ambiguous. Return a placeholder but flag it so
+        # the caller asks the user which column is the outcome.
         _log.warning(
-            f"LLM returned empty outcome_variables; inferred [{candidates[0]}] from metadata"
+            "LLM returned empty outcome_variables and name match was ambiguous "
+            "(%d candidates matched); flagging for clarification",
+            len(matched),
         )
-        return [{"var_n": candidates[0], "role": "primary_outcome"}]
+        placeholder = matched[0] if matched else candidates[0]
+        return [{"var_n": placeholder, "role": "primary_outcome"}], False
 
-    def _build_user_message(self, user_prompt: str, dataset_metadata: dict) -> str:
+    def _build_outcome_clarification_options(self, dataset_metadata: dict) -> list[dict]:
+        """One clickable clarification option per named continuous column.
+
+        Presented when the outcome could not be resolved confidently. Each
+        option's ``intent_override`` pins ``outcome_variables`` to the chosen
+        column so the UI can apply the user's pick directly (Fix B). Only
+        columns that carry a real ``name`` (non-PII) are offered; the label uses
+        that name so the user recognises the column, never the var_n alias.
+        """
+        options: list[dict] = []
+        for var_n, meta in dataset_metadata.items():
+            if not isinstance(meta, dict) or not meta.get("name"):
+                continue
+            if meta.get("inferred_type") != "continuous":
+                continue
+            name = str(meta["name"])
+            options.append({
+                "option_id": f"outcome:{var_n}",
+                "label": f"アウトカム（比較したい値）は「{name}」です",
+                "intent_override": {
+                    "outcome_variables": [
+                        {"var_n": var_n, "role": "primary_outcome"}
+                    ]
+                },
+            })
+        return options
+
+    def _build_user_message(
+        self,
+        user_prompt: str,
+        dataset_metadata: dict,
+        conversation_history: list | None = None,
+    ) -> str:
         """Serialize the user prompt and metadata for LLM consumption.
 
-        Only var_n aliases are present in dataset_metadata — original column
-        names are never sent to the LLM (privacy by design / PL-002).
-        The inject_raw_data_rows field is set to False as a structural signal.
+        dataset_metadata is keyed by var_n aliases; each entry usually carries a
+        "name" field with the real column header so the Planner can resolve the
+        user's intent to a column (PL-007). Headers that signalled Layer-1 PII
+        are masked upstream (:func:`cie.api.dataset.build_dataset_context`) and
+        arrive with no "name" — patient identifiers never reach the LLM. Header
+        names are structural metadata, not row values; the planner.yaml contract
+        lists "Header names" as allowed input and inject_raw_data_rows stays
+        False as the structural guarantee.
 
         Args:
-            user_prompt: Natural language research objective.
-            dataset_metadata: Structural metadata using var_n column aliases only.
+            user_prompt: Natural language research objective (the current turn).
+            dataset_metadata: Structural metadata keyed by var_n aliases, with
+                PII-scanned column names under each entry's "name".
+            conversation_history: Prior chat turns (oldest→newest) so the current
+                prompt can be read as a correction/refinement, not in isolation.
 
         Returns:
             JSON string sent as the user message turn.
         """
-        return json.dumps(
-            {
-                "user_natural_language_prompt": user_prompt,
-                "dataset_structural_metadata": dataset_metadata,
-                "inject_raw_data_rows": False,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
+        message: dict = {
+            "user_natural_language_prompt": user_prompt,
+            "dataset_structural_metadata": dataset_metadata,
+            "inject_raw_data_rows": False,
+        }
+        if conversation_history:
+            message["conversation_history"] = conversation_history
+            message["note"] = (
+                "conversation_history lists earlier turns (oldest→newest). Treat "
+                "user_natural_language_prompt as the LATEST turn, which may CORRECT "
+                "or REFINE an earlier turn (e.g. changing which column is the "
+                "outcome). Resolve the full intent from the whole conversation, "
+                "not the latest fragment alone."
+            )
+        return json.dumps(message, ensure_ascii=False, indent=2)

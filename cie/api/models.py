@@ -31,11 +31,27 @@ class ErrorResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class ConversationTurn(BaseModel):
+    """One prior chat turn passed as context to the stateless intent endpoint.
+
+    ``role`` is ``"user"`` or ``"assistant"``; ``text`` is the plain message.
+    Lets the Planner read a correction ("検査年ではなく血圧です") in the context of
+    the turns it refines, instead of judging the fragment in isolation.
+    """
+
+    role: str
+    text: str
+
+
 class IntentRequest(BaseModel):
     """Request body for ``POST /api/intent``."""
 
     prompt: str
     dataset_uploaded: bool = False
+    # Recent chat turns (oldest→newest, excluding the current prompt). Optional
+    # and bounded by the caller; the Planner treats the current prompt as a
+    # possible correction/refinement of these.
+    conversation_history: list[ConversationTurn] = Field(default_factory=list)
 
 
 class IntentResponse(BaseModel):

@@ -15,8 +15,21 @@
     },
     "dataset_structural_metadata": {
       "type": "object",
-      "description": "Structural metadata using var_n column aliases only. Never contains raw data rows.",
+      "description": "Structural metadata keyed by var_n aliases, each with inferred_type, unique_count, and (for non-PII columns) the real header under 'name'. Never contains raw data rows.",
       "additionalProperties": true
+    },
+    "conversation_history": {
+      "type": "array",
+      "description": "Prior chat turns (oldest→newest) so a correction is read in context. Optional.",
+      "items": {
+        "type": "object",
+        "required": ["role", "text"],
+        "additionalProperties": true,
+        "properties": {
+          "role": { "type": "string" },
+          "text": { "type": "string" }
+        }
+      }
     },
     "inject_raw_data_rows": {
       "type": "boolean",

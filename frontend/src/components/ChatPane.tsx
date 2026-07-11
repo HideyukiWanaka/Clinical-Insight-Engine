@@ -1,13 +1,24 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, type CieApiClient } from "../api/client";
-import type { CodeCandidate } from "../api/types";
+import type {
+  ClarificationOption,
+  CodeCandidate,
+  ConversationTurn,
+} from "../api/types";
 
 type Msg =
   | { id: string; kind: "user"; text: string }
   | { id: string; kind: "ai"; text: string }
   | { id: string; kind: "system"; text: string }
   | { id: string; kind: "error"; text: string; detail?: string | null }
-  | { id: string; kind: "clarify"; text: string; options: string[] }
+  | {
+      id: string;
+      kind: "clarify";
+      text: string;
+      options: ClarificationOption[];
+      intent: Record<string, unknown>;
+      answered?: boolean;
+    }
   | { id: string; kind: "confirm"; intent: Record<string, unknown>; summary: string }
   | {
       id: string;
@@ -46,6 +57,23 @@ function optionLabel(opt: Record<string, unknown>, i: number): string {
     opt.label ?? opt.question ?? opt.option_text ?? opt.text ?? opt.description;
   if (typeof cand === "string" && cand.trim()) return cand;
   return `選択肢 ${i + 1}: ${JSON.stringify(opt)}`;
+}
+
+/** Normalize a raw API clarification option into the structured shape the chat
+ *  renders and acts on (a clickable answer carries its intent_override). */
+function toClarificationOption(
+  opt: Record<string, unknown>,
+  i: number,
+): ClarificationOption {
+  const override =
+    opt.intent_override && typeof opt.intent_override === "object"
+      ? (opt.intent_override as Record<string, unknown>)
+      : undefined;
+  return {
+    option_id: typeof opt.option_id === "string" ? opt.option_id : undefined,
+    label: optionLabel(opt, i),
+    intent_override: override,
+  };
 }
 
 function intentSummary(intent: Record<string, unknown>): string {
@@ -171,20 +199,40 @@ export function ChatPane({
     }
   }
 
+  // The chat's prior turns as Planner context so a correction ("検査年ではなく
+  // 血圧です") is read against the turns it refines, not in isolation. Bounded to
+  // the most recent turns to keep the payload small.
+  function buildHistory(): ConversationTurn[] {
+    const turns: ConversationTurn[] = [];
+    for (const m of messages) {
+      if (m.kind === "user") turns.push({ role: "user", text: m.text });
+      else if (m.kind === "clarify") turns.push({ role: "assistant", text: m.text });
+      else if (m.kind === "confirm")
+        turns.push({ role: "assistant", text: m.summary });
+    }
+    return turns.slice(-12);
+  }
+
   async function sendIntent() {
     const prompt = input.trim();
     if (!prompt || busy) return;
+    const history = buildHistory();
     setInput("");
     add({ id: nextId(), kind: "user", text: prompt });
     setBusy(true);
     try {
-      const res = await client.intent({ prompt, dataset_uploaded: datasetUploaded });
+      const res = await client.intent({
+        prompt,
+        dataset_uploaded: datasetUploaded,
+        conversation_history: history,
+      });
       if (res.requires_human_clarification) {
         add({
           id: nextId(),
           kind: "clarify",
-          text: "もう少し詳しく教えてください。以下を確認させてください:",
-          options: (res.clarification_options ?? []).map(optionLabel),
+          text: "もう少し詳しく教えてください。以下から選ぶか、自由入力で訂正してください:",
+          options: (res.clarification_options ?? []).map(toClarificationOption),
+          intent: res.intent_object,
         });
       } else {
         add({
@@ -199,6 +247,26 @@ export function ChatPane({
     } finally {
       setBusy(false);
     }
+  }
+
+  // Apply a clicked clarification option: merge its intent_override into the
+  // intent the Planner returned and proceed straight to code proposal. The
+  // merged intent carries the resolved field (outcome_variables, paired, …),
+  // which /api/propose → StatisticsAgent reads directly.
+  function answerClarification(
+    msgId: string,
+    opt: ClarificationOption,
+    intent: Record<string, unknown>,
+  ) {
+    if (busy) return;
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === msgId && m.kind === "clarify" ? { ...m, answered: true } : m,
+      ),
+    );
+    add({ id: nextId(), kind: "user", text: opt.label });
+    const merged = { ...intent, ...(opt.intent_override ?? {}) };
+    void propose(merged);
   }
 
   async function propose(intent: Record<string, unknown>) {
@@ -278,6 +346,7 @@ export function ChatPane({
             msg={m}
             busy={busy}
             onConfirm={propose}
+            onClarify={answerClarification}
             onInsertCode={onInsertCode}
             onRunCode={onRunCode}
           />
@@ -357,12 +426,18 @@ function MessageView({
   msg,
   busy,
   onConfirm,
+  onClarify,
   onInsertCode,
   onRunCode,
 }: {
   msg: Msg;
   busy: boolean;
   onConfirm: (intent: Record<string, unknown>) => void;
+  onClarify: (
+    msgId: string,
+    opt: ClarificationOption,
+    intent: Record<string, unknown>,
+  ) => void;
   onInsertCode: (code: string) => void;
   onRunCode: (code: string, intent?: Record<string, unknown>) => void;
 }) {
@@ -396,11 +471,29 @@ function MessageView({
           <span className="msg__role">AI</span>
           {msg.text}
           <div className="clarify">
-            {msg.options.map((o, i) => (
-              <span key={i} className="mini-btn" style={{ cursor: "default" }}>
-                {o}
-              </span>
-            ))}
+            {msg.options.map((o, i) => {
+              // An option with an intent_override is answerable — clicking it
+              // applies the choice and proceeds. Options without an override
+              // (rare, e.g. an informational prompt) stay non-interactive.
+              const actionable = !!o.intent_override && !msg.answered;
+              return (
+                <button
+                  key={o.option_id ?? i}
+                  type="button"
+                  className="mini-btn"
+                  data-testid="clarify-option"
+                  disabled={!actionable || busy}
+                  style={actionable ? undefined : { cursor: "default" }}
+                  onClick={
+                    actionable
+                      ? () => onClarify(msg.id, o, msg.intent)
+                      : undefined
+                  }
+                >
+                  {o.label}
+                </button>
+              );
+            })}
           </div>
         </div>
       );

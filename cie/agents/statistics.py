@@ -45,7 +45,10 @@ STRICT REQUIREMENTS (same as primary analysis):
 1. Output ONLY R code inside one ```r ... ``` fenced block. No prose outside it.
 2. Re-read the dataset (it is always available):
        data <- read.csv(file.path(Sys.getenv("WORKSPACE_DIR"), "dataset.csv"),
-                        stringsAsFactors = FALSE)
+                        stringsAsFactors = FALSE,
+                        check.names = FALSE, fileEncoding = "UTF-8")
+   check.names=FALSE keeps the exact (e.g. Japanese) headers; fileEncoding="UTF-8"
+   decodes them correctly regardless of the R process locale.
    Never hard-code an absolute path and never fabricate data.
 3. Use the column names given in dataset_columns.
 4. set.seed(42) for reproducibility before any stochastic step.
@@ -63,6 +66,11 @@ STRICT REQUIREMENTS (same as primary analysis):
    output only the NEW analysis results in result.json.
 9. Wrap in tryCatch so failures print a clear message and quit(status=1).
 10. Never call install.packages(), system(), system2(), shell(), or source().
+11. Do not assume non-base packages are installed. Guard every use of a
+   non-base package (jsonlite, car, dplyr, …) with
+   requireNamespace("<pkg>", quietly = TRUE) and provide a base-R fallback
+   (write JSON by hand; skip Levene's test; use ifelse()/cut() instead of
+   dplyr::case_when). A missing package must never abort the analysis.
 """
 
 _R_GEN_CHAT_SYSTEM_PROMPT = """\
@@ -93,7 +101,10 @@ no meaningful statistical alternative, provide just the one.
 RULES FOR EACH R CODE CANDIDATE (same as always):
 1. Read the dataset:
        data <- read.csv(file.path(Sys.getenv("WORKSPACE_DIR"), "dataset.csv"),
-                        stringsAsFactors = FALSE)
+                        stringsAsFactors = FALSE,
+                        check.names = FALSE, fileEncoding = "UTF-8")
+   check.names=FALSE keeps the exact (e.g. Japanese) headers; fileEncoding="UTF-8"
+   decodes them correctly regardless of the R process locale.
    Never hard-code an absolute path and never fabricate data.
 2. Use the column names given in dataset_columns.
 3. set.seed(42) for reproducibility before any stochastic step.
@@ -110,6 +121,11 @@ RULES FOR EACH R CODE CANDIDATE (same as always):
 7. Wrap the analysis in tryCatch so failures print a clear message and quit
    with a non-zero status.
 8. Never call install.packages(), system(), system2(), shell(), or source().
+9. Do not assume non-base packages are installed. Guard every use of a
+   non-base package (jsonlite, car, dplyr, …) with
+   requireNamespace("<pkg>", quietly = TRUE) and provide a base-R fallback
+   (write JSON by hand; skip Levene's test; use ifelse()/cut() instead of
+   dplyr::case_when). A missing package must never abort the analysis.
 """
 
 _R_GEN_SYSTEM_PROMPT = """\
@@ -120,7 +136,10 @@ STRICT REQUIREMENTS:
 1. Output ONLY R code inside one ```r ... ``` fenced block. No prose outside it.
 2. Read the dataset from dataset.csv inside the workspace directory:
        data <- read.csv(file.path(Sys.getenv("WORKSPACE_DIR"), "dataset.csv"),
-                        stringsAsFactors = FALSE)
+                        stringsAsFactors = FALSE,
+                        check.names = FALSE, fileEncoding = "UTF-8")
+   check.names=FALSE keeps the exact (e.g. Japanese) headers; fileEncoding="UTF-8"
+   decodes them correctly regardless of the R process locale.
    Never hard-code an absolute path and never fabricate data.
 3. Use the column names given in dataset_columns. If the exact grouping/outcome
    columns are ambiguous, select them defensively and comment your choice.
@@ -148,6 +167,11 @@ STRICT REQUIREMENTS:
      - group_summaries     (optional object: per-group n/mean/sd)
 8. Wrap the analysis in tryCatch so failures print a clear message and quit with
    a non-zero status.
+9. Do not assume non-base packages are installed. Guard every use of a non-base
+   package (jsonlite, car, dplyr, …) with requireNamespace("<pkg>", quietly =
+   TRUE) and provide a base-R fallback (write JSON by hand; skip Levene's test;
+   use ifelse()/cut() instead of dplyr::case_when). A missing package must never
+   abort the analysis.
 """
 
 # ---------------------------------------------------------------------------
