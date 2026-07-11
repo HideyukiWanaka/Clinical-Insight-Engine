@@ -133,13 +133,14 @@ _BASE_PAYLOAD = {
         "n_groups_estimate": 2,
         "paired": False,
         "distribution_assumptions": "assumed_normal",
-        "outcome_variables": ["sbp_mmhg"],
-        "predictor_variables": ["group"],
+        "outcome_variables": [{"var_n": "var_1", "role": "primary_outcome"}],
+        "predictor_variables": [{"var_n": "var_2", "role": "grouping_variable"}],
     },
     "dataset_structural_metadata": {
-        "sbp_mmhg": {"inferred_type": "continuous"},
-        "group": {"inferred_type": "categorical_binary"},
+        "var_1": {"inferred_type": "continuous"},
+        "var_2": {"inferred_type": "categorical_binary"},
     },
+    "var_n_alias_map": {"var_1": "sbp_mmhg", "var_2": "group"},
     "inject_raw_data_rows": False,
 }
 
@@ -202,14 +203,15 @@ def test_continuation_build_user_message_basic() -> None:
             "objective": "between_group_comparison",
             "outcome_type": "continuous",
             "paired": False,
-            "outcome_variables": ["sbp_mmhg"],
-            "predictor_variables": ["group"],
+            "outcome_variables": [{"var_n": "var_1", "role": "primary_outcome"}],
+            "predictor_variables": [{"var_n": "var_2", "role": "grouping_variable"}],
         },
         column_metadata={"sbp_mmhg": {"inferred_type": "continuous"}},
         references=[],
         continuation_query="共変量として年齢を追加してほしい",
         prior_statistical_results=_PRIOR_SR,
         prior_r_script=None,
+        alias_map={"var_1": "sbp_mmhg", "var_2": "group"},
     )
     assert "USER FOLLOW-UP REQUEST" in msg
     assert "共変量として年齢を追加してほしい" in msg

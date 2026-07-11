@@ -161,6 +161,31 @@ STRICT REQUIREMENTS:
 """
 
 
+def _resolve_column_metadata(column_metadata: dict, alias_map: dict) -> dict:
+    """Relabel var_n-keyed metadata with real column names for R-gen prompts.
+
+    dataset_structural_metadata is var_n-keyed (Planner privacy boundary,
+    DQ-001), but dataset.csv on disk keeps its original headers, so the
+    ggplot2-generation prompt needs real column names for the LLM to write R
+    code that actually reads the right columns.
+    """
+    if not alias_map:
+        return column_metadata
+    return {alias_map.get(k, k): v for k, v in column_metadata.items()}
+
+
+def _resolve_variable_list(variables: list, alias_map: dict) -> list:
+    """Translate var_n identifiers in outcome/predictor_variables to real names."""
+    if not alias_map:
+        return variables
+    resolved = []
+    for item in variables:
+        if isinstance(item, dict) and "var_n" in item:
+            item = {**item, "var_n": alias_map.get(item["var_n"], item["var_n"])}
+        resolved.append(item)
+    return resolved
+
+
 class VisualizationAgent(BaseAgent):
     """Scientific visualization agent: LLM-generated ggplot2 R + sandbox execution.
 
@@ -265,6 +290,8 @@ class VisualizationAgent(BaseAgent):
             or payload.get("variable_metadata")
             or {}
         )
+        alias_map: dict = payload.get("var_n_alias_map") or {}
+        column_metadata = _resolve_column_metadata(column_metadata, alias_map)
         # Continuation mode: prior_statistical_results annotate the caption
         prior_statistical_results: dict | None = payload.get("prior_statistical_results")
         is_continuation: bool = bool(payload.get("continuation_query"))
@@ -322,6 +349,7 @@ class VisualizationAgent(BaseAgent):
             intent_obj=intent_obj,
             statistical_results=statistical_results,
             column_metadata=column_metadata,
+            alias_map=alias_map,
         )
 
         # Step 6 — execute R in sandbox if runtime_provider is configured
@@ -403,6 +431,7 @@ class VisualizationAgent(BaseAgent):
         intent_obj: dict,
         statistical_results: dict,
         column_metadata: dict,
+        alias_map: dict | None = None,
     ) -> tuple[str | None, dict]:
         """Generate a ggplot2 R script for the selected chart via the LLM.
 
@@ -471,6 +500,7 @@ class VisualizationAgent(BaseAgent):
             statistical_results=statistical_results,
             column_metadata=column_metadata,
             references=references,
+            alias_map=alias_map,
         )
         try:
             raw = await self._llm_client.complete(system_prompt_with_skill, user_message)
@@ -507,6 +537,7 @@ class VisualizationAgent(BaseAgent):
         statistical_results: dict,
         column_metadata: dict,
         references: list,
+        alias_map: dict | None = None,
     ) -> str:
         """Assemble the user turn for ggplot2 R-script generation."""
         reference_block = "\n\n".join(
@@ -532,8 +563,12 @@ class VisualizationAgent(BaseAgent):
                 "objective": intent_obj.get("objective"),
                 "outcome_type": intent_obj.get("outcome_type"),
                 "paired": intent_obj.get("paired"),
-                "outcome_variables": intent_obj.get("outcome_variables", []),
-                "predictor_variables": intent_obj.get("predictor_variables", []),
+                "outcome_variables": _resolve_variable_list(
+                    intent_obj.get("outcome_variables", []), alias_map or {}
+                ),
+                "predictor_variables": _resolve_variable_list(
+                    intent_obj.get("predictor_variables", []), alias_map or {}
+                ),
             },
             "statistical_results": safe_stats,
             "dataset_columns": column_metadata,

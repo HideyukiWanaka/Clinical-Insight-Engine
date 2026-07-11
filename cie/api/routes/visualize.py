@@ -21,7 +21,9 @@ async def visualize(request: Request, body: VisualizeRequest) -> VisualizeRespon
     """Generate figures from statistical results."""
     services = get_services(request)
     execution_id = new_execution_id()
-    col_meta = get_dataset_context(request).get("dataset_structural_metadata", {})
+    dataset_context = get_dataset_context(request)
+    col_meta = dataset_context.get("dataset_structural_metadata", {})
+    var_n_alias_map = dataset_context.get("var_n_alias_map", {})
 
     output = await invoke_agent(
         services,
@@ -38,6 +40,7 @@ async def visualize(request: Request, body: VisualizeRequest) -> VisualizeRespon
             "statistical_results": body.statistical_results,
             "intent_object": body.intent_object,
             "dataset_structural_metadata": col_meta,
+            "var_n_alias_map": var_n_alias_map,
             "inject_raw_data_rows": False,
         },
         input_schema_ref="cie://schemas/task-context.schema.json",

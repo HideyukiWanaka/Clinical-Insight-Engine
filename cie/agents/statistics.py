@@ -394,6 +394,31 @@ _CODE_CANDIDATE_RE = re.compile(
 )
 
 
+def _resolve_column_metadata(column_metadata: dict, alias_map: dict) -> dict:
+    """Relabel var_n-keyed metadata with real column names for R-gen prompts.
+
+    dataset_structural_metadata is var_n-keyed (Planner privacy boundary,
+    DQ-001), but dataset.csv on disk keeps its original headers, so the
+    R-generation prompt needs real column names for the LLM to write R code
+    that actually reads the right columns.
+    """
+    if not alias_map:
+        return column_metadata
+    return {alias_map.get(k, k): v for k, v in column_metadata.items()}
+
+
+def _resolve_variable_list(variables: list, alias_map: dict) -> list:
+    """Translate var_n identifiers in outcome/predictor_variables to real names."""
+    if not alias_map:
+        return variables
+    resolved = []
+    for item in variables:
+        if isinstance(item, dict) and "var_n" in item:
+            item = {**item, "var_n": alias_map.get(item["var_n"], item["var_n"])}
+        resolved.append(item)
+    return resolved
+
+
 class StatisticsAgent(BaseAgent):
     """Statistical method selection and analysis plan generation agent.
 
@@ -601,6 +626,8 @@ class StatisticsAgent(BaseAgent):
             or payload.get("variable_metadata")
             or {}
         )
+        alias_map = payload.get("var_n_alias_map") or {}
+        column_metadata = _resolve_column_metadata(column_metadata, alias_map)
         column_signature = json.dumps(column_metadata, sort_keys=True, ensure_ascii=False)
 
         # 1. Cache lookup (token-saving for common analyses)
@@ -641,7 +668,7 @@ class StatisticsAgent(BaseAgent):
         )
         system_prompt = _R_GEN_SYSTEM_PROMPT + skill_block
         user_message = self._build_r_gen_user_message(
-            method, intent_obj, column_metadata, references
+            method, intent_obj, column_metadata, references, alias_map
         )
         # Prefill "```r\n" to force the model to start inside the fenced block.
         # This bypasses thinking-model preamble (Gemini 2.x) and any tendency to
@@ -682,7 +709,11 @@ class StatisticsAgent(BaseAgent):
 
     @staticmethod
     def _build_r_gen_user_message(
-        method: dict, intent_obj: dict, column_metadata: dict, references: list
+        method: dict,
+        intent_obj: dict,
+        column_metadata: dict,
+        references: list,
+        alias_map: dict | None = None,
     ) -> str:
         """Assemble the user turn for R-script generation."""
         reference_block = "\n\n".join(
@@ -700,8 +731,12 @@ class StatisticsAgent(BaseAgent):
                 "objective": intent_obj.get("objective"),
                 "outcome_type": intent_obj.get("outcome_type"),
                 "paired": intent_obj.get("paired"),
-                "outcome_variables": intent_obj.get("outcome_variables", []),
-                "predictor_variables": intent_obj.get("predictor_variables", []),
+                "outcome_variables": _resolve_variable_list(
+                    intent_obj.get("outcome_variables", []), alias_map or {}
+                ),
+                "predictor_variables": _resolve_variable_list(
+                    intent_obj.get("predictor_variables", []), alias_map or {}
+                ),
                 "distribution_assumptions": intent_obj.get("distribution_assumptions"),
             },
             "dataset_columns": column_metadata,
@@ -768,6 +803,8 @@ class StatisticsAgent(BaseAgent):
             or payload.get("variable_metadata")
             or {}
         )
+        alias_map = payload.get("var_n_alias_map") or {}
+        column_metadata = _resolve_column_metadata(column_metadata, alias_map)
 
         alt_method_id = _METHOD_ALTERNATIVES.get(method["method_id"])
         alt_method = _METHODS.get(alt_method_id) if alt_method_id else None
@@ -793,7 +830,7 @@ class StatisticsAgent(BaseAgent):
         )
         system_prompt = _R_GEN_CHAT_SYSTEM_PROMPT + skill_block
         user_message = self._build_conversational_user_message(
-            method, alt_method, intent_obj, column_metadata, references
+            method, alt_method, intent_obj, column_metadata, references, alias_map
         )
 
         try:
@@ -824,6 +861,7 @@ class StatisticsAgent(BaseAgent):
         intent_obj: dict,
         column_metadata: dict,
         references: list,
+        alias_map: dict | None = None,
     ) -> str:
         """Assemble the user turn for conversational proposal generation."""
         reference_block = "\n\n".join(
@@ -851,8 +889,12 @@ class StatisticsAgent(BaseAgent):
                 "objective": intent_obj.get("objective"),
                 "outcome_type": intent_obj.get("outcome_type"),
                 "paired": intent_obj.get("paired"),
-                "outcome_variables": intent_obj.get("outcome_variables", []),
-                "predictor_variables": intent_obj.get("predictor_variables", []),
+                "outcome_variables": _resolve_variable_list(
+                    intent_obj.get("outcome_variables", []), alias_map or {}
+                ),
+                "predictor_variables": _resolve_variable_list(
+                    intent_obj.get("predictor_variables", []), alias_map or {}
+                ),
                 "distribution_assumptions": intent_obj.get("distribution_assumptions"),
             },
             "dataset_columns": column_metadata,
@@ -931,6 +973,8 @@ class StatisticsAgent(BaseAgent):
             or payload.get("variable_metadata")
             or {}
         )
+        alias_map = payload.get("var_n_alias_map") or {}
+        column_metadata = _resolve_column_metadata(column_metadata, alias_map)
 
         # RAG retrieval (same query terms as fresh analysis)
         references: list = []
@@ -959,6 +1003,7 @@ class StatisticsAgent(BaseAgent):
             continuation_query=continuation_query,
             prior_statistical_results=prior_statistical_results,
             prior_r_script=prior_r_script,
+            alias_map=alias_map,
         )
 
         _PREFILL = "```r\n"
@@ -988,6 +1033,7 @@ class StatisticsAgent(BaseAgent):
         continuation_query: str,
         prior_statistical_results: dict | None,
         prior_r_script: str | None,
+        alias_map: dict | None = None,
     ) -> str:
         """Assemble the user turn for continuation R-script generation."""
         reference_block = "\n\n".join(
@@ -1025,8 +1071,12 @@ class StatisticsAgent(BaseAgent):
                 "objective": intent_obj.get("objective"),
                 "outcome_type": intent_obj.get("outcome_type"),
                 "paired": intent_obj.get("paired"),
-                "outcome_variables": intent_obj.get("outcome_variables", []),
-                "predictor_variables": intent_obj.get("predictor_variables", []),
+                "outcome_variables": _resolve_variable_list(
+                    intent_obj.get("outcome_variables", []), alias_map or {}
+                ),
+                "predictor_variables": _resolve_variable_list(
+                    intent_obj.get("predictor_variables", []), alias_map or {}
+                ),
             },
             "dataset_columns": column_metadata,
         }

@@ -107,11 +107,11 @@ def build_dataset_context(
                 inferred = "categorical_binary"
             else:
                 inferred = "categorical_nominal"
-            metadata[str(col)] = {
+            var_n = f"var_{idx}"
+            metadata[var_n] = {
                 "inferred_type": inferred,
                 "unique_count": int(series.nunique(dropna=True)),
             }
-            var_n = f"var_{idx}"
             var_n_alias_map[var_n] = str(col)
             missing_count = int(series.isna().sum())
             dq_columns.append({

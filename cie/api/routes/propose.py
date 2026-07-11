@@ -26,12 +26,15 @@ async def propose(request: Request, body: ProposeRequest) -> ProposeResponse:
     """
     services = get_services(request)
     execution_id = new_execution_id()
-    col_meta = get_dataset_context(request).get("dataset_structural_metadata", {})
+    dataset_context = get_dataset_context(request)
+    col_meta = dataset_context.get("dataset_structural_metadata", {})
+    var_n_alias_map = dataset_context.get("var_n_alias_map", {})
 
     payload: dict = {
         "data_quality_report": {"quality_gate_passed": True},
         "intent_object": body.intent_object or {},
         "dataset_structural_metadata": col_meta,
+        "var_n_alias_map": var_n_alias_map,
         "inject_raw_data_rows": False,
     }
     if body.continuation_query:
