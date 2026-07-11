@@ -854,7 +854,8 @@ class StatisticsAgent(BaseAgent):
         )
         system_prompt = _R_GEN_CHAT_SYSTEM_PROMPT + skill_block
         user_message = self._build_conversational_user_message(
-            method, alt_method, intent_obj, column_metadata, references, alias_map
+            method, alt_method, intent_obj, column_metadata, references, alias_map,
+            conversation_history=payload.get("conversation_history") or [],
         )
 
         try:
@@ -886,11 +887,25 @@ class StatisticsAgent(BaseAgent):
         column_metadata: dict,
         references: list,
         alias_map: dict | None = None,
+        conversation_history: list | None = None,
     ) -> str:
         """Assemble the user turn for conversational proposal generation."""
         reference_block = "\n\n".join(
             f"### Reference: {r.title}\n{r.excerpt()}" for r in references
         ) or "(no matching reference documents found)"
+
+        history_block = ""
+        if conversation_history:
+            lines = [
+                f"{t.get('role', 'user')}: {t.get('text', '')}"
+                for t in conversation_history
+                if isinstance(t, dict)
+            ]
+            if lines:
+                history_block = (
+                    "=== CONVERSATION SO FAR (oldest→newest; tailor your "
+                    "explanation to it) ===\n" + "\n".join(lines) + "\n\n"
+                )
 
         request = {
             "primary_method": {
@@ -926,6 +941,7 @@ class StatisticsAgent(BaseAgent):
         return (
             "A user in the chat workbench asked for this analysis. Recommend an "
             "approach and provide selectable R code candidate(s).\n\n"
+            f"{history_block}"
             "=== ANALYSIS REQUEST ===\n"
             f"{json.dumps(request, ensure_ascii=False, indent=2)}\n\n"
             "=== KNOWLEDGE REFERENCE PATTERNS (ground your script in these) ===\n"

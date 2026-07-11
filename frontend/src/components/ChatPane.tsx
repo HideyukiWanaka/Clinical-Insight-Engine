@@ -49,6 +49,11 @@ interface ChatPaneProps {
 let seq = 0;
 const nextId = () => `m${++seq}`;
 
+// Confidence at/above which an unambiguous intent skips the manual confirm gate
+// and advances straight to code proposal (matches the Planner's 0.7 threshold,
+// analysis-request.schema.json confidence_score / CA-002).
+const HIGH_CONFIDENCE = 0.7;
+
 // Send-shortcut label: ⌘ on macOS, Ctrl elsewhere (both are accepted).
 const modKeyLabel = /Mac|iP(hone|ad|od)/.test(navigator.platform) ? "⌘" : "Ctrl";
 
@@ -220,6 +225,9 @@ export function ChatPane({
     setInput("");
     add({ id: nextId(), kind: "user", text: prompt });
     setBusy(true);
+    // Set when we auto-advance into propose(): propose() then owns the busy
+    // flag, so this handler must not clear it out from under the running call.
+    let handedOff = false;
     try {
       const res = await client.intent({
         prompt,
@@ -234,6 +242,18 @@ export function ChatPane({
           options: (res.clarification_options ?? []).map(toClarificationOption),
           intent: res.intent_object,
         });
+      } else if ((res.confidence_score ?? 0) >= HIGH_CONFIDENCE) {
+        // High-confidence & unambiguous → skip the manual confirm click and go
+        // straight to the proposal. We still echo what was understood (an "ai"
+        // bubble) so the step is transparent, never silent — the user can
+        // correct it in the next turn if it's wrong.
+        add({
+          id: nextId(),
+          kind: "ai",
+          text: `${intentSummary(res.intent_object)}\n解析コードを提案します。`,
+        });
+        handedOff = true;
+        void propose(res.intent_object);
       } else {
         add({
           id: nextId(),
@@ -245,7 +265,7 @@ export function ChatPane({
     } catch (err) {
       pushError(err);
     } finally {
-      setBusy(false);
+      if (!handedOff) setBusy(false);
     }
   }
 
@@ -271,10 +291,14 @@ export function ChatPane({
 
   async function propose(intent: Record<string, unknown>) {
     if (busy) return;
+    const history = buildHistory();
     setBusy(true);
     add({ id: nextId(), kind: "system", text: "解析コードを生成しています…" });
     try {
-      const res = await client.propose({ intent_object: intent });
+      const res = await client.propose({
+        intent_object: intent,
+        conversation_history: history,
+      });
       if (!res.analysis_proposal) {
         const reason =
           res.r_script_provenance?.reason || "提案を生成できませんでした。";

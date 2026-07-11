@@ -35,6 +35,9 @@ async def propose(request: Request, body: ProposeRequest) -> ProposeResponse:
         "intent_object": body.intent_object or {},
         "dataset_structural_metadata": col_meta,
         "var_n_alias_map": var_n_alias_map,
+        "conversation_history": [
+            {"role": t.role, "text": t.text} for t in body.conversation_history
+        ],
         "inject_raw_data_rows": False,
     }
     if body.continuation_query:

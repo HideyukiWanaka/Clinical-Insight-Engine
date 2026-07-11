@@ -143,6 +143,8 @@ export interface ProposeRequest {
   continuation_query?: string | null;
   prior_statistical_results?: Record<string, unknown> | null;
   prior_r_script?: string | null;
+  // Recent chat turns so the conversational explanation reflects the dialogue.
+  conversation_history?: ConversationTurn[];
 }
 
 export interface CodeCandidate {

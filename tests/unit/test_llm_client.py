@@ -260,3 +260,110 @@ class TestFactory:
         monkeypatch.delenv("CIE_ACTIVE_AI_PROVIDER", raising=False)
         c = llm_client_from_env(model="claude-opus-4-8")
         assert c.model == "claude-opus-4-8"
+
+
+# ---------------------------------------------------------------------------
+# Multi-turn + streaming (Phase 1 additions)
+# ---------------------------------------------------------------------------
+
+
+class _FakeStreamResponse:
+    def __init__(self, status_code: int, lines: list[str]) -> None:
+        self.status_code = status_code
+        self._lines = lines
+
+    async def aiter_lines(self):
+        for ln in self._lines:
+            yield ln
+
+    async def aread(self) -> bytes:
+        return b"stream error body"
+
+
+class _FakeStreamCM:
+    def __init__(self, resp: _FakeStreamResponse) -> None:
+        self._resp = resp
+
+    async def __aenter__(self) -> _FakeStreamResponse:
+        return self._resp
+
+    async def __aexit__(self, *_: object) -> bool:
+        return False
+
+
+def _mock_stream_http(lines: list[str], status: int = 200) -> MagicMock:
+    http = MagicMock()
+    http.stream = MagicMock(return_value=_FakeStreamCM(_FakeStreamResponse(status, lines)))
+    return http
+
+
+async def _collect(agen) -> str:
+    return "".join([chunk async for chunk in agen])
+
+
+class TestMultiTurn:
+    @pytest.mark.asyncio
+    async def test_complete_messages_sends_all_turns_anthropic(self):
+        http = _mock_http(200, _anthropic_body("ok"))
+        c = LLMClient("anthropic", "key", http_client=http)
+        turns = [
+            {"role": "user", "content": "男女の血圧を比較したい"},
+            {"role": "assistant", "content": "収縮期血圧で比較しますか？"},
+            {"role": "user", "content": "はい"},
+        ]
+        await c.complete_messages("sys", turns)
+        body = http.post.call_args[1]["json"]
+        assert body["system"] == "sys"
+        assert [m["role"] for m in body["messages"]] == ["user", "assistant", "user"]
+        assert body["messages"][-1]["content"] == "はい"
+
+    @pytest.mark.asyncio
+    async def test_complete_still_single_user_turn(self):
+        # Backward-compat: complete() must still produce one user message.
+        http = _mock_http(200, _anthropic_body("ok"))
+        c = LLMClient("anthropic", "key", http_client=http)
+        await c.complete("my system", "my user")
+        body = http.post.call_args[1]["json"]
+        assert body["messages"] == [{"role": "user", "content": "my user"}]
+
+
+class TestStreaming:
+    @pytest.mark.asyncio
+    async def test_stream_anthropic_yields_text_deltas(self):
+        lines = [
+            "event: content_block_delta",
+            'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}',
+            "",
+            'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":" 世界"}}',
+            "data: [DONE]",
+        ]
+        c = LLMClient("anthropic", "key", http_client=_mock_stream_http(lines))
+        out = await _collect(c.stream_messages("sys", [{"role": "user", "content": "hi"}]))
+        assert out == "Hello 世界"
+
+    @pytest.mark.asyncio
+    async def test_stream_openai_yields_delta_content(self):
+        lines = [
+            'data: {"choices":[{"delta":{"content":"Foo"}}]}',
+            'data: {"choices":[{"delta":{"content":"bar"}}]}',
+            "data: [DONE]",
+        ]
+        c = LLMClient("openai", "key", http_client=_mock_stream_http(lines))
+        out = await _collect(c.stream_messages("sys", [{"role": "user", "content": "hi"}]))
+        assert out == "Foobar"
+
+    @pytest.mark.asyncio
+    async def test_stream_prefill_is_yielded_first(self):
+        lines = ['data: {"choices":[{"delta":{"content":"code"}}]}', "data: [DONE]"]
+        c = LLMClient("openai", "key", http_client=_mock_stream_http(lines))
+        out = await _collect(
+            c.stream_messages("sys", [{"role": "user", "content": "x"}], assistant_prefill="```r\n")
+        )
+        assert out == "```r\ncode"
+
+    @pytest.mark.asyncio
+    async def test_stream_http_error_raises_llm_error(self):
+        c = LLMClient("anthropic", "key", http_client=_mock_stream_http([], status=429))
+        with pytest.raises(LLMError) as exc_info:
+            await _collect(c.stream_messages("sys", [{"role": "user", "content": "x"}]))
+        assert exc_info.value.status_code == 429

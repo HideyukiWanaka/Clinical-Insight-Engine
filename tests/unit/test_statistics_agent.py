@@ -366,6 +366,35 @@ class TestConversationalProposal:
             "=== EXPLANATION ===\nNo code here.\n"
         ) is None
 
+    def test_conversation_history_included_in_user_message(self) -> None:
+        """Prior chat turns are surfaced to the conversational prompt (P1-B)."""
+        msg = StatisticsAgent._build_conversational_user_message(
+            method={"method_id": "independent_samples_t_test", "r_function": "t.test"},
+            alt_method=None,
+            intent_obj={"objective": "between_group_comparison"},
+            column_metadata={"収縮期血圧_mmHg": {"inferred_type": "continuous"}},
+            references=[],
+            alias_map={},
+            conversation_history=[
+                {"role": "user", "text": "男女の血圧を比較したい"},
+                {"role": "assistant", "text": "収縮期血圧で比較しますね"},
+            ],
+        )
+        assert "CONVERSATION SO FAR" in msg
+        assert "男女の血圧を比較したい" in msg
+
+    def test_no_history_block_when_empty(self) -> None:
+        msg = StatisticsAgent._build_conversational_user_message(
+            method={"method_id": "x", "r_function": "t.test"},
+            alt_method=None,
+            intent_obj={},
+            column_metadata={},
+            references=[],
+            alias_map={},
+            conversation_history=[],
+        )
+        assert "CONVERSATION SO FAR" not in msg
+
     async def test_conversational_mode_produces_analysis_proposal(
         self,
         mock_policy_engine: MagicMock,

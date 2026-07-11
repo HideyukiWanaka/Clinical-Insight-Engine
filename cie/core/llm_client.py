@@ -15,7 +15,9 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import os
+from collections.abc import AsyncIterator
 from typing import Literal
 
 import httpx
@@ -58,6 +60,24 @@ _ENV_KEY_NAMES: dict[str, str] = {
 # generous ceiling that comfortably covers thinking + full output.
 _DEFAULT_MAX_TOKENS = 16384
 _DEFAULT_TIMEOUT = 60.0
+
+
+def _parse_sse_data(line: str) -> dict | None:
+    """Parse one SSE line into a JSON event, or None for non-data/keepalive lines.
+
+    Both Anthropic and OpenAI-compatible streams send ``data: {json}`` lines
+    (plus ``event:``/blank keepalives and a terminal ``data: [DONE]``). Returns
+    the decoded object for data lines and None for everything else.
+    """
+    if not line or not line.startswith("data:"):
+        return None
+    payload = line[len("data:"):].strip()
+    if not payload or payload == "[DONE]":
+        return None
+    try:
+        return json.loads(payload)
+    except json.JSONDecodeError:
+        return None
 
 
 class LLMError(Exception):
@@ -147,6 +167,8 @@ class LLMClient:
     ) -> str:
         """Send a system + user prompt and return the text completion.
 
+        Thin single-turn wrapper over :meth:`complete_messages`.
+
         Args:
             system:            System prompt (instructions / persona).
             user:              User message content.
@@ -164,52 +186,160 @@ class LLMClient:
         Raises:
             LLMError: On HTTP errors or unexpected response shape.
         """
-        if self._http is not None:
-            return await self._dispatch(self._http, system, user, assistant_prefill)
-        async with httpx.AsyncClient() as http:
-            return await self._dispatch(http, system, user, assistant_prefill)
+        return await self.complete_messages(
+            system, [{"role": "user", "content": user}], assistant_prefill
+        )
 
-    async def _dispatch(
+    async def complete_messages(
+        self,
+        system: str,
+        messages: list[dict],
+        assistant_prefill: str | None = None,
+    ) -> str:
+        """Multi-turn completion.
+
+        Args:
+            system:            System prompt (instructions / persona).
+            messages:          Ordered turns ``[{"role": "user"|"assistant",
+                               "content": str}, ...]`` (oldest→newest).
+            assistant_prefill: Optional assistant-turn prefix (see
+                               :meth:`complete`), prepended to the result.
+
+        Returns:
+            The model's text response (prefill included).
+        """
+        if self._http is not None:
+            return await self._dispatch_messages(
+                self._http, system, messages, assistant_prefill
+            )
+        async with httpx.AsyncClient() as http:
+            return await self._dispatch_messages(
+                http, system, messages, assistant_prefill
+            )
+
+    async def stream_messages(
+        self,
+        system: str,
+        messages: list[dict],
+        assistant_prefill: str | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream a multi-turn completion as incremental text chunks (SSE).
+
+        Yields text deltas as the provider produces them so callers can render
+        a live, token-by-token reply. The concatenation of all yielded chunks
+        equals what :meth:`complete_messages` would return (prefill included).
+
+        Raises:
+            LLMError: On HTTP errors or a malformed stream.
+        """
+        if self._http is not None:
+            async for chunk in self._stream_dispatch(
+                self._http, system, messages, assistant_prefill
+            ):
+                yield chunk
+        else:
+            async with httpx.AsyncClient() as http:
+                async for chunk in self._stream_dispatch(
+                    http, system, messages, assistant_prefill
+                ):
+                    yield chunk
+
+    async def _dispatch_messages(
         self,
         http: httpx.AsyncClient,
         system: str,
-        user: str,
+        messages: list[dict],
         assistant_prefill: str | None = None,
     ) -> str:
         if self._provider == "anthropic":
-            return await self._complete_anthropic(http, system, user, assistant_prefill)
+            return await self._complete_anthropic(
+                http, system, messages, assistant_prefill
+            )
+        return await self._complete_openai_compat(
+            http, system, messages, assistant_prefill
+        )
+
+    async def _stream_dispatch(
+        self,
+        http: httpx.AsyncClient,
+        system: str,
+        messages: list[dict],
+        assistant_prefill: str | None = None,
+    ) -> AsyncIterator[str]:
+        if self._provider == "anthropic":
+            gen = self._stream_anthropic(http, system, messages, assistant_prefill)
         else:
-            return await self._complete_openai_compat(http, system, user, assistant_prefill)
+            gen = self._stream_openai_compat(http, system, messages, assistant_prefill)
+        async for chunk in gen:
+            yield chunk
 
     # ------------------------------------------------------------------
-    # Provider-specific implementations
+    # Provider-specific payloads / headers
+    # ------------------------------------------------------------------
+
+    def _anthropic_payload(
+        self, system: str, messages: list[dict], prefill: str | None, stream: bool
+    ) -> dict:
+        msgs = list(messages)
+        if prefill:
+            msgs = [*msgs, {"role": "assistant", "content": prefill}]
+        payload: dict = {
+            "model": self._model,
+            "max_tokens": self._max_tokens,
+            "system": system,
+            "messages": msgs,
+        }
+        if stream:
+            payload["stream"] = True
+        return payload
+
+    def _anthropic_headers(self) -> dict:
+        return {
+            "x-api-key": self._api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+
+    def _openai_payload(
+        self, system: str, messages: list[dict], prefill: str | None, stream: bool
+    ) -> dict:
+        msgs: list[dict] = [{"role": "system", "content": system}, *messages]
+        if prefill:
+            msgs.append({"role": "assistant", "content": prefill})
+        payload: dict = {
+            "model": self._model,
+            "max_tokens": self._max_tokens,
+            "messages": msgs,
+        }
+        if stream:
+            payload["stream"] = True
+        return payload
+
+    def _openai_headers(self) -> dict:
+        return {
+            "Authorization": f"Bearer {self._api_key}",
+            "content-type": "application/json",
+        }
+
+    # ------------------------------------------------------------------
+    # Provider-specific implementations (non-streaming)
     # ------------------------------------------------------------------
 
     async def _complete_anthropic(
         self,
         http: httpx.AsyncClient,
         system: str,
-        user: str,
+        messages: list[dict],
         assistant_prefill: str | None = None,
     ) -> str:
         """Call the Anthropic Messages API."""
-        messages: list[dict] = [{"role": "user", "content": user}]
-        if assistant_prefill:
-            messages.append({"role": "assistant", "content": assistant_prefill})
         try:
             response = await http.post(
                 self._endpoint,
-                json={
-                    "model": self._model,
-                    "max_tokens": self._max_tokens,
-                    "system": system,
-                    "messages": messages,
-                },
-                headers={
-                    "x-api-key": self._api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
+                json=self._anthropic_payload(
+                    system, messages, assistant_prefill, stream=False
+                ),
+                headers=self._anthropic_headers(),
                 timeout=self._timeout,
             )
             response.raise_for_status()
@@ -231,7 +361,7 @@ class LLMClient:
         self,
         http: httpx.AsyncClient,
         system: str,
-        user: str,
+        messages: list[dict],
         assistant_prefill: str | None = None,
     ) -> str:
         """Call an OpenAI-compatible Chat Completions endpoint.
@@ -239,24 +369,13 @@ class LLMClient:
         Works for both OpenAI and Google Gemini (which exposes an
         OpenAI-compatible REST endpoint at the configured URL).
         """
-        messages: list[dict] = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ]
-        if assistant_prefill:
-            messages.append({"role": "assistant", "content": assistant_prefill})
         try:
             response = await http.post(
                 self._endpoint,
-                json={
-                    "model": self._model,
-                    "max_tokens": self._max_tokens,
-                    "messages": messages,
-                },
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "content-type": "application/json",
-                },
+                json=self._openai_payload(
+                    system, messages, assistant_prefill, stream=False
+                ),
+                headers=self._openai_headers(),
                 timeout=self._timeout,
             )
             response.raise_for_status()
@@ -272,6 +391,104 @@ class LLMClient:
             raise
         except Exception as exc:
             raise LLMError(str(exc), provider=self._provider) from exc
+
+    # ------------------------------------------------------------------
+    # Provider-specific implementations (streaming, SSE)
+    # ------------------------------------------------------------------
+
+    async def _stream_anthropic(
+        self,
+        http: httpx.AsyncClient,
+        system: str,
+        messages: list[dict],
+        assistant_prefill: str | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream the Anthropic Messages API (content_block_delta events)."""
+        if assistant_prefill:
+            yield assistant_prefill
+        payload = self._anthropic_payload(
+            system, messages, assistant_prefill, stream=True
+        )
+        try:
+            async with http.stream(
+                "POST",
+                self._endpoint,
+                json=payload,
+                headers=self._anthropic_headers(),
+                timeout=self._timeout,
+            ) as response:
+                await self._raise_for_stream_status(response, "anthropic")
+                async for line in response.aiter_lines():
+                    evt = _parse_sse_data(line)
+                    if evt is None:
+                        continue
+                    if evt.get("type") == "content_block_delta":
+                        text = (evt.get("delta") or {}).get("text")
+                        if text:
+                            yield text
+        except httpx.HTTPStatusError as exc:
+            raise LLMError(
+                f"Anthropic API error {exc.response.status_code}",
+                provider="anthropic",
+                status_code=exc.response.status_code,
+            ) from exc
+        except LLMError:
+            raise
+        except Exception as exc:
+            raise LLMError(str(exc), provider="anthropic") from exc
+
+    async def _stream_openai_compat(
+        self,
+        http: httpx.AsyncClient,
+        system: str,
+        messages: list[dict],
+        assistant_prefill: str | None = None,
+    ) -> AsyncIterator[str]:
+        """Stream an OpenAI-compatible Chat Completions endpoint (delta.content)."""
+        if assistant_prefill:
+            yield assistant_prefill
+        payload = self._openai_payload(
+            system, messages, assistant_prefill, stream=True
+        )
+        try:
+            async with http.stream(
+                "POST",
+                self._endpoint,
+                json=payload,
+                headers=self._openai_headers(),
+                timeout=self._timeout,
+            ) as response:
+                await self._raise_for_stream_status(response, self._provider)
+                async for line in response.aiter_lines():
+                    evt = _parse_sse_data(line)
+                    if evt is None:
+                        continue
+                    choices = evt.get("choices") or []
+                    if choices:
+                        text = (choices[0].get("delta") or {}).get("content")
+                        if text:
+                            yield text
+        except httpx.HTTPStatusError as exc:
+            raise LLMError(
+                f"{self._provider} API error {exc.response.status_code}",
+                provider=self._provider,
+                status_code=exc.response.status_code,
+            ) from exc
+        except LLMError:
+            raise
+        except Exception as exc:
+            raise LLMError(str(exc), provider=self._provider) from exc
+
+    @staticmethod
+    async def _raise_for_stream_status(response: httpx.Response, provider: str) -> None:
+        """Read the body and raise LLMError when a streamed response is an error."""
+        if response.status_code >= 400:
+            body = await response.aread()
+            raise LLMError(
+                f"{provider} API error {response.status_code}: {body[:200]!r}",
+                provider=provider,
+                status_code=response.status_code,
+            )
 
     # ------------------------------------------------------------------
     # Lifecycle helpers
@@ -328,4 +545,4 @@ def llm_client_from_env(
     return LLMClient(provider=resolved_provider, api_key=api_key, model=model)
 
 
-__all__ = ["LLMClient", "LLMError", "Provider", "llm_client_from_env"]
+__all__ = ["LLMClient", "LLMError", "Provider", "llm_client_from_env", "_parse_sse_data"]

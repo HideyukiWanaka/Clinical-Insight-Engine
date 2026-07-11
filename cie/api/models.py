@@ -80,6 +80,9 @@ class ProposeRequest(BaseModel):
     continuation_query: str | None = None
     prior_statistical_results: dict[str, Any] | None = None
     prior_r_script: str | None = None
+    # Recent chat turns (oldest→newest) so the Statistics agent's conversational
+    # explanation reflects the dialogue, not just the intent in isolation.
+    conversation_history: list[ConversationTurn] = Field(default_factory=list)
 
 
 class ProposeResponse(BaseModel):
