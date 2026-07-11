@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 from datetime import UTC
+from pathlib import Path
 
 
 class ExcelParseError(ValueError):
@@ -47,8 +48,28 @@ def excel_sheet_to_csv_bytes(excel_bytes: bytes, sheet_name: str) -> bytes:
     return df.to_csv(index=False).encode("utf-8")
 
 
-def build_dataset_context(csv_bytes: bytes | None) -> dict:
+def build_dataset_context(
+    csv_bytes: bytes | None,
+    *,
+    workspace_dir: str | Path,
+    source_name: str | None = None,
+) -> dict:
     """Place the uploaded dataset where R can read it and derive column metadata.
+
+    ``workspace_dir`` must be the same path the rest of the running process
+    was wired to at startup (``services["workspace_dir"]`` — see
+    ``cie/api/services.py``), not re-read from :class:`CIEConfig` here. The
+    storage-location setting can be changed via ``POST
+    /api/settings/storage/workspace_directory``, but that only writes ``.env``
+    for the *next* launch (every already-wired R executor/agent keeps the old
+    path in memory) — re-reading config fresh in this function would make
+    dataset uploads jump to the new path immediately while everything else
+    still writes to the old one.
+
+    ``source_name`` is the user-facing origin label (original filename, plus
+    the sheet name for Excel) kept only so the UI can show *which* file is the
+    current 解析対象 — it is echoed back in dataset summaries and never enters
+    the LLM/agents payload.
 
     Writes the CSV to ``<workspace>/dataset.csv`` (the path the generated R
     script reads via WORKSPACE_DIR) and returns a ``dataset_context`` dict that
@@ -63,15 +84,11 @@ def build_dataset_context(csv_bytes: bytes | None) -> dict:
     if not csv_bytes:
         return {}
 
-    import io
     from datetime import datetime
-    from pathlib import Path
 
     import pandas as pd
 
-    from cie.core.config import CIEConfig
-
-    workspace = Path(CIEConfig().workspace_directory)
+    workspace = Path(workspace_dir)
     workspace.mkdir(parents=True, exist_ok=True)
     (workspace / "dataset.csv").write_bytes(csv_bytes)
 
@@ -126,6 +143,7 @@ def build_dataset_context(csv_bytes: bytes | None) -> dict:
         # (validate_dataset / classify_variables / detect_missing_values /
         # detect_outliers). Aggregates only — DQ-001.
         "dataset_id": "uploaded_dataset",
+        "source_name": source_name,
         "metadata_type": "validated_structural",
         "row_count": row_count,
         "column_count": len(dq_columns),

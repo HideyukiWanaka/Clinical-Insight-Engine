@@ -8,8 +8,11 @@ interface HeaderProps {
   onToggleTheme: () => void;
   /** Open the 解析データ (dataset upload) modal (§5 別入口). */
   onOpenDataset: () => void;
-  /** True once a dataset is registered — shows a small "取り込み済み" badge. */
+  /** True once a dataset is registered — shows a badge with the file name. */
   datasetUploaded: boolean;
+  /** Origin label of the registered dataset (filename / sheet) — shown in the
+   *  badge so「今解析するデータがどれか」が常に見える。Local-only info. */
+  datasetName?: string | null;
   /** Open the 参考資料 (knowledge ingestion) modal — a separate 入口 (§5). */
   onOpenKnowledge: () => void;
   /** Open the セッショントークン設定 modal (local browser↔API auth only). */
@@ -30,6 +33,7 @@ export function Header({
   onToggleTheme,
   onOpenDataset,
   datasetUploaded,
+  datasetName,
   onOpenKnowledge,
   onOpenSettings,
   onOpenLlmSettings,
@@ -50,8 +54,16 @@ export function Header({
         >
           <span aria-hidden="true">🗂️</span> 解析データ
           {datasetUploaded && (
-            <span className="header__badge" data-testid="dataset-badge">
-              取り込み済み
+            <span
+              className="header__badge"
+              data-testid="dataset-badge"
+              title={
+                datasetName
+                  ? `解析対象: ${datasetName}`
+                  : "解析データは取り込み済みです"
+              }
+            >
+              {datasetName ?? "取り込み済み"}
             </span>
           )}
         </button>

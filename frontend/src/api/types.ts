@@ -30,9 +30,20 @@ export interface DatasetColumn {
 
 export interface DatasetUploadResponse {
   dataset_id: string;
+  // Origin label (filename, plus sheet name for Excel). Local-UI-only — shown
+  // in the header badge /「解析対象データ」banner so the user always sees which
+  // file the analysis runs against; never sent to the LLM pipeline.
+  source_name?: string | null;
+  registered_at?: string | null;
   row_count: number;
   column_count: number;
   columns: DatasetColumn[];
+}
+
+// GET /api/dataset — the currently registered dataset (null until an upload).
+// Lets the UI restore the 解析対象データ indicator after a page reload.
+export interface DatasetStatusResponse {
+  dataset: DatasetUploadResponse | null;
 }
 
 // POST /api/dataset/excel/inspect → sheet names of a pending Excel upload;
@@ -72,6 +83,20 @@ export interface LlmApiKeyRequest {
 
 export interface LlmApiKeyClearRequest {
   provider: string;
+}
+
+// /api/settings/storage — 保存先ルートの表示・変更。workspace_directory /
+// database_filepath are the paths *this running process* actually writes to
+// (already wired into every R executor/agent at startup — changing it only
+// takes effect on next launch, see cie/api/routes/settings.py).
+export interface StorageSettingsResponse {
+  workspace_directory: string;
+  database_filepath: string;
+  pending_workspace_directory?: string | null;
+}
+
+export interface StorageDirectoryRequest {
+  directory: string;
 }
 
 // POST /api/intent (§3.1)

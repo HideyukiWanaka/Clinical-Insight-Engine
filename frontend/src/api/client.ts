@@ -11,6 +11,7 @@
 
 import type {
   ConsoleMessage,
+  DatasetStatusResponse,
   DatasetUploadResponse,
   ErrorEnvelope,
   ExcelConfirmRequest,
@@ -37,6 +38,8 @@ import type {
   ReportResponse,
   RunRequest,
   RunResponse,
+  StorageDirectoryRequest,
+  StorageSettingsResponse,
   VisualizeRequest,
   VisualizeResponse,
   WorkspaceResetResponse,
@@ -265,6 +268,12 @@ export class CieApiClient {
     return this.post<DatasetUploadResponse>("/api/dataset/excel/confirm", body);
   }
 
+  /** GET /api/dataset — the currently registered dataset (null until an
+   *  upload). Restores the 解析対象データ indicator after a page reload. */
+  getDatasetStatus(): Promise<DatasetStatusResponse> {
+    return this.getJson<DatasetStatusResponse>("/api/dataset");
+  }
+
   /** POST /api/files — add a local file to the workspace under uploads/.
    *  Never overwrites (the server suffixes duplicate names). */
   uploadWorkspaceFile(file: File): Promise<FileEntry> {
@@ -294,6 +303,28 @@ export class CieApiClient {
   /** POST /api/settings/llm/key/clear — remove a provider's stored key. */
   clearLlmApiKey(body: LlmApiKeyClearRequest): Promise<LlmSettingsResponse> {
     return this.post<LlmSettingsResponse>("/api/settings/llm/key/clear", body);
+  }
+
+  // ── 保存先ルート設定 (/api/settings/storage) ─────────────────────────────
+  // workspace_directory is wired into every R executor/agent at process
+  // startup, so unlike the LLM provider above, changing it here only
+  // persists to .env for the *next* launch — this process keeps using its
+  // current path (see cie/api/routes/settings.py).
+
+  /** GET /api/settings/storage — the paths this running process writes to. */
+  getStorageSettings(): Promise<StorageSettingsResponse> {
+    return this.getJson<StorageSettingsResponse>("/api/settings/storage");
+  }
+
+  /** POST /api/settings/storage/workspace_directory — persist a new
+   *  workspace root to .env. Takes effect on the next launch only. */
+  setWorkspaceDirectory(
+    body: StorageDirectoryRequest,
+  ): Promise<StorageSettingsResponse> {
+    return this.post<StorageSettingsResponse>(
+      "/api/settings/storage/workspace_directory",
+      body,
+    );
   }
 
   /** GET /api/files — read-only workspace listing (§3.6). */

@@ -13,6 +13,10 @@ interface PaneProps {
   flush?: boolean;
   /** Optional controls rendered in the header (e.g. the editor Run toolbar). */
   headerExtra?: ReactNode;
+  /** Optional pinned strip below the scrollable body (e.g. a persistent
+   *  storage-path indicator that should stay visible however long the file
+   *  list grows). Unlike `children`, this never scrolls out of view. */
+  footer?: ReactNode;
   children: ReactNode;
 }
 
@@ -25,6 +29,7 @@ export function Pane({
   onTabChange,
   flush,
   headerExtra,
+  footer,
   children,
 }: PaneProps) {
   return (
@@ -53,6 +58,7 @@ export function Pane({
       <div className={"pane__body" + (flush ? " pane__body--flush" : "")}>
         {children}
       </div>
+      {footer && <div className="pane__footer">{footer}</div>}
     </section>
   );
 }

@@ -78,6 +78,7 @@ def _make_services(tmp_path, **overrides) -> dict:
         "token_manager": CapabilityTokenManager(),
         "context_guard": FakeContextGuard(),
         "workspace_dir": str(tmp_path),
+        "database_filepath": str(tmp_path / "cie_database.db"),
         "planner": FakeAgent("planner", {
             "intent_object": {"objective": "between_group_comparison"},
             "confidence_score": 0.9,
@@ -312,3 +313,95 @@ def test_knowledge_reindex_is_501_phase5(client: TestClient) -> None:
     resp = client.post("/api/knowledge/reindex", headers=AUTH)
     assert resp.status_code == 501
     assert resp.json()["detail"]["error_code"] == "NOT_IMPLEMENTED"
+
+
+# ---------------------------------------------------------------------------
+# §3.1 前提 — dataset registration (source_name / GET status)
+# ---------------------------------------------------------------------------
+
+def test_dataset_registration_roundtrip(client: TestClient) -> None:
+    """POST /api/dataset keeps the origin filename; GET /api/dataset restores
+    the registered summary (UI reload) — aggregate-only, no row values."""
+    resp = client.get("/api/dataset", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["dataset"] is None
+
+    resp = client.post(
+        "/api/dataset", headers=AUTH,
+        files={"file": ("clinical_trial_2026.csv", b"sex,age\nM,41\nF,38\n", "text/csv")},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source_name"] == "clinical_trial_2026.csv"
+    assert body["row_count"] == 2
+
+    resp = client.get("/api/dataset", headers=AUTH)
+    dataset = resp.json()["dataset"]
+    assert dataset["source_name"] == "clinical_trial_2026.csv"
+    assert dataset["column_count"] == 2
+    # Aggregate-only (DQ-001): row values never leak through the status endpoint.
+    assert "41" not in str(dataset)
+
+
+# ---------------------------------------------------------------------------
+# /api/settings/storage — 保存先ルートの表示・変更
+# ---------------------------------------------------------------------------
+
+def test_storage_settings_get_reflects_running_process(client: TestClient, tmp_path) -> None:
+    resp = client.get("/api/settings/storage", headers=AUTH)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["workspace_directory"] == str(tmp_path)
+    assert body["pending_workspace_directory"] is None
+
+
+def test_storage_directory_change_persists_but_does_not_affect_running_process(
+    client: TestClient, tmp_path
+) -> None:
+    """A change is written to .env for next launch, but this process keeps
+    using its already-wired path (no split-brain between upload target and
+    R executor target — see build_dataset_context)."""
+    new_dir = tmp_path.parent / "new_cie_workspace"
+    resp = client.post(
+        "/api/settings/storage/workspace_directory",
+        headers=AUTH, json={"directory": str(new_dir)},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["pending_workspace_directory"] == str(new_dir)
+    # Still serving the original path until an actual restart.
+    assert body["workspace_directory"] == str(tmp_path)
+    assert new_dir.is_dir()
+
+    # A subsequent GET keeps showing the pending change until restart.
+    resp = client.get("/api/settings/storage", headers=AUTH)
+    assert resp.json()["pending_workspace_directory"] == str(new_dir)
+
+
+def test_storage_directory_change_rejects_relative_path(client: TestClient) -> None:
+    resp = client.post(
+        "/api/settings/storage/workspace_directory",
+        headers=AUTH, json={"directory": "relative/path"},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["error_code"] == "RELATIVE_PATH_REJECTED"
+
+
+def test_storage_directory_change_rejects_unwritable_path(
+    client: TestClient, tmp_path, monkeypatch
+) -> None:
+    # Simulate a permission failure rather than relying on real OS permissions
+    # (the CI/sandbox process may run as root, where nothing is unwritable).
+    import pathlib
+
+    def _raise_mkdir(self, *args, **kwargs):
+        raise PermissionError("simulated: permission denied")
+
+    monkeypatch.setattr(pathlib.Path, "mkdir", _raise_mkdir)
+
+    resp = client.post(
+        "/api/settings/storage/workspace_directory",
+        headers=AUTH, json={"directory": str(tmp_path / "unwritable")},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["error_code"] == "DIRECTORY_NOT_WRITABLE"

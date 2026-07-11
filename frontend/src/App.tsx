@@ -80,6 +80,25 @@ export default function App() {
   const onConnectedChange = useCallback(() => setTokenTick((n) => n + 1), []);
   const connected = apiClient.hasToken();
 
+  // Restore the 解析対象データ indicator after a page reload — the dataset
+  // registration lives on the API process (GET /api/dataset), not in the
+  // browser. Passive: a failure just leaves the indicator unset.
+  useEffect(() => {
+    if (!connected) return;
+    let cancelled = false;
+    apiClient
+      .getDatasetStatus()
+      .then((res) => {
+        if (!cancelled && res.dataset) setDatasetInfo(res.dataset);
+      })
+      .catch(() => {
+        /* passive restore — the modal upload path reports real errors */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [connected]);
+
   return (
     <div className="app">
       <Header
@@ -90,6 +109,7 @@ export default function App() {
         onToggleTheme={toggleTheme}
         onOpenDataset={() => setDatasetOpen(true)}
         datasetUploaded={datasetInfo != null}
+        datasetName={datasetInfo?.source_name ?? null}
         onOpenKnowledge={() => setKnowledgeOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenLlmSettings={() => setLlmSettingsOpen(true)}
@@ -183,6 +203,8 @@ export default function App() {
                 client={apiClient}
                 connected={connected}
                 refreshKey={refreshKey}
+                dataset={datasetInfo}
+                onOpenDataset={() => setDatasetOpen(true)}
               />
             </Panel>
             <PanelResizeHandle className="resize-handle" />

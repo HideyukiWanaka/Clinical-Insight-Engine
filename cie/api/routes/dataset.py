@@ -15,6 +15,7 @@ direct CSV upload.
 
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile
@@ -25,6 +26,7 @@ from cie.api.dataset import (
     excel_sheet_to_csv_bytes,
     list_excel_sheets,
 )
+from cie.api.deps import get_services
 from cie.api.models import ExcelConfirmRequest, ExcelInspectResponse
 from cie.api.upload_limits import read_upload_bounded
 
@@ -40,10 +42,26 @@ def _dataset_summary(context: dict) -> dict:
     """Aggregate-only summary of a registered dataset — never row values."""
     return {
         "dataset_id": context.get("dataset_id", "uploaded_dataset"),
+        # Origin label (filename / sheet) — local display only, never sent to
+        # the LLM pipeline. Lets the UI show *which* file is the 解析対象.
+        "source_name": context.get("source_name"),
+        "registered_at": context.get("created_at"),
         "row_count": context.get("row_count", 0),
         "column_count": context.get("column_count", 0),
         "columns": context.get("columns", []),
     }
+
+
+@router.get("/dataset")
+async def dataset_status(request: Request) -> dict:
+    """Return the currently registered dataset's aggregate summary (or null).
+
+    Lets the UI restore the「解析対象データ」indicator after a page reload —
+    the registration itself lives on ``app.state`` for the API process's
+    lifetime. Aggregate-only, same shape as ``POST /api/dataset``.
+    """
+    context = getattr(request.app.state, "dataset_context", None)
+    return {"dataset": _dataset_summary(context) if context else None}
 
 
 @router.post("/dataset")
@@ -62,7 +80,11 @@ async def register_dataset(request: Request, file: UploadFile) -> dict:
                 "detail": None,
             },
         )
-    context = build_dataset_context(csv_bytes)
+    context = build_dataset_context(
+        csv_bytes,
+        workspace_dir=get_services(request)["workspace_dir"],
+        source_name=Path(file.filename or "").name or None,
+    )
     request.app.state.dataset_context = context
     return _dataset_summary(context)
 
@@ -103,6 +125,7 @@ async def inspect_excel_dataset(
     request.app.state.dataset_excel_pending = {
         "upload_id": upload_id,
         "bytes": excel_bytes,
+        "filename": Path(file.filename or "").name,
     }
     return ExcelInspectResponse(upload_id=upload_id, sheet_names=sheet_names)
 
@@ -135,7 +158,13 @@ async def confirm_excel_dataset(request: Request, body: ExcelConfirmRequest) -> 
             },
         ) from exc
 
-    context = build_dataset_context(csv_bytes)
+    filename = pending.get("filename") or ""
+    source_name = f"{filename} / {body.sheet_name}" if filename else body.sheet_name
+    context = build_dataset_context(
+        csv_bytes,
+        workspace_dir=get_services(request)["workspace_dir"],
+        source_name=source_name,
+    )
     request.app.state.dataset_context = context
     request.app.state.dataset_excel_pending = None
     return _dataset_summary(context)
