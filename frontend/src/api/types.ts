@@ -59,6 +59,15 @@ export interface ExcelConfirmRequest {
   sheet_name: string;
 }
 
+// POST /api/dataset/from_existing — register a CSV/Excel file already sitting
+// in the workspace (as listed by GET /api/files) without re-uploading it.
+// The response is either a DatasetUploadResponse (CSV, registered
+// immediately) or an ExcelInspectResponse (Excel, awaiting sheet selection —
+// completed via the existing POST /api/dataset/excel/confirm).
+export interface DatasetFromExistingRequest {
+  path: string;
+}
+
 // /api/settings/llm — AI provider + API key management (distinct from the
 // X-CIE-Token session auth). Never carries a key value in responses.
 export interface LlmProviderStatus {

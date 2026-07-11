@@ -1,6 +1,20 @@
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, type CieApiClient } from "../api/client";
-import type { DatasetUploadResponse, ExcelInspectResponse } from "../api/types";
+import type {
+  DatasetUploadResponse,
+  ExcelInspectResponse,
+  FileEntry,
+} from "../api/types";
+
+/** CSV/Excel を解析データ候補として扱う拡張子（GET /api/files の一覧から
+ *  絞り込む — アップロードなしでワークスペース内の既存ファイルを選べるように）。 */
+const DATASET_CANDIDATE_RE = /\.(csv|xlsx|xls)$/i;
+
+function isExcelInspectResponse(
+  res: DatasetUploadResponse | ExcelInspectResponse,
+): res is ExcelInspectResponse {
+  return "sheet_names" in res;
+}
 
 interface DatasetModalProps {
   client: CieApiClient;
@@ -45,6 +59,34 @@ export function DatasetModal({
   const [sheetName, setSheetName] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // ワークスペース内の既存ファイル（CSV/Excel）— アップロードし直さずに
+  // 「このファイルを使う」で選べる候補一覧。読み込み失敗は静かに空のまま
+  // にする（主導線はアップロードなので、ここは補助的な一覧）。
+  const [existingFiles, setExistingFiles] = useState<FileEntry[]>([]);
+  const [existingLoading, setExistingLoading] = useState(false);
+
+  useEffect(() => {
+    if (!connected) return;
+    let cancelled = false;
+    setExistingLoading(true);
+    client
+      .listFiles()
+      .then((res) => {
+        if (!cancelled) {
+          setExistingFiles(res.files.filter((f) => DATASET_CANDIDATE_RE.test(f.path)));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setExistingFiles([]);
+      })
+      .finally(() => {
+        if (!cancelled) setExistingLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, connected]);
+
   function showError(err: unknown) {
     if (err instanceof ApiError) {
       setError({ message: err.message, detail: err.detail });
@@ -80,6 +122,34 @@ export function DatasetModal({
       if (inputRef.current) inputRef.current.value = "";
     }
   }
+
+  // 「このファイルを使う」— 既にワークスペースにあるCSV/Excelを再アップロード
+  // なしで解析データとして登録する（POST /api/dataset/from_existing）。
+  // Excelはシート選択が必要なので、通常のアップロード経路と同じ excelPending
+  // ステートに合流させ、既存のシート選択UI・confirm処理をそのまま再利用する。
+  const useExistingFile = useCallback(
+    async (path: string) => {
+      if (busy) return;
+      setError(null);
+      setExcelPending(null);
+      setBusy(true);
+      try {
+        const res = await client.registerExistingDataset({ path });
+        if (isExcelInspectResponse(res)) {
+          setExcelPending({ ...res, fileName: path });
+          setSheetName(res.sheet_names[0] ?? "");
+        } else {
+          setInfo(res);
+          onUploaded(res);
+        }
+      } catch (err) {
+        showError(err);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, client, onUploaded],
+  );
 
   async function confirmSheet() {
     if (busy || !excelPending || !sheetName) return;
@@ -150,6 +220,36 @@ export function DatasetModal({
             />
             {busy && <span className="modal__status">アップロード中…</span>}
           </div>
+
+          {connected && !existingLoading && existingFiles.length > 0 && (
+            <div className="dataset-existing" data-testid="dataset-existing-files">
+              <div className="dataset-existing__label">
+                またはワークスペース内の既存ファイルから選択:
+              </div>
+              <ul className="dataset-existing__list">
+                {existingFiles.map((f) => (
+                  <li key={f.path} className="dataset-existing__item">
+                    <span
+                      className="dataset-existing__path"
+                      title={f.path}
+                      data-testid="dataset-existing-path"
+                    >
+                      {f.path}
+                    </span>
+                    <button
+                      type="button"
+                      className="mini-btn"
+                      data-testid="dataset-existing-use"
+                      disabled={busy}
+                      onClick={() => void useExistingFile(f.path)}
+                    >
+                      このファイルを使う
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {excelPending && (
             <div className="confirm-row" data-testid="excel-sheet-select-row">
