@@ -1,21 +1,23 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python3 -m py_compile cie/ui/app.py cie/ui/screens/skill_improvement.py)",
       "Bash(python3 -m pytest tests/unit/ -q)",
-      "Read(//Users/wanakahideyuki/Desktop/Clinical\\\\ insight\\\\ engine/cie/ui/screens/**)",
-      "Bash(find /Users/wanakahideyuki/Desktop -name \"intent_entry.py\" -type f)",
+      "Bash(python3 -m pytest tests/unit/ -v --tb=short *)",
+      "Bash(python3 -m pytest tests/integration/ -v --tb=short *)",
+      "Bash(./scripts/run_all_tests.sh*)",
+      "Bash(./scripts/dev.sh*)",
+      "Bash(ruff check cie/*)",
+      "Bash(curl -s http://127.0.0.1:8000*)",
+      "Bash(npm run typecheck)",
+      "Bash(npm run test:e2e*)",
       "Read(//Users/wanakahideyuki/Desktop/**)",
       "Skill(run)",
       "Skill(run:*)",
-      "Bash(timeout 10 streamlit run cie/ui/app.py --logger.level=error)",
-      "Bash(curl -s http://localhost:8501)",
       "Bash(python3)",
       "Bash(python3 -c \"import ast; ast.parse\\(open\\('cie/core/llm_client.py'\\).read\\(\\)\\); print\\('✓ llm_client.py syntax valid'\\)\")",
       "Bash(ls -la cie/cache/planner_cache.json)",
       "Bash(python3 -c ' *)",
-      "Bash(pkill -f \"streamlit run\")",
-      "Bash(python3 -c \"import ast; ast.parse\\(open\\('cie/ui/screens/intent_entry.py'\\).read\\(\\)\\); print\\('✓ syntax valid'\\)\")"
+      "Bash(python3 -c \"import json; json.load\\(open\\('/Users/wanakahideyuki/Desktop/Clinical insight engine/.claude/settings.json'\\)\\)\")"
     ]
   }
 }
