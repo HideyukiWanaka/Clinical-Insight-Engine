@@ -1,10 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, type CieApiClient } from "../api/client";
-import type {
-  ClarificationOption,
-  CodeCandidate,
-  ConversationTurn,
-} from "../api/types";
+import type { ClarificationOption, CodeCandidate } from "../api/types";
 
 type Msg =
   | { id: string; kind: "user"; text: string }
@@ -38,8 +34,6 @@ interface ChatPaneProps {
   onOpenSettings: () => void;
   onInsertCode: (code: string) => void;
   onRunCode: (code: string, intent?: Record<string, unknown>) => void;
-  /** Real dataset state — rides in POST /api/intent (replaces the hardcode). */
-  datasetUploaded: boolean;
   /** statistical_results of the most recent run (null → continuation disabled). */
   priorStats: Record<string, unknown> | null;
   /** R script of the most recent run — carried as prior_r_script (§3.2). */
@@ -60,11 +54,6 @@ function newConversationId(): string {
     return `c${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
 }
-
-// Confidence at/above which an unambiguous intent skips the manual confirm gate
-// and advances straight to code proposal (matches the Planner's 0.7 threshold,
-// analysis-request.schema.json confidence_score / CA-002).
-const HIGH_CONFIDENCE = 0.7;
 
 // Send-shortcut label: ⌘ on macOS, Ctrl elsewhere (both are accepted).
 const modKeyLabel = /Mac|iP(hone|ad|od)/.test(navigator.platform) ? "⌘" : "Ctrl";
@@ -120,7 +109,6 @@ export function ChatPane({
   onOpenSettings,
   onInsertCode,
   onRunCode,
-  datasetUploaded,
   priorStats,
   priorScript,
   priorIntent,
@@ -219,75 +207,18 @@ export function ChatPane({
     }
   }
 
-  // The chat's prior turns as Planner context so a correction ("検査年ではなく
-  // 血圧です") is read against the turns it refines, not in isolation. Bounded to
-  // the most recent turns to keep the payload small.
-  function buildHistory(): ConversationTurn[] {
-    const turns: ConversationTurn[] = [];
-    for (const m of messages) {
-      if (m.kind === "user") turns.push({ role: "user", text: m.text });
-      else if (m.kind === "clarify") turns.push({ role: "assistant", text: m.text });
-      else if (m.kind === "confirm")
-        turns.push({ role: "assistant", text: m.summary });
-    }
-    return turns.slice(-12);
-  }
-
-  async function sendIntent() {
+  function sendIntent() {
     const prompt = input.trim();
     if (!prompt || busy) return;
-    const history = buildHistory();
     setInput("");
     add({ id: nextId(), kind: "user", text: prompt });
-    setBusy(true);
-    // Set when we auto-advance into propose(): propose() then owns the busy
-    // flag, so this handler must not clear it out from under the running call.
-    let handedOff = false;
-    try {
-      const res = await client.intent({
-        prompt,
-        dataset_uploaded: datasetUploaded,
-        conversation_history: history,
-      });
-      if (res.requires_human_clarification) {
-        add({
-          id: nextId(),
-          kind: "clarify",
-          text: "もう少し詳しく教えてください。以下から選ぶか、自由入力で訂正してください:",
-          options: (res.clarification_options ?? []).map(toClarificationOption),
-          intent: res.intent_object,
-        });
-      } else if ((res.confidence_score ?? 0) >= HIGH_CONFIDENCE) {
-        // High-confidence & unambiguous → skip the manual confirm click and go
-        // straight to the proposal. We still echo what was understood (an "ai"
-        // bubble) so the step is transparent, never silent — the user can
-        // correct it in the next turn if it's wrong.
-        add({
-          id: nextId(),
-          kind: "ai",
-          text: `${intentSummary(res.intent_object)}\n解析コードを提案します。`,
-        });
-        handedOff = true;
-        propose(res.intent_object, prompt);
-      } else {
-        add({
-          id: nextId(),
-          kind: "confirm",
-          intent: res.intent_object,
-          summary: intentSummary(res.intent_object),
-        });
-      }
-    } catch (err) {
-      pushError(err);
-    } finally {
-      if (!handedOff) setBusy(false);
-    }
+    runChat({ prompt });
   }
 
   // Apply a clicked clarification option: merge its intent_override into the
-  // intent the Planner returned and proceed straight to code proposal. The
+  // Planner's intent and stream the proposal for it (skips the Planner). The
   // merged intent carries the resolved field (outcome_variables, paired, …),
-  // which /api/propose → StatisticsAgent reads directly.
+  // which the StatisticsAgent reads directly.
   function answerClarification(
     msgId: string,
     opt: ClarificationOption,
@@ -301,75 +232,133 @@ export function ChatPane({
     );
     add({ id: nextId(), kind: "user", text: opt.label });
     const merged = { ...intent, ...(opt.intent_override ?? {}) };
-    void propose(merged);
+    runChat({ intentObject: merged });
   }
 
-  // Stream the code proposal over WS /ws/chat: the explanation types in live
-  // (delta frames) inside one AI bubble, which then becomes the full proposal
-  // (explanation + selectable candidates) when the terminal `proposal` frame
-  // arrives. Overlap is prevented by callers (buttons disabled while busy);
-  // R execution stays human-gated — candidates are never auto-run here.
-  function propose(intent: Record<string, unknown>, prompt?: string) {
-    setBusy(true);
-    const streamId = nextId();
-    add({ id: streamId, kind: "ai", text: "" });
-    let settled = false;
+  // Confirm a low-confidence intent → stream its proposal (skips the Planner).
+  function confirmIntent(intent: Record<string, unknown>) {
+    if (busy) return;
+    runChat({ intentObject: intent });
+  }
 
-    const replace = (m: Msg) =>
-      setMessages((prev) => prev.map((x) => (x.id === streamId ? m : x)));
+  // Drive one chat turn over WS /ws/chat. With `prompt`, the server runs the
+  // Planner and routes to a clarify/confirm frame or (high confidence) an
+  // `intent` echo + streamed proposal. With `intentObject`, it streams the
+  // proposal directly. The explanation types in live (delta frames) inside one
+  // AI bubble that becomes the full proposal on the terminal `proposal` frame.
+  // Overlap is prevented by callers (inputs disabled while busy); R execution
+  // stays human-gated — candidates are never auto-run here.
+  function runChat(opts: {
+    prompt?: string;
+    intentObject?: Record<string, unknown>;
+  }) {
+    setBusy(true);
+    let streamId: string | null = null;
+    let settled = false;
+    let resolvedIntent: Record<string, unknown> = opts.intentObject ?? {};
+
+    const ensureStreamBubble = (): string => {
+      if (streamId == null) {
+        streamId = nextId();
+        add({ id: streamId, kind: "ai", text: "" });
+      }
+      return streamId;
+    };
 
     client.streamChat({
-      intentObject: intent,
       conversationId: conversationId.current,
-      prompt,
+      prompt: opts.prompt,
+      intentObject: opts.intentObject,
       onMessage: (ev) => {
-        if (ev.type === "delta") {
-          setMessages((prev) =>
-            prev.map((x) =>
-              x.id === streamId && x.kind === "ai"
-                ? { ...x, text: x.text + ev.text }
-                : x,
-            ),
-          );
-        } else if (ev.type === "proposal") {
-          settled = true;
-          const p = ev.analysis_proposal;
-          replace({
-            id: streamId,
-            kind: "proposal",
-            explanation: p.explanation_markdown ?? "",
-            candidates: p.code_candidates ?? [],
-            recommendedId: p.recommended_candidate_id,
-            intent,
-            offCatalog: p.off_catalog,
-            caveat: p.caveat_markdown,
-          });
-        } else if (ev.type === "error") {
-          settled = true;
-          replace({
-            id: streamId,
-            kind: "error",
-            text: "コード生成に失敗しました。",
-            detail:
-              ev.reason ||
-              ev.r_script_provenance?.reason ||
-              "提案を生成できませんでした。",
-          });
+        switch (ev.type) {
+          case "intent":
+            // High-confidence hand-off: echo the understood intent so the step
+            // is transparent, never silent (the user can correct it next turn).
+            resolvedIntent = ev.intent_object ?? resolvedIntent;
+            add({
+              id: nextId(),
+              kind: "ai",
+              text: `${intentSummary(resolvedIntent)}\n解析コードを提案します。`,
+            });
+            break;
+          case "clarify":
+            settled = true;
+            add({
+              id: nextId(),
+              kind: "clarify",
+              text: "もう少し詳しく教えてください。以下から選ぶか、自由入力で訂正してください:",
+              options: (ev.clarification_options ?? []).map(toClarificationOption),
+              intent: ev.intent_object ?? {},
+            });
+            break;
+          case "confirm":
+            settled = true;
+            add({
+              id: nextId(),
+              kind: "confirm",
+              intent: ev.intent_object ?? {},
+              summary: intentSummary(ev.intent_object ?? {}),
+            });
+            break;
+          case "delta": {
+            const id = ensureStreamBubble();
+            setMessages((prev) =>
+              prev.map((x) =>
+                x.id === id && x.kind === "ai"
+                  ? { ...x, text: x.text + ev.text }
+                  : x,
+              ),
+            );
+            break;
+          }
+          case "proposal": {
+            settled = true;
+            const p = ev.analysis_proposal;
+            const msg: Msg = {
+              id: streamId ?? nextId(),
+              kind: "proposal",
+              explanation: p.explanation_markdown ?? "",
+              candidates: p.code_candidates ?? [],
+              recommendedId: p.recommended_candidate_id,
+              intent: resolvedIntent,
+              offCatalog: p.off_catalog,
+              caveat: p.caveat_markdown,
+            };
+            if (streamId != null) {
+              const sid = streamId;
+              setMessages((prev) => prev.map((x) => (x.id === sid ? msg : x)));
+            } else {
+              add(msg);
+            }
+            break;
+          }
+          case "error":
+            settled = true;
+            add({
+              id: nextId(),
+              kind: "error",
+              text: "コード生成に失敗しました。",
+              detail:
+                ev.reason ||
+                ev.r_script_provenance?.reason ||
+                "提案を生成できませんでした。",
+            });
+            break;
+          // "done" → no action; onClose clears busy.
         }
-        // `done` needs no action — onClose clears busy.
       },
       onError: (message) => {
         if (settled) return;
         settled = true;
-        replace({ id: streamId, kind: "error", text: "接続エラー", detail: message });
+        add({ id: nextId(), kind: "error", text: "接続エラー", detail: message });
       },
       onClose: () => {
         if (!settled) {
           // Socket closed before any terminal frame — surface it, never silent.
-          replace({
-            id: streamId,
+          add({
+            id: nextId(),
             kind: "error",
-            text: "コード生成が中断されました。",
+            text: "処理が中断されました。",
             detail: "サーバとの接続が終了しました。",
           });
         }
@@ -421,7 +410,7 @@ export function ChatPane({
             key={m.id}
             msg={m}
             busy={busy}
-            onConfirm={propose}
+            onConfirm={confirmIntent}
             onClarify={answerClarification}
             onInsertCode={onInsertCode}
             onRunCode={onRunCode}

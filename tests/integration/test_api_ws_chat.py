@@ -1,10 +1,12 @@
 """tests/integration/test_api_ws_chat.py — WS /ws/chat streaming (Phase 2).
 
-Verifies the streaming conversational-proposal socket:
+Verifies the streaming conversational core:
 - first-message token auth (§2), same as /ws/console,
-- delta frames stream the explanation, then one proposal frame, then done,
-- a missing intent_object is rejected explicitly (never silent, §5),
-- the server records the turn in its own ConversationState (server owns history).
+- an intent_object streams the proposal directly (Planner skipped),
+- a prompt routes deterministically through the Planner: high confidence →
+  intent echo + streamed proposal; low confidence → confirm; ambiguous →
+  clarify (never silent, §5),
+- the server records the turn in its own ConversationState.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from starlette.websockets import WebSocketDisconnect  # noqa: E402
 from cie.api.main import create_app  # noqa: E402
 from tests.integration.test_api_endpoints import (  # noqa: E402
     TOKEN,
+    FakeAgent,
     _make_services,
 )
 
@@ -50,11 +53,15 @@ class _FakeStreamingStatistics:
         }
 
 
+def _make_client(tmp_path, **overrides) -> TestClient:
+    overrides.setdefault("statistics", _FakeStreamingStatistics())
+    app = create_app(services=_make_services(tmp_path, **overrides), session_token=TOKEN)
+    return TestClient(app)
+
+
 @pytest.fixture
 def client(tmp_path) -> TestClient:
-    services = _make_services(tmp_path, statistics=_FakeStreamingStatistics())
-    app = create_app(services=services, session_token=TOKEN)
-    with TestClient(app) as c:
+    with _make_client(tmp_path) as c:
         yield c
 
 
@@ -68,7 +75,10 @@ def _drain(ws) -> list[dict]:
     return frames
 
 
-def test_ws_chat_streams_deltas_then_proposal_then_done(client: TestClient) -> None:
+# ── intent_object path (Planner skipped) ────────────────────────────────────
+
+
+def test_ws_chat_intent_object_streams_proposal_directly(client: TestClient) -> None:
     with client.websocket_connect("/ws/chat") as ws:
         ws.send_json({
             "token": TOKEN,
@@ -79,13 +89,13 @@ def test_ws_chat_streams_deltas_then_proposal_then_done(client: TestClient) -> N
         frames = _drain(ws)
 
     types = [f["type"] for f in frames]
+    assert "intent" not in types  # Planner is skipped when intent is supplied
     assert "delta" in types
     assert types[-1] == "done"
     deltas = "".join(f["text"] for f in frames if f["type"] == "delta")
     assert deltas == "性別間で血圧を比較します。"
     proposal = next(f for f in frames if f["type"] == "proposal")
     assert proposal["analysis_proposal"]["recommended_candidate_id"] == "c1"
-    assert proposal["r_script_provenance"]["llm_generated"] is True
 
 
 def test_ws_chat_records_turn_in_server_side_history(client: TestClient) -> None:
@@ -105,6 +115,69 @@ def test_ws_chat_records_turn_in_server_side_history(client: TestClient) -> None
     assert state.turns[1]["text"] == "性別間で血圧を比較します。"
 
 
+# ── prompt path (deterministic Planner routing) ─────────────────────────────
+
+
+def test_ws_chat_prompt_high_confidence_echoes_intent_then_streams(
+    client: TestClient,
+) -> None:
+    # The default planner stub returns confidence 0.9 (unambiguous).
+    with client.websocket_connect("/ws/chat") as ws:
+        ws.send_json({
+            "token": TOKEN,
+            "conversation_id": "conv-3",
+            "prompt": "男女で血圧を比較したい",
+        })
+        frames = _drain(ws)
+
+    types = [f["type"] for f in frames]
+    assert types[0] == "intent"  # transparent hand-off echo (never silent)
+    assert "delta" in types
+    assert any(f["type"] == "proposal" for f in frames)
+    assert types[-1] == "done"
+
+
+def test_ws_chat_prompt_low_confidence_asks_confirm(tmp_path) -> None:
+    planner = FakeAgent("planner", {
+        "intent_object": {"objective": "between_group_comparison"},
+        "confidence_score": 0.4,
+        "requires_human_clarification": False,
+        "clarification_options": [],
+    })
+    with _make_client(tmp_path, planner=planner) as client:
+        with client.websocket_connect("/ws/chat") as ws:
+            ws.send_json({"token": TOKEN, "conversation_id": "c", "prompt": "何か比較して"})
+            frames = _drain(ws)
+
+    types = [f["type"] for f in frames]
+    assert "confirm" in types
+    assert "proposal" not in types  # low confidence never auto-proposes
+    confirm = next(f for f in frames if f["type"] == "confirm")
+    assert confirm["intent_object"]["objective"] == "between_group_comparison"
+
+
+def test_ws_chat_prompt_ambiguous_asks_clarify(tmp_path) -> None:
+    planner = FakeAgent("planner", {
+        "intent_object": {"objective": "between_group_comparison"},
+        "confidence_score": 0.5,
+        "requires_human_clarification": True,
+        "clarification_options": [
+            {"option_id": "o1", "label": "収縮期血圧", "intent_override": {"paired": False}},
+        ],
+    })
+    with _make_client(tmp_path, planner=planner) as client:
+        with client.websocket_connect("/ws/chat") as ws:
+            ws.send_json({"token": TOKEN, "conversation_id": "c", "prompt": "血圧を見たい"})
+            frames = _drain(ws)
+
+    clarify = next(f for f in frames if f["type"] == "clarify")
+    assert clarify["clarification_options"][0]["label"] == "収縮期血圧"
+    assert "proposal" not in [f["type"] for f in frames]
+
+
+# ── guards ──────────────────────────────────────────────────────────────────
+
+
 def test_ws_chat_rejects_bad_token(client: TestClient) -> None:
     with client.websocket_connect("/ws/chat") as ws:
         ws.send_json({"token": "wrong", "intent_object": _INTENT})
@@ -115,9 +188,9 @@ def test_ws_chat_rejects_bad_token(client: TestClient) -> None:
             ws.receive_json()
 
 
-def test_ws_chat_requires_intent_object(client: TestClient) -> None:
+def test_ws_chat_requires_prompt_or_intent(client: TestClient) -> None:
     with client.websocket_connect("/ws/chat") as ws:
-        ws.send_json({"token": TOKEN, "prompt": "何かして"})
+        ws.send_json({"token": TOKEN, "conversation_id": "c"})
         msg = ws.receive_json()
         assert msg["type"] == "error"
-        assert msg["reason"] == "intent_object_required"
+        assert msg["reason"] == "prompt_or_intent_required"

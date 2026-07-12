@@ -158,7 +158,6 @@ export default function App() {
             onOpenSettings={() => setSettingsOpen(true)}
             onInsertCode={insertCode}
             onRunCode={runCode}
-            datasetUploaded={datasetInfo != null}
             priorStats={runner.result?.statistical_results ?? null}
             priorScript={runner.lastScript}
             priorIntent={runner.lastIntent}

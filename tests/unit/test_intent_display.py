@@ -1,16 +1,17 @@
-"""Unit tests for cie.api.routes.intent display-time var_n un-masking (Fix C).
+"""Unit tests for cie.api.intent_display var_n un-masking (Fix C).
 
 The Planner authors natural_language_summary and clarification labels in var_n
-alias space; the intent route resolves those to real column names before the
-chat renders them, and shows an anonymised placeholder for PII-masked columns.
+alias space; both the REST /api/intent route and the streaming WS /ws/chat route
+resolve those to real column names via this shared module before the chat
+renders them, and show an anonymised placeholder for PII-masked columns.
 """
 
 from __future__ import annotations
 
-from cie.api.routes.intent import (
+from cie.api.intent_display import (
     _MASKED_LABEL,
-    _resolve_intent_display,
-    _unmask_var_tokens,
+    resolve_intent_display as _resolve_intent_display,
+    unmask_var_tokens as _unmask_var_tokens,
 )
 
 _ALIAS_MAP = {

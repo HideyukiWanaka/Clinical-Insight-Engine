@@ -186,6 +186,19 @@ export interface ProposeResponse {
 // arrives as `error` (never silent, §5). The R code is only ever in `proposal`
 // — execution stays human-gated (POST /api/run), never auto-run.
 export type ChatStreamEvent =
+  // Planner routing frames (server-side deterministic routing).
+  | {
+      type: "intent";
+      intent_object: Record<string, unknown>;
+      confidence_score?: number;
+    }
+  | {
+      type: "clarify";
+      intent_object: Record<string, unknown>;
+      clarification_options: Array<Record<string, unknown>>;
+    }
+  | { type: "confirm"; intent_object: Record<string, unknown> }
+  // Proposal streaming frames.
   | { type: "delta"; text: string }
   | {
       type: "proposal";

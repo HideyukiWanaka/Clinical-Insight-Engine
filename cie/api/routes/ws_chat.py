@@ -1,21 +1,30 @@
-"""WS /ws/chat — streaming conversational proposal (Phase 2).
+"""WS /ws/chat — streaming conversational core (Phase 2).
 
-The REST ``/api/propose`` returns the whole ``analysis_proposal`` in one shot;
-this socket instead streams the natural-language explanation token by token
-(``delta`` frames) and then delivers the structured code candidates in a final
-``proposal`` frame — the chat-AI "typing" experience the workbench chat wants.
+One socket per turn drives the whole first-turn flow server-side: the client
+sends a natural-language ``prompt`` and the server deterministically routes it —
+run the Planner, then either ask for clarification, ask for confirmation, or (on
+a high-confidence unambiguous intent) stream the code proposal. When the client
+instead sends a resolved ``intent_object`` (after clicking a confirm/clarify
+option), the Planner is skipped and the proposal streams directly.
 
-Deterministic routing (safety): this endpoint does NOT let an LLM decide what to
-do. It runs the SAME governed StatisticsAgent path ``/api/propose`` uses (issue
+Deterministic routing (safety): an LLM never decides *what to do* here. The
+Planner and Statistics agents run over their existing governed paths (issue
 token → schema-validated AgentInput → agent enforces scope/schema/audit →
-revoke), only over a streaming entry point. The Planner still runs over REST
-``/api/intent`` first, so the intent hand-off is unchanged; the client passes the
-resolved ``intent_object`` here. R execution stays human-gated (POST /api/run).
+revoke); this route only chooses between them by the Planner's own
+confidence/clarification signals. R execution stays human-gated (POST /api/run).
 
-Auth mirrors ``/ws/console`` (§2): the first message carries the session token,
-not the HTTP ``X-CIE-Token`` middleware (which never sees websocket-scope
-connections). The server owns the conversation history via ``ConversationStore``
-so the streamed explanation reflects the whole dialogue.
+Frames the server emits (each a JSON object with ``type``):
+  intent   — echo of the understood intent right before streaming (transparency)
+  clarify  — Planner needs a choice; carries clarification_options + intent_object
+  confirm  — low-confidence intent awaiting the user's OK; carries intent_object
+  delta    — a chunk of the proposal explanation as it streams
+  proposal — the terminal structured result (candidates + provenance)
+  error    — anything that could not complete (never silent, §5)
+  done     — end of this turn
+
+Auth mirrors ``/ws/console`` (§2): the first message carries the session token.
+The server owns the running history via ``ConversationStore`` so the Planner
+reads a correction in context and the streamed reply reflects the dialogue.
 """
 
 from __future__ import annotations
@@ -26,22 +35,28 @@ import secrets
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from cie.agents.base import AgentInput
-from cie.api.deps import new_execution_id
+from cie.api.conversation import ConversationState
+from cie.api.deps import invoke_agent, new_execution_id
+from cie.api.intent_display import resolve_intent_display
 from cie.security.capability_token import CapabilityScope
 
 _log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["ws"])
 
+# Confidence at/above which an unambiguous intent skips the confirm gate and
+# streams the proposal directly (matches ChatPane's HIGH_CONFIDENCE / CA-002).
+_HIGH_CONFIDENCE = 0.7
+
 # Same permissive dispatch schema /api/propose validates the conversational
 # Statistics payload against (the strict analysis-request schema is the Planner
 # *output* shape, not this *input* shape — see cie/api/routes/propose.py).
-_INPUT_SCHEMA_REF = "cie://schemas/task-context.schema.json"
+_STATS_INPUT_SCHEMA_REF = "cie://schemas/task-context.schema.json"
 
 
 @router.websocket("/ws/chat")
 async def ws_chat(websocket: WebSocket) -> None:
-    """Authenticate, then stream a conversational proposal for an intent."""
+    """Authenticate, then route a chat turn (Planner → proposal) with streaming."""
     await websocket.accept()
     services = websocket.app.state.services
     expected = websocket.app.state.session_token
@@ -75,24 +90,150 @@ async def ws_chat(websocket: WebSocket) -> None:
         return
 
     intent_object = first.get("intent_object")
-    if not isinstance(intent_object, dict) or not intent_object:
-        # This increment streams the *propose* step; the caller resolves intent
-        # over REST /api/intent first (Planner) and passes it here. Never silent.
-        await websocket.send_json(
-            {"type": "error", "reason": "intent_object_required"}
-        )
+    has_intent = isinstance(intent_object, dict) and bool(intent_object)
+    prompt = str(first.get("prompt") or "")
+    if not has_intent and not prompt:
+        # Need a prompt to plan from, or a resolved intent to propose for. Never
+        # silent — surface the reason (§5).
+        await websocket.send_json({"type": "error", "reason": "prompt_or_intent_required"})
         await websocket.close()
         return
 
     conversation_id = str(first.get("conversation_id") or "")
-    prompt = str(first.get("prompt") or "")
-
-    store = websocket.app.state.conversations
-    state = store.get_or_create(conversation_id)
-    if prompt:
-        state.add_turn("user", prompt)
-
+    state = websocket.app.state.conversations.get_or_create(conversation_id)
     dataset_context = getattr(websocket.app.state, "dataset_context", None) or {}
+
+    try:
+        if has_intent:
+            # Confirm/clarify follow-through: the client resolved the intent, so
+            # skip the Planner and stream the proposal for it directly.
+            if prompt:
+                state.add_turn("user", prompt)
+            await _stream_proposal(
+                websocket, services, state, intent_object, dataset_context
+            )
+        else:
+            # Fresh natural-language turn: run the Planner first, then route.
+            proceed = await _route_via_planner(
+                websocket, services, state, prompt, dataset_context
+            )
+            if proceed is not None:
+                await _stream_proposal(
+                    websocket, services, state, proceed, dataset_context
+                )
+    except Exception as exc:  # noqa: BLE001 — never leak a raw traceback to the socket
+        _log.warning("ws_chat routing error: %s", exc)
+        await websocket.send_json({"type": "error", "reason": "generation error"})
+        await websocket.close(code=1011)
+        return
+
+    await websocket.send_json({"type": "done"})
+    await websocket.close()
+
+
+async def _route_via_planner(
+    websocket: WebSocket,
+    services: dict,
+    state: ConversationState,
+    prompt: str,
+    dataset_context: dict,
+) -> dict | None:
+    """Run the Planner and emit the routing frame.
+
+    Returns the resolved ``intent_object`` when the turn should proceed to
+    streaming a proposal (high confidence, unambiguous); returns ``None`` when
+    the turn is terminal here (clarify / confirm / planner failure).
+    """
+    # History EXCLUDES the current prompt (it rides separately, matching
+    # /api/intent), so read it before recording this turn.
+    history = state.history()
+    col_meta = dataset_context.get("dataset_structural_metadata", {})
+    alias_map = dataset_context.get("var_n_alias_map", {})
+    masked_vars = set(dataset_context.get("pii_masked_vars", []))
+
+    output = await invoke_agent(
+        services,
+        agent_key="planner",
+        agent_id="planner",
+        step_id="ws_chat_intent",
+        scopes=[
+            CapabilityScope.DATASET_PROXY_METADATA,
+            CapabilityScope.WORKFLOW_STATE_READ,
+            CapabilityScope.AUDIT_WRITE_ENTRY,
+        ],
+        payload={
+            "user_natural_language_prompt": prompt,
+            "dataset_structural_metadata": col_meta,
+            "conversation_history": history,
+            "inject_raw_data_rows": False,
+        },
+        input_schema_ref="cie://schemas/planner-input.schema.json",
+        execution_id=new_execution_id(),
+    )
+
+    # Record the turn now that the Planner has read the prior history.
+    state.add_turn("user", prompt)
+
+    if output.status not in ("success", "clarification_required"):
+        await websocket.send_json(
+            {"type": "error",
+             "reason": output.error_message or "planner_failed"}
+        )
+        return None
+
+    op = output.output_payload
+    intent_object = op.get("intent_object", {}) or {}
+    clarification_options = op.get("clarification_options") or []
+    confidence = float(op.get("confidence_score") or 0.0)
+    requires_clarification = bool(op.get("requires_human_clarification", False))
+
+    # Un-mask var_n aliases in user-facing prose so the chat never shows raw
+    # internal identifiers like "var_4" (Fix C) — same helper as /api/intent.
+    resolve_intent_display(
+        intent_object, clarification_options, alias_map, masked_vars
+    )
+    summary = intent_object.get("natural_language_summary") or ""
+
+    if requires_clarification:
+        state.add_turn("assistant", summary or "確認のため選択肢を提示しました。")
+        await websocket.send_json(
+            {"type": "clarify",
+             "intent_object": intent_object,
+             "clarification_options": clarification_options}
+        )
+        return None
+
+    if confidence < _HIGH_CONFIDENCE:
+        state.add_turn("assistant", summary or "意図を確認しました。")
+        await websocket.send_json(
+            {"type": "confirm", "intent_object": intent_object}
+        )
+        return None
+
+    # High confidence & unambiguous — echo the understood intent (transparency,
+    # never a silent hand-off) and proceed to stream the proposal.
+    await websocket.send_json(
+        {"type": "intent",
+         "intent_object": intent_object,
+         "confidence_score": confidence}
+    )
+    return intent_object
+
+
+async def _stream_proposal(
+    websocket: WebSocket,
+    services: dict,
+    state: ConversationState,
+    intent_object: dict,
+    dataset_context: dict,
+) -> None:
+    """Stream a conversational proposal for ``intent_object`` over the socket.
+
+    Runs the governed StatisticsAgent streaming entry point (token issued here,
+    always revoked in finally — same lifecycle as cie/api/deps.invoke_agent) and
+    forwards its delta/proposal/error events, recording the assistant reply so
+    the next turn's streamed explanation reflects it.
+    """
     payload: dict = {
         "data_quality_report": {"quality_gate_passed": True},
         "intent_object": intent_object,
@@ -123,15 +264,13 @@ async def ws_chat(websocket: WebSocket) -> None:
         node_id="ws_chat",
         capability_token=token,
         payload=payload,
-        input_schema_ref=_INPUT_SCHEMA_REF,
+        input_schema_ref=_STATS_INPUT_SCHEMA_REF,
     )
 
     try:
         async for event in agent.stream_conversational_proposal(agent_input):
             if event.get("type") == "proposal":
                 proposal = event.get("analysis_proposal") or {}
-                # Record the assistant reply so the next turn's streamed
-                # explanation reflects it (server owns the history).
                 state.add_turn("assistant", proposal.get("explanation_markdown", ""))
                 await websocket.send_json(
                     {
@@ -143,17 +282,6 @@ async def ws_chat(websocket: WebSocket) -> None:
                 )
             else:
                 await websocket.send_json(event)
-    except Exception as exc:  # noqa: BLE001 — never leak a raw traceback to the socket
-        _log.warning("ws_chat streaming error: %s", exc)
-        await websocket.send_json(
-            {"type": "error", "reason": "generation error"}
-        )
-        await websocket.close(code=1011)
-        return
     finally:
-        # ADR: the capability token is always revoked (try/finally), exactly as
-        # cie/api/deps.invoke_agent does for the REST handlers.
+        # ADR: the capability token is always revoked (try/finally).
         token_manager.revoke(token)
-
-    await websocket.send_json({"type": "done"})
-    await websocket.close()
