@@ -10,6 +10,7 @@
 //   _render_output_pane which always shows error_detail).
 
 import type {
+  ChatStreamEvent,
   ConsoleMessage,
   DatasetFromExistingRequest,
   DatasetStatusResponse,
@@ -486,6 +487,55 @@ export class CieApiClient {
       params.onError(
         `コンソール接続に失敗しました (${this.getWsBaseUrl()}/ws/console)。`,
       );
+    };
+    ws.onclose = finish;
+    return ws;
+  }
+
+  /** WS /ws/chat — stream a conversational proposal for `intentObject` (§4,
+   *  Phase 2). Auth is the first message (`{token,…}`), like streamConsole.
+   *
+   * The server streams the explanation as `delta` events, then a single
+   * `proposal` event with the code candidates, then `done`. `onClose` fires
+   * exactly once. `conversationId` lets the server keep the running history so
+   * the streamed reply reflects the whole dialogue; `prompt` is the original
+   * natural-language turn (recorded server-side). Returns the socket so the
+   * caller can close it early. */
+  streamChat(params: {
+    intentObject: Record<string, unknown>;
+    conversationId: string;
+    prompt?: string;
+    onMessage: (event: ChatStreamEvent) => void;
+    onError: (message: string) => void;
+    onClose: () => void;
+  }): WebSocket {
+    const ws = new WebSocket(`${this.getWsBaseUrl()}/ws/chat`);
+    let closed = false;
+    const finish = () => {
+      if (closed) return;
+      closed = true;
+      params.onClose();
+    };
+
+    ws.onopen = () => {
+      ws.send(
+        JSON.stringify({
+          token: this.token,
+          conversation_id: params.conversationId,
+          intent_object: params.intentObject,
+          prompt: params.prompt ?? "",
+        }),
+      );
+    };
+    ws.onmessage = (event) => {
+      try {
+        params.onMessage(JSON.parse(event.data as string) as ChatStreamEvent);
+      } catch {
+        // A non-JSON frame should never happen; ignore rather than crash.
+      }
+    };
+    ws.onerror = () => {
+      params.onError(`チャット接続に失敗しました (${this.getWsBaseUrl()}/ws/chat)。`);
     };
     ws.onclose = finish;
     return ws;

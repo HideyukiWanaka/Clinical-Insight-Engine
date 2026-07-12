@@ -51,6 +51,16 @@ interface ChatPaneProps {
 let seq = 0;
 const nextId = () => `m${++seq}`;
 
+/** Stable per-mount conversation id so the server can keep the running chat
+ *  history for WS /ws/chat (falls back when crypto.randomUUID is unavailable). */
+function newConversationId(): string {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `c${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+}
+
 // Confidence at/above which an unambiguous intent skips the manual confirm gate
 // and advances straight to code proposal (matches the Planner's 0.7 threshold,
 // analysis-request.schema.json confidence_score / CA-002).
@@ -130,6 +140,7 @@ export function ChatPane({
   const [newAnalysisPending, setNewAnalysisPending] = useState(false);
   const resetStatsRef = useRef<Record<string, unknown> | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
+  const conversationId = useRef<string>(newConversationId());
 
   const add = (m: Msg) => setMessages((prev) => [...prev, m]);
 
@@ -257,7 +268,7 @@ export function ChatPane({
           text: `${intentSummary(res.intent_object)}\n解析コードを提案します。`,
         });
         handedOff = true;
-        void propose(res.intent_object);
+        propose(res.intent_object, prompt);
       } else {
         add({
           id: nextId(),
@@ -293,43 +304,78 @@ export function ChatPane({
     void propose(merged);
   }
 
-  async function propose(intent: Record<string, unknown>) {
-    if (busy) return;
-    const history = buildHistory();
+  // Stream the code proposal over WS /ws/chat: the explanation types in live
+  // (delta frames) inside one AI bubble, which then becomes the full proposal
+  // (explanation + selectable candidates) when the terminal `proposal` frame
+  // arrives. Overlap is prevented by callers (buttons disabled while busy);
+  // R execution stays human-gated — candidates are never auto-run here.
+  function propose(intent: Record<string, unknown>, prompt?: string) {
     setBusy(true);
-    add({ id: nextId(), kind: "system", text: "解析コードを生成しています…" });
-    try {
-      const res = await client.propose({
-        intent_object: intent,
-        conversation_history: history,
-      });
-      if (!res.analysis_proposal) {
-        const reason =
-          res.r_script_provenance?.reason || "提案を生成できませんでした。";
-        add({
-          id: nextId(),
-          kind: "error",
-          text: "コード生成に失敗しました。",
-          detail: reason,
-        });
-        return;
-      }
-      const p = res.analysis_proposal;
-      add({
-        id: nextId(),
-        kind: "proposal",
-        explanation: p.explanation_markdown ?? "",
-        candidates: p.code_candidates ?? [],
-        recommendedId: p.recommended_candidate_id,
-        intent,
-        offCatalog: p.off_catalog,
-        caveat: p.caveat_markdown,
-      });
-    } catch (err) {
-      pushError(err);
-    } finally {
-      setBusy(false);
-    }
+    const streamId = nextId();
+    add({ id: streamId, kind: "ai", text: "" });
+    let settled = false;
+
+    const replace = (m: Msg) =>
+      setMessages((prev) => prev.map((x) => (x.id === streamId ? m : x)));
+
+    client.streamChat({
+      intentObject: intent,
+      conversationId: conversationId.current,
+      prompt,
+      onMessage: (ev) => {
+        if (ev.type === "delta") {
+          setMessages((prev) =>
+            prev.map((x) =>
+              x.id === streamId && x.kind === "ai"
+                ? { ...x, text: x.text + ev.text }
+                : x,
+            ),
+          );
+        } else if (ev.type === "proposal") {
+          settled = true;
+          const p = ev.analysis_proposal;
+          replace({
+            id: streamId,
+            kind: "proposal",
+            explanation: p.explanation_markdown ?? "",
+            candidates: p.code_candidates ?? [],
+            recommendedId: p.recommended_candidate_id,
+            intent,
+            offCatalog: p.off_catalog,
+            caveat: p.caveat_markdown,
+          });
+        } else if (ev.type === "error") {
+          settled = true;
+          replace({
+            id: streamId,
+            kind: "error",
+            text: "コード生成に失敗しました。",
+            detail:
+              ev.reason ||
+              ev.r_script_provenance?.reason ||
+              "提案を生成できませんでした。",
+          });
+        }
+        // `done` needs no action — onClose clears busy.
+      },
+      onError: (message) => {
+        if (settled) return;
+        settled = true;
+        replace({ id: streamId, kind: "error", text: "接続エラー", detail: message });
+      },
+      onClose: () => {
+        if (!settled) {
+          // Socket closed before any terminal frame — surface it, never silent.
+          replace({
+            id: streamId,
+            kind: "error",
+            text: "コード生成が中断されました。",
+            detail: "サーバとの接続が終了しました。",
+          });
+        }
+        setBusy(false);
+      },
+    });
   }
 
   function pushError(err: unknown) {

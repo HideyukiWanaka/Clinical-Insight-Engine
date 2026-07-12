@@ -27,6 +27,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from cie.api.conversation import ConversationStore
 from cie.api.models import ErrorResponse
 from cie.api.rate_limit import FixedWindowLimiter, RateLimitMiddleware
 from cie.api.routes import (
@@ -40,6 +41,7 @@ from cie.api.routes import (
     settings,
     visualize,
     workspace,
+    ws_chat,
     ws_console,
 )
 
@@ -152,9 +154,12 @@ def create_app(services: dict | None = None, session_token: str | None = None) -
         app.state.services = services
     if session_token is not None:
         app.state.session_token = session_token
-    # ws_console.py rate-limits itself directly (BaseHTTPMiddleware only sees
-    # "http"-scope requests, never "websocket").
+    # ws_console.py / ws_chat.py rate-limit themselves directly (BaseHTTPMiddleware
+    # only sees "http"-scope requests, never "websocket").
     app.state.ws_rate_limiter = FixedWindowLimiter()
+    # Server-side chat sessions for WS /ws/chat (Phase 2): the server owns the
+    # running conversation history so a streamed reply reflects the whole dialogue.
+    app.state.conversations = ConversationStore()
 
     app.add_middleware(SessionTokenMiddleware)
     app.add_middleware(RateLimitMiddleware)
@@ -178,6 +183,7 @@ def create_app(services: dict | None = None, session_token: str | None = None) -
     app.include_router(knowledge.router)
     app.include_router(settings.router)
     app.include_router(ws_console.router)
+    app.include_router(ws_chat.router)
 
     return app
 

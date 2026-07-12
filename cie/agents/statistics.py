@@ -18,10 +18,11 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 
 from cie.agents.base import AgentInput, AgentOutput, BaseAgent
-from cie.core.audit import AuditService
+from cie.core.audit import AuditEvent, AuditEventSeverity, AuditService
 from cie.core.exceptions import AgentError
 from cie.cache.r_script_cache import RScriptCache
 from cie.core.llm_client import LLMClient, LLMError
@@ -434,6 +435,14 @@ _CODE_CANDIDATE_RE = re.compile(
     r"===\s*CODE:\s*([^|=]+)\|([^=]+?)\s*===\s*```(?:r|R)?\s*\n(.*?)```",
     re.DOTALL,
 )
+# Streaming (Phase 2): locate the EXPLANATION opener and the first CODE marker in
+# a *partial* response so the WS can forward explanation prose as it arrives while
+# withholding the R code (which streams as a structured candidate at the end).
+_EXPLANATION_START_RE = re.compile(r"===\s*EXPLANATION\s*===\s*")
+_CODE_START_RE = re.compile(r"===\s*CODE:")
+# Longest prefix of a partial "=== CODE:" marker we might be mid-emitting; hold
+# back this many trailing chars until the marker resolves so it never flashes.
+_CODE_MARKER_TAIL = len("\n=== CODE:")
 
 
 def _resolve_column_metadata(column_metadata: dict, alias_map: dict) -> dict:
@@ -878,6 +887,41 @@ class StatisticsAgent(BaseAgent):
             provenance["reason"] = "no_llm_client_configured"
             return None, None, provenance
 
+        system_prompt, user_message = self._prepare_conversational_prompt(
+            method, intent_obj, payload, off_catalog, provenance
+        )
+
+        try:
+            raw = await self._llm_client.complete(system_prompt, user_message)
+        except LLMError as exc:
+            _log.warning("Conversational proposal LLM generation failed: %s", exc)
+            provenance["reason"] = f"llm_error: {exc}"
+            return None, None, provenance
+
+        parsed = self._extract_conversational_proposal(raw)
+        if parsed is None:
+            provenance["reason"] = "empty_or_unparsable_llm_response"
+            return None, None, provenance
+
+        explanation, candidates = parsed
+        analysis_proposal = self._build_proposal_from_parsed(
+            explanation, candidates, off_catalog
+        )
+        provenance["llm_generated"] = True
+        return analysis_proposal, candidates[0]["r_code"], provenance
+
+    def _prepare_conversational_prompt(
+        self, method: dict, intent_obj: dict, payload: dict, off_catalog: bool,
+        provenance: dict,
+    ) -> tuple[str, str]:
+        """Assemble the (system_prompt, user_message) for a conversational turn.
+
+        Shared by the non-streaming :meth:`_generate_conversational_proposal`
+        and the streaming :meth:`stream_conversational_proposal` so both ground
+        the model identically (same RAG references, same Skill/off-catalogue
+        prompt selection). Mutates ``provenance`` with the resolved
+        ``knowledge_references`` and ``grounded_by_skill`` flags.
+        """
         column_metadata = (
             payload.get("dataset_structural_metadata")
             or payload.get("variable_metadata")
@@ -913,20 +957,13 @@ class StatisticsAgent(BaseAgent):
             method, alt_method, intent_obj, column_metadata, references, alias_map,
             conversation_history=payload.get("conversation_history") or [],
         )
+        return system_prompt, user_message
 
-        try:
-            raw = await self._llm_client.complete(system_prompt, user_message)
-        except LLMError as exc:
-            _log.warning("Conversational proposal LLM generation failed: %s", exc)
-            provenance["reason"] = f"llm_error: {exc}"
-            return None, None, provenance
-
-        parsed = self._extract_conversational_proposal(raw)
-        if parsed is None:
-            provenance["reason"] = "empty_or_unparsable_llm_response"
-            return None, None, provenance
-
-        explanation, candidates = parsed
+    @staticmethod
+    def _build_proposal_from_parsed(
+        explanation: str, candidates: list[dict], off_catalog: bool
+    ) -> dict:
+        """Build the ``analysis_proposal`` dict from a parsed EXPLANATION/CODE."""
         analysis_proposal = {
             "explanation_markdown": explanation,
             "code_candidates": candidates,
@@ -938,8 +975,186 @@ class StatisticsAgent(BaseAgent):
                 "⚠️ この解析は標準Skillに無いパターンです。生成コードは検証済み手順に"
                 "基づかないため、統計的妥当性（手法・前提条件・引数）を必ずご確認ください。"
             )
+        return analysis_proposal
+
+    # ------------------------------------------------------------------
+    # Streaming conversational proposal (Phase 2, WS /ws/chat)
+    # ------------------------------------------------------------------
+
+    async def stream_conversational_proposal(
+        self, agent_input: AgentInput
+    ) -> AsyncIterator[dict]:
+        """Stream a conversational proposal event-by-event (WS /ws/chat).
+
+        Governed sibling of :meth:`run`: it enforces the SAME lifecycle
+        guarantees — capability-scope check, input-schema validation, and a
+        terminal audit write — but yields a live event stream instead of a
+        single :class:`AgentOutput`, so the chat can render the explanation
+        token by token via ``LLMClient.stream_messages``.
+
+        Events yielded (each a dict with a ``type``):
+          - ``{"type": "delta", "text": str}`` — explanation prose as it streams
+            (the R code is withheld and delivered structured, at the end).
+          - ``{"type": "proposal", "analysis_proposal", "r_script_provenance",
+            "recommended_r_script"}`` — the terminal, authoritative result.
+          - ``{"type": "error", "reason", "r_script_provenance"}`` — generation
+            could not complete (never silent, mirrors §3.2).
+
+        Generation failures surface as an ``error`` event (not an exception),
+        but a missing scope or an invalid payload DOES raise (deny-first, like
+        run() steps 1-2) so the WS handler's try/finally still revokes the token.
+        """
+        status = "failed"
+        try:
+            # Step 1 — scope enforcement (identical to run(); deny-first SC-001).
+            await self._policy_engine.enforce_multi(
+                token=agent_input.capability_token,
+                required_scopes=list(self.required_scopes),
+                execution_id=agent_input.execution_id,
+                agent_id=self.agent_id,
+                step_id=agent_input.node_id,
+            )
+            # Step 2 — input schema validation (no bypass).
+            self._schema_registry.validate(
+                agent_input.payload, agent_input.input_schema_ref
+            )
+            # Step 3 — stream the proposal.
+            async for event in self._stream_proposal_events(agent_input.payload):
+                if event.get("type") == "proposal":
+                    status = "success"
+                yield event
+        finally:
+            # Terminal audit write mirrors run() step 5 (swallow failures so the
+            # stream is still delivered even on audit-store degradation).
+            try:
+                await self._audit_service.write(
+                    AuditEvent(
+                        execution_id=agent_input.execution_id,
+                        agent_id=self.agent_id,
+                        action="AGENT_STREAM_COMPLETED",
+                        status=status,
+                        severity=(
+                            AuditEventSeverity.INFO
+                            if status == "success"
+                            else AuditEventSeverity.WARNING
+                        ),
+                        payload={
+                            "node_id": agent_input.node_id,
+                            "output_status": status,
+                        },
+                    )
+                )
+            except Exception:  # noqa: BLE001
+                _log.warning(
+                    "Audit write failed for streamed proposal (execution_id=%s) — "
+                    "stream still delivered.",
+                    agent_input.execution_id,
+                )
+
+    async def _stream_proposal_events(self, payload: dict) -> AsyncIterator[dict]:
+        """Do the actual streaming (no governance — caller enforces it).
+
+        Selects the method exactly as :meth:`_execute` (ST-001 quality gate,
+        off-catalogue detection) and reuses the shared prompt-prep so the
+        streamed proposal is grounded identically to the non-streaming one.
+        """
+        dq_report = payload.get("data_quality_report") or {}
+        if not dq_report.get("quality_gate_passed", False):
+            yield {"type": "error", "reason": "quality_gate_blocked"}
+            return
+
+        intent_obj: dict = payload.get("intent_object") or {}
+        method, matched = self._select_method(
+            intent_obj.get("objective", ""),
+            intent_obj.get("outcome_type", "unknown"),
+            intent_obj.get("n_groups_estimate"),
+            intent_obj.get("paired"),
+            intent_obj.get("distribution_assumptions", "unknown"),
+        )
+        off_catalog = not matched
+
+        provenance: dict = {
+            "llm_generated": False,
+            "from_cache": False,
+            "knowledge_references": [],
+            "conversational": True,
+            "off_catalog": off_catalog,
+            "grounded_by_skill": False,
+        }
+        if self._llm_client is None:
+            provenance["reason"] = "no_llm_client_configured"
+            yield {
+                "type": "error",
+                "reason": "no_llm_client_configured",
+                "r_script_provenance": provenance,
+            }
+            return
+
+        system_prompt, user_message = self._prepare_conversational_prompt(
+            method, intent_obj, payload, off_catalog, provenance
+        )
+
+        raw_parts: list[str] = []
+        emitted = 0
+        try:
+            async for chunk in self._llm_client.stream_messages(
+                system_prompt, [{"role": "user", "content": user_message}]
+            ):
+                raw_parts.append(chunk)
+                explanation_so_far = self._explanation_so_far("".join(raw_parts))
+                if len(explanation_so_far) > emitted:
+                    yield {"type": "delta", "text": explanation_so_far[emitted:]}
+                    emitted = len(explanation_so_far)
+        except LLMError as exc:
+            _log.warning("Streamed conversational proposal LLM failed: %s", exc)
+            provenance["reason"] = f"llm_error: {exc}"
+            yield {
+                "type": "error",
+                "reason": f"llm_error: {exc}",
+                "r_script_provenance": provenance,
+            }
+            return
+
+        parsed = self._extract_conversational_proposal("".join(raw_parts))
+        if parsed is None:
+            provenance["reason"] = "empty_or_unparsable_llm_response"
+            yield {
+                "type": "error",
+                "reason": "empty_or_unparsable_llm_response",
+                "r_script_provenance": provenance,
+            }
+            return
+
+        explanation, candidates = parsed
+        analysis_proposal = self._build_proposal_from_parsed(
+            explanation, candidates, off_catalog
+        )
         provenance["llm_generated"] = True
-        return analysis_proposal, candidates[0]["r_code"], provenance
+        yield {
+            "type": "proposal",
+            "analysis_proposal": analysis_proposal,
+            "r_script_provenance": provenance,
+            "recommended_r_script": candidates[0]["r_code"],
+        }
+
+    @staticmethod
+    def _explanation_so_far(raw: str) -> str:
+        """Extract the explanation prose known-complete-so-far from a partial stream.
+
+        Returns text after the ``=== EXPLANATION ===`` opener and before the
+        first ``=== CODE:`` marker. While no CODE marker has arrived yet, a
+        short trailing slice is withheld so a half-formed ``=== CODE:`` marker
+        never flashes as prose. The terminal ``proposal`` event re-sends the
+        full, authoritative explanation regardless.
+        """
+        start = _EXPLANATION_START_RE.search(raw)
+        if start is None:
+            return ""
+        body = raw[start.end():]
+        code = _CODE_START_RE.search(body)
+        if code is not None:
+            return body[: code.start()].rstrip()
+        return body[: max(0, len(body) - _CODE_MARKER_TAIL)]
 
     @staticmethod
     def _build_conversational_user_message(

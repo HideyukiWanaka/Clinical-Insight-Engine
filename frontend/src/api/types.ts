@@ -180,6 +180,22 @@ export interface ProposeResponse {
   r_script_provenance: RScriptProvenance;
 }
 
+// WS /ws/chat (Phase 2) — the streaming counterpart of POST /api/propose.
+// The server streams the explanation as `delta` frames, then delivers the
+// structured candidates in a single `proposal` frame, then `done`. A failure
+// arrives as `error` (never silent, §5). The R code is only ever in `proposal`
+// — execution stays human-gated (POST /api/run), never auto-run.
+export type ChatStreamEvent =
+  | { type: "delta"; text: string }
+  | {
+      type: "proposal";
+      execution_id?: string;
+      analysis_proposal: AnalysisProposal;
+      r_script_provenance: RScriptProvenance;
+    }
+  | { type: "error"; reason: string; r_script_provenance?: RScriptProvenance }
+  | { type: "done" };
+
 // POST /api/run (§3.3)
 export interface RunRequest {
   r_script: string;

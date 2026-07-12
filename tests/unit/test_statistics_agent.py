@@ -516,3 +516,145 @@ class TestConversationalProposal:
         assert result.output_payload["r_script_provenance"]["reason"] == (
             "no_llm_client_configured"
         )
+
+
+# ---------------------------------------------------------------------------
+# Streaming conversational proposal (Phase 2, WS /ws/chat)
+# ---------------------------------------------------------------------------
+
+
+class _FakeStreamLLM:
+    """Async-generator LLM stub: yields the canned response in small chunks."""
+
+    def __init__(self, text: str, chunk_size: int = 17) -> None:
+        self._text = text
+        self._chunk = chunk_size
+        self.provider = "anthropic"
+        self.model = "test-model"
+
+    async def stream_messages(self, system, messages, assistant_prefill=None):
+        for i in range(0, len(self._text), self._chunk):
+            yield self._text[i : i + self._chunk]
+
+
+async def _collect_stream(agent: StatisticsAgent, payload: dict,
+                          token: CapabilityToken) -> list[dict]:
+    events: list[dict] = []
+    async for ev in agent.stream_conversational_proposal(_make_input(payload, token)):
+        events.append(ev)
+    return events
+
+
+class TestStreamingConversationalProposal:
+
+    def test_explanation_so_far_withholds_partial_code_marker(self) -> None:
+        # No EXPLANATION opener yet → nothing to emit.
+        assert StatisticsAgent._explanation_so_far("partial pre") == ""
+        # Opener present, no CODE marker yet → a trailing slice is withheld so a
+        # half-formed "=== CODE:" can never flash as prose.
+        partial = "=== EXPLANATION ===\nhello world\n=== CO"
+        got = StatisticsAgent._explanation_so_far(partial)
+        # A trailing slice is withheld, so `got` is a (possibly shortened) prefix
+        # of the prose — and crucially never contains the half-formed marker.
+        assert "hello world".startswith(got)
+        assert "=== CO" not in got
+        # Once the CODE marker resolves, the full explanation is available.
+        full = "=== EXPLANATION ===\nhello world\n=== CODE: a|b ===\n```r\nx\n```"
+        assert StatisticsAgent._explanation_so_far(full) == "hello world"
+
+    async def test_stream_yields_deltas_then_proposal(
+        self,
+        mock_policy_engine: MagicMock,
+        mock_schema_registry: MagicMock,
+        mock_audit: MagicMock,
+        token: CapabilityToken,
+    ) -> None:
+        agent = StatisticsAgent(
+            mock_policy_engine, mock_schema_registry, mock_audit,
+            llm_client=_FakeStreamLLM(_CONVERSATIONAL_LLM_RESPONSE),
+        )
+        payload = {**_BASE_PAYLOAD, "conversational_mode": True}
+        events = await _collect_stream(agent, payload, token)
+
+        deltas = [e["text"] for e in events if e["type"] == "delta"]
+        proposals = [e for e in events if e["type"] == "proposal"]
+        assert deltas, "expected at least one streamed explanation delta"
+        assert len(proposals) == 1
+        proposal = proposals[0]["analysis_proposal"]
+        # The concatenated deltas reconstruct the explanation prose (the code is
+        # withheld from the stream and only ever arrives as candidates).
+        assert "".join(deltas).strip() == proposal["explanation_markdown"].strip()
+        assert "```r" not in "".join(deltas)
+        assert len(proposal["code_candidates"]) == 2
+        assert proposal["recommended_candidate_id"] == "welch_t_test"
+        assert proposals[0]["r_script_provenance"]["llm_generated"] is True
+        assert proposals[0]["recommended_r_script"].startswith("data <-")
+
+    async def test_stream_enforces_scope_validates_and_audits(
+        self,
+        mock_policy_engine: MagicMock,
+        mock_schema_registry: MagicMock,
+        mock_audit: MagicMock,
+        token: CapabilityToken,
+    ) -> None:
+        """Governance parity with run(): scope check + input validation + audit."""
+        agent = StatisticsAgent(
+            mock_policy_engine, mock_schema_registry, mock_audit,
+            llm_client=_FakeStreamLLM(_CONVERSATIONAL_LLM_RESPONSE),
+        )
+        payload = {**_BASE_PAYLOAD, "conversational_mode": True}
+        await _collect_stream(agent, payload, token)
+
+        mock_policy_engine.enforce_multi.assert_awaited_once()
+        mock_schema_registry.validate.assert_called_once()
+        mock_audit.write.assert_awaited_once()
+
+    async def test_stream_off_catalog_flags_caveat(
+        self,
+        mock_policy_engine: MagicMock,
+        mock_schema_registry: MagicMock,
+        mock_audit: MagicMock,
+        token: CapabilityToken,
+    ) -> None:
+        agent = StatisticsAgent(
+            mock_policy_engine, mock_schema_registry, mock_audit,
+            llm_client=_FakeStreamLLM(_CONVERSATIONAL_LLM_RESPONSE),
+        )
+        payload = {
+            **_BASE_PAYLOAD,
+            "conversational_mode": True,
+            "intent_object": {**_BASE_INTENT, "objective": "prediction_model"},
+        }
+        events = await _collect_stream(agent, payload, token)
+        proposal_ev = next(e for e in events if e["type"] == "proposal")
+        assert proposal_ev["analysis_proposal"]["off_catalog"] is True
+        assert proposal_ev["analysis_proposal"]["caveat_markdown"]
+        assert proposal_ev["r_script_provenance"]["grounded_by_skill"] is False
+
+    async def test_stream_without_llm_client_emits_error(
+        self, agent: StatisticsAgent, token: CapabilityToken
+    ) -> None:
+        """No llm_client → a single error event whose reason is never silent."""
+        payload = {**_BASE_PAYLOAD, "conversational_mode": True}
+        events = await _collect_stream(agent, payload, token)
+        assert [e["type"] for e in events] == ["error"]
+        assert events[0]["reason"] == "no_llm_client_configured"
+
+    async def test_stream_quality_gate_blocked_emits_error(
+        self,
+        mock_policy_engine: MagicMock,
+        mock_schema_registry: MagicMock,
+        mock_audit: MagicMock,
+        token: CapabilityToken,
+    ) -> None:
+        agent = StatisticsAgent(
+            mock_policy_engine, mock_schema_registry, mock_audit,
+            llm_client=_FakeStreamLLM(_CONVERSATIONAL_LLM_RESPONSE),
+        )
+        payload = {
+            **_BASE_PAYLOAD,
+            "conversational_mode": True,
+            "data_quality_report": {"quality_gate_passed": False},
+        }
+        events = await _collect_stream(agent, payload, token)
+        assert events == [{"type": "error", "reason": "quality_gate_blocked"}]
