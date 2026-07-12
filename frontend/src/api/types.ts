@@ -206,6 +206,14 @@ export type ChatStreamEvent =
       analysis_proposal: AnalysisProposal;
       r_script_provenance: RScriptProvenance;
     }
+  // Tool frames (deterministic-gated routing): the Dialog agent ran the
+  // visualization or reporting tool on the prior results.
+  | { type: "figures"; execution_id?: string; figures: Figure[] }
+  | {
+      type: "manuscript";
+      execution_id?: string;
+      manuscript_sections: ManuscriptSection[];
+    }
   | { type: "error"; reason: string; r_script_provenance?: RScriptProvenance }
   | { type: "done" };
 

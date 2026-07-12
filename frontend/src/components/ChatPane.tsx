@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { CieApiClient } from "../api/client";
-import type { ClarificationOption, CodeCandidate } from "../api/types";
+import type {
+  ClarificationOption,
+  CodeCandidate,
+  Figure,
+  ManuscriptSection,
+} from "../api/types";
 
 type Msg =
   | { id: string; kind: "user"; text: string }
@@ -25,7 +30,9 @@ type Msg =
       intent: Record<string, unknown>;
       offCatalog?: boolean;
       caveat?: string;
-    };
+    }
+  | { id: string; kind: "figures"; figures: Figure[] }
+  | { id: string; kind: "manuscript"; sections: ManuscriptSection[] };
 
 interface ChatPaneProps {
   client: CieApiClient;
@@ -190,6 +197,24 @@ export function ChatPane({
     runChat({ prompt });
   }
 
+  // Explicit tool affordance (図/原稿): the Dialog agent's deterministic routing
+  // gate. Runs the chosen tool on the prior run's results over WS /ws/chat — no
+  // free-text guessing, so a code refinement is never mistaken for a tool call.
+  function runTool(tool: "visualization" | "reporting") {
+    if (busy || priorStats == null) return;
+    add({
+      id: nextId(),
+      kind: "user",
+      text: tool === "visualization" ? "この結果で図を作成" : "この結果で原稿を作成",
+    });
+    runChat({
+      requestedTool: tool,
+      intentObject: priorIntent,
+      priorStatisticalResults: priorStats,
+      priorRScript: priorScript,
+    });
+  }
+
   // Apply a clicked clarification option: merge its intent_override into the
   // Planner's intent and stream the proposal for it (skips the Planner). The
   // merged intent carries the resolved field (outcome_variables, paired, …),
@@ -229,6 +254,7 @@ export function ChatPane({
     continuationQuery?: string;
     priorStatisticalResults?: Record<string, unknown> | null;
     priorRScript?: string;
+    requestedTool?: "visualization" | "reporting";
   }) {
     setBusy(true);
     let streamId: string | null = null;
@@ -250,6 +276,7 @@ export function ChatPane({
       continuationQuery: opts.continuationQuery,
       priorStatisticalResults: opts.priorStatisticalResults,
       priorRScript: opts.priorRScript,
+      requestedTool: opts.requestedTool,
       onMessage: (ev) => {
         switch (ev.type) {
           case "intent":
@@ -313,6 +340,18 @@ export function ChatPane({
             }
             break;
           }
+          case "figures":
+            settled = true;
+            add({ id: nextId(), kind: "figures", figures: ev.figures ?? [] });
+            break;
+          case "manuscript":
+            settled = true;
+            add({
+              id: nextId(),
+              kind: "manuscript",
+              sections: ev.manuscript_sections ?? [],
+            });
+            break;
           case "error":
             settled = true;
             add({
@@ -373,6 +412,7 @@ export function ChatPane({
             key={m.id}
             msg={m}
             busy={busy}
+            client={client}
             onConfirm={confirmIntent}
             onClarify={answerClarification}
             onInsertCode={onInsertCode}
@@ -400,6 +440,28 @@ export function ChatPane({
               ? "新しい解析（次の入力は新規の意図）"
               : "統計結果なし（初回の意図を入力）"}
         </span>
+        {/* 明示的なツール操作（決定論ゲート）: 直近の解析結果に対して図/原稿を
+            生成する。自由文からの推測はせず、押下＝そのツールに確定ルーティング。 */}
+        <button
+          type="button"
+          className="mini-btn"
+          data-testid="tool-visualize"
+          onClick={() => runTool("visualization")}
+          disabled={busy || !continuationActive}
+          title="直近の結果から図を生成します"
+        >
+          📊 図を作成
+        </button>
+        <button
+          type="button"
+          className="mini-btn"
+          data-testid="tool-report"
+          onClick={() => runTool("reporting")}
+          disabled={busy || !continuationActive}
+          title="直近の結果から原稿セクションを生成します"
+        >
+          📝 原稿を作成
+        </button>
         <button
           type="button"
           className="mini-btn"
@@ -453,6 +515,7 @@ export function ChatPane({
 function MessageView({
   msg,
   busy,
+  client,
   onConfirm,
   onClarify,
   onInsertCode,
@@ -460,6 +523,7 @@ function MessageView({
 }: {
   msg: Msg;
   busy: boolean;
+  client: CieApiClient;
   onConfirm: (intent: Record<string, unknown>) => void;
   onClarify: (
     msgId: string,
@@ -591,7 +655,98 @@ function MessageView({
           ))}
         </div>
       );
+    case "figures":
+      return (
+        <div className="msg msg--ai" data-testid="chat-figures">
+          <span className="msg__role">AI</span>
+          {msg.figures.length === 0 ? (
+            <div data-testid="chat-figures-empty">生成された図はありません。</div>
+          ) : (
+            <div className="figures">
+              {msg.figures.map((f, i) => (
+                <figure className="figure" key={i} data-testid="chat-figure">
+                  {f.path && <ChatFigureImg client={client} path={f.path} title={f.title} />}
+                  <figcaption className="figure__caption">{f.title}</figcaption>
+                </figure>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    case "manuscript":
+      return (
+        <div className="msg msg--ai" data-testid="chat-manuscript">
+          <span className="msg__role">AI</span>
+          {msg.sections.length === 0 ? (
+            <div data-testid="chat-manuscript-empty">
+              生成された原稿セクションはありません。
+            </div>
+          ) : (
+            msg.sections.map((s) => (
+              <section
+                key={s.section_id}
+                className="manuscript"
+                data-testid="chat-manuscript-section"
+              >
+                <div className="manuscript__bar">
+                  <span className="manuscript__title">{s.section_id}</span>
+                  {s.is_ai_generated && <span className="manuscript__ai">AI生成</span>}
+                </div>
+                {/* Copyable text: a plain, selectable block — no auto-clipboard (§3.5). */}
+                <pre className="manuscript__text">{s.text}</pre>
+              </section>
+            ))
+          )}
+        </div>
+      );
     default:
       return null;
   }
+}
+
+/** Load a workspace figure as an auth-fetched object URL (a bare <img src> can't
+ *  send the X-CIE-Token header). Revokes the URL on unmount / path change. */
+function ChatFigureImg({
+  client,
+  path,
+  title,
+}: {
+  client: CieApiClient;
+  path: string;
+  title: string;
+}) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let revoked: string | null = null;
+    let cancelled = false;
+    client
+      .fetchImageObjectUrl(path)
+      .then((u) => {
+        if (cancelled) {
+          URL.revokeObjectURL(u);
+          return;
+        }
+        revoked = u;
+        setUrl(u);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+      if (revoked) URL.revokeObjectURL(revoked);
+    };
+  }, [client, path]);
+
+  if (failed) {
+    return (
+      <div className="figure__error" data-testid="chat-figure-error">
+        図を読み込めませんでした（{path}）。
+      </div>
+    );
+  }
+  if (!url) return <div className="figure__loading">図を読み込み中…</div>;
+  return <img src={url} alt={title} className="figure__img" data-testid="chat-figure-img" />;
 }

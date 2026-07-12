@@ -512,6 +512,9 @@ export class CieApiClient {
     continuationQuery?: string;
     priorStatisticalResults?: Record<string, unknown> | null;
     priorRScript?: string;
+    /** Explicit tool affordance ("visualization" | "reporting") — the Dialog
+     *  agent's deterministic routing gate for running a tool on the prior run. */
+    requestedTool?: string;
     onMessage: (event: ChatStreamEvent) => void;
     onError: (message: string) => void;
     onClose: () => void;
@@ -536,6 +539,8 @@ export class CieApiClient {
           continuation_query: params.continuationQuery ?? "",
           prior_statistical_results: params.priorStatisticalResults ?? null,
           prior_r_script: params.priorRScript ?? "",
+          // Explicit tool gate (empty for a normal analysis/continuation turn).
+          requested_tool: params.requestedTool ?? "",
         }),
       );
     };

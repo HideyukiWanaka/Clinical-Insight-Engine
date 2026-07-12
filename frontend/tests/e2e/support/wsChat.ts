@@ -42,6 +42,20 @@ export function proposalFrames(
   ];
 }
 
+/** The terminal `figures` frame the visualization tool emits. */
+export function figuresFrame(
+  figures: Array<{ title: string; path?: string | null }>,
+): WsChatFrame {
+  return { type: "figures", execution_id: "viz-e2e", figures };
+}
+
+/** The terminal `manuscript` frame the reporting tool emits. */
+export function manuscriptFrame(
+  sections: Array<{ section_id: string; text: string; is_ai_generated: boolean }>,
+): WsChatFrame {
+  return { type: "manuscript", execution_id: "rep-e2e", manuscript_sections: sections };
+}
+
 /** The transparency `intent` echo the server emits before streaming a proposal
  *  on a high-confidence unambiguous turn. */
 export function intentEcho(
