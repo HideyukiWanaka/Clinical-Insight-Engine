@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { installStandardChat } from "./support/wsChat";
 
 // Phase 6 (R6-1): Output & Format pane — pick a reporting checklist / journal
 // style / user Skill, press "原稿に変換" → POST /api/report → manuscript_sections
@@ -59,18 +60,21 @@ async function connectAndRun(page: Page): Promise<void> {
       ws.close();
     });
   });
+  // Chat streams over WS /ws/chat (install before goto).
+  await installStandardChat(page, {
+    intent: INTENT_RESPONSE.intent_object,
+    proposal: PROPOSE_RESPONSE.analysis_proposal,
+    provenance: PROPOSE_RESPONSE.r_script_provenance,
+  });
   await page.goto("/");
   await page.getByTestId("open-settings-from-chat").click();
   await page.getByTestId("settings-token-input").fill("test-token-abc");
   await page.getByTestId("settings-token-save").click();
   await page.getByTestId("settings-close").click();
-  await page.route("**/api/intent", (r) => r.fulfill({ json: INTENT_RESPONSE }));
-  await page.route("**/api/propose", (r) => r.fulfill({ json: PROPOSE_RESPONSE }));
   await page.route("**/api/run", (r) => r.fulfill({ json: RUN_RESPONSE }));
 
   await page.getByTestId("chat-input").fill("男女で収縮期血圧を比べたい");
   await page.getByTestId("chat-send").click();
-  await page.getByTestId("confirm-propose").click();
   await page.getByTestId("code-candidate").getByTestId("candidate-run").click();
 }
 

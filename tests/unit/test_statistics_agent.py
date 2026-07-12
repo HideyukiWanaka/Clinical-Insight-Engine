@@ -259,6 +259,56 @@ class TestMethodSelection:
         methods = result.output_payload["selected_methods"]
         assert any(m["method_id"] == "pearson_correlation" for m in methods)
 
+    # --- off-catalogue detection ---------------------------------------------
+
+    def test_select_method_matched_for_catalog_objective(
+        self, agent: StatisticsAgent
+    ) -> None:
+        method, matched = agent._select_method(
+            "between_group_comparison", "continuous", 2, False, "assumed_normal"
+        )
+        assert matched is True
+        assert method["method_id"] == "independent_samples_t_test"
+
+    def test_select_method_unmatched_for_uncatalogued_objective(
+        self, agent: StatisticsAgent
+    ) -> None:
+        # prediction_model has no modelled method → falls to the generic default
+        # but is reported as off-catalogue.
+        method, matched = agent._select_method(
+            "prediction_model", "continuous", 2, False, "assumed_normal"
+        )
+        assert matched is False
+        assert method["method_id"] == "independent_samples_t_test"
+
+    def test_skill_grounding_off_catalog_injects_no_skill(
+        self, agent: StatisticsAgent
+    ) -> None:
+        # Off-catalogue must never inject a (mismatched) Skill block.
+        block, grounded = agent._skill_grounding("independent_samples_t_test", True)
+        assert block == ""
+        assert grounded is False
+
+    async def test_provenance_off_catalog_false_for_catalog_request(
+        self, agent: StatisticsAgent, token: CapabilityToken
+    ) -> None:
+        result = await agent.run(_make_input(_BASE_PAYLOAD, token))
+        prov = result.output_payload["r_script_provenance"]
+        assert prov["off_catalog"] is False
+        assert prov["grounded_by_skill"] is True
+
+    async def test_provenance_off_catalog_true_for_uncatalogued_request(
+        self, agent: StatisticsAgent, token: CapabilityToken
+    ) -> None:
+        payload = {
+            **_BASE_PAYLOAD,
+            "intent_object": {**_BASE_INTENT, "objective": "prediction_model"},
+        }
+        result = await agent.run(_make_input(payload, token))
+        prov = result.output_payload["r_script_provenance"]
+        assert prov["off_catalog"] is True
+        assert prov["grounded_by_skill"] is False
+
 
 # ---------------------------------------------------------------------------
 # Output contract tests (ST-002, ST-003, ST-004)
@@ -366,6 +416,35 @@ class TestConversationalProposal:
             "=== EXPLANATION ===\nNo code here.\n"
         ) is None
 
+    def test_conversation_history_included_in_user_message(self) -> None:
+        """Prior chat turns are surfaced to the conversational prompt (P1-B)."""
+        msg = StatisticsAgent._build_conversational_user_message(
+            method={"method_id": "independent_samples_t_test", "r_function": "t.test"},
+            alt_method=None,
+            intent_obj={"objective": "between_group_comparison"},
+            column_metadata={"収縮期血圧_mmHg": {"inferred_type": "continuous"}},
+            references=[],
+            alias_map={},
+            conversation_history=[
+                {"role": "user", "text": "男女の血圧を比較したい"},
+                {"role": "assistant", "text": "収縮期血圧で比較しますね"},
+            ],
+        )
+        assert "CONVERSATION SO FAR" in msg
+        assert "男女の血圧を比較したい" in msg
+
+    def test_no_history_block_when_empty(self) -> None:
+        msg = StatisticsAgent._build_conversational_user_message(
+            method={"method_id": "x", "r_function": "t.test"},
+            alt_method=None,
+            intent_obj={},
+            column_metadata={},
+            references=[],
+            alias_map={},
+            conversation_history=[],
+        )
+        assert "CONVERSATION SO FAR" not in msg
+
     async def test_conversational_mode_produces_analysis_proposal(
         self,
         mock_policy_engine: MagicMock,
@@ -395,6 +474,35 @@ class TestConversationalProposal:
         assert result.output_payload["r_script"] == proposal["code_candidates"][0]["r_code"]
         assert result.output_payload["r_script_provenance"]["conversational"] is True
 
+    async def test_off_catalog_conversational_proposal_has_caveat(
+        self,
+        mock_policy_engine: MagicMock,
+        mock_schema_registry: MagicMock,
+        mock_audit: MagicMock,
+        token: CapabilityToken,
+    ) -> None:
+        """Off-catalogue conversational proposal flags off_catalog + caveat."""
+        mock_llm = MagicMock()
+        mock_llm.provider = "anthropic"
+        mock_llm.model = "test-model"
+        mock_llm.complete = AsyncMock(return_value=_CONVERSATIONAL_LLM_RESPONSE)
+
+        agent = StatisticsAgent(
+            mock_policy_engine, mock_schema_registry, mock_audit, llm_client=mock_llm,
+        )
+        payload = {
+            **_BASE_PAYLOAD,
+            "conversational_mode": True,
+            "intent_object": {**_BASE_INTENT, "objective": "prediction_model"},
+        }
+        result = await agent.run(_make_input(payload, token))
+
+        proposal = result.output_payload["analysis_proposal"]
+        assert proposal["off_catalog"] is True
+        assert "caveat_markdown" in proposal and proposal["caveat_markdown"]
+        assert result.output_payload["r_script_provenance"]["off_catalog"] is True
+        assert result.output_payload["r_script_provenance"]["grounded_by_skill"] is False
+
     async def test_conversational_mode_without_llm_client_surfaces_reason(
         self, agent: StatisticsAgent, token: CapabilityToken
     ) -> None:
@@ -408,3 +516,225 @@ class TestConversationalProposal:
         assert result.output_payload["r_script_provenance"]["reason"] == (
             "no_llm_client_configured"
         )
+
+
+# ---------------------------------------------------------------------------
+# Streaming conversational proposal (Phase 2, WS /ws/chat)
+# ---------------------------------------------------------------------------
+
+
+class _FakeStreamLLM:
+    """Async-generator LLM stub: yields the canned response in small chunks."""
+
+    def __init__(self, text: str, chunk_size: int = 17) -> None:
+        self._text = text
+        self._chunk = chunk_size
+        self.provider = "anthropic"
+        self.model = "test-model"
+
+    async def stream_messages(self, system, messages, assistant_prefill=None):
+        for i in range(0, len(self._text), self._chunk):
+            yield self._text[i : i + self._chunk]
+
+
+async def _collect_stream(agent: StatisticsAgent, payload: dict,
+                          token: CapabilityToken) -> list[dict]:
+    events: list[dict] = []
+    async for ev in agent.stream_conversational_proposal(_make_input(payload, token)):
+        events.append(ev)
+    return events
+
+
+class TestStreamingConversationalProposal:
+
+    def test_explanation_so_far_withholds_partial_code_marker(self) -> None:
+        # No EXPLANATION opener yet → nothing to emit.
+        assert StatisticsAgent._explanation_so_far("partial pre") == ""
+        # Opener present, no CODE marker yet → a trailing slice is withheld so a
+        # half-formed "=== CODE:" can never flash as prose.
+        partial = "=== EXPLANATION ===\nhello world\n=== CO"
+        got = StatisticsAgent._explanation_so_far(partial)
+        # A trailing slice is withheld, so `got` is a (possibly shortened) prefix
+        # of the prose — and crucially never contains the half-formed marker.
+        assert "hello world".startswith(got)
+        assert "=== CO" not in got
+        # Once the CODE marker resolves, the full explanation is available.
+        full = "=== EXPLANATION ===\nhello world\n=== CODE: a|b ===\n```r\nx\n```"
+        assert StatisticsAgent._explanation_so_far(full) == "hello world"
+
+    async def test_stream_yields_deltas_then_proposal(
+        self,
+        mock_policy_engine: MagicMock,
+        mock_schema_registry: MagicMock,
+        mock_audit: MagicMock,
+        token: CapabilityToken,
+    ) -> None:
+        agent = StatisticsAgent(
+            mock_policy_engine, mock_schema_registry, mock_audit,
+            llm_client=_FakeStreamLLM(_CONVERSATIONAL_LLM_RESPONSE),
+        )
+        payload = {**_BASE_PAYLOAD, "conversational_mode": True}
+        events = await _collect_stream(agent, payload, token)
+
+        deltas = [e["text"] for e in events if e["type"] == "delta"]
+        proposals = [e for e in events if e["type"] == "proposal"]
+        assert deltas, "expected at least one streamed explanation delta"
+        assert len(proposals) == 1
+        proposal = proposals[0]["analysis_proposal"]
+        # The concatenated deltas reconstruct the explanation prose (the code is
+        # withheld from the stream and only ever arrives as candidates).
+        assert "".join(deltas).strip() == proposal["explanation_markdown"].strip()
+        assert "```r" not in "".join(deltas)
+        assert len(proposal["code_candidates"]) == 2
+        assert proposal["recommended_candidate_id"] == "welch_t_test"
+        assert proposals[0]["r_script_provenance"]["llm_generated"] is True
+        assert proposals[0]["recommended_r_script"].startswith("data <-")
+
+    async def test_stream_enforces_scope_validates_and_audits(
+        self,
+        mock_policy_engine: MagicMock,
+        mock_schema_registry: MagicMock,
+        mock_audit: MagicMock,
+        token: CapabilityToken,
+    ) -> None:
+        """Governance parity with run(): scope check + input validation + audit."""
+        agent = StatisticsAgent(
+            mock_policy_engine, mock_schema_registry, mock_audit,
+            llm_client=_FakeStreamLLM(_CONVERSATIONAL_LLM_RESPONSE),
+        )
+        payload = {**_BASE_PAYLOAD, "conversational_mode": True}
+        await _collect_stream(agent, payload, token)
+
+        mock_policy_engine.enforce_multi.assert_awaited_once()
+        mock_schema_registry.validate.assert_called_once()
+        mock_audit.write.assert_awaited_once()
+
+    async def test_stream_off_catalog_flags_caveat(
+        self,
+        mock_policy_engine: MagicMock,
+        mock_schema_registry: MagicMock,
+        mock_audit: MagicMock,
+        token: CapabilityToken,
+    ) -> None:
+        agent = StatisticsAgent(
+            mock_policy_engine, mock_schema_registry, mock_audit,
+            llm_client=_FakeStreamLLM(_CONVERSATIONAL_LLM_RESPONSE),
+        )
+        payload = {
+            **_BASE_PAYLOAD,
+            "conversational_mode": True,
+            "intent_object": {**_BASE_INTENT, "objective": "prediction_model"},
+        }
+        events = await _collect_stream(agent, payload, token)
+        proposal_ev = next(e for e in events if e["type"] == "proposal")
+        assert proposal_ev["analysis_proposal"]["off_catalog"] is True
+        assert proposal_ev["analysis_proposal"]["caveat_markdown"]
+        assert proposal_ev["r_script_provenance"]["grounded_by_skill"] is False
+
+    async def test_stream_without_llm_client_emits_error(
+        self, agent: StatisticsAgent, token: CapabilityToken
+    ) -> None:
+        """No llm_client → a single error event whose reason is never silent."""
+        payload = {**_BASE_PAYLOAD, "conversational_mode": True}
+        events = await _collect_stream(agent, payload, token)
+        assert [e["type"] for e in events] == ["error"]
+        assert events[0]["reason"] == "no_llm_client_configured"
+
+    async def test_stream_quality_gate_blocked_emits_error(
+        self,
+        mock_policy_engine: MagicMock,
+        mock_schema_registry: MagicMock,
+        mock_audit: MagicMock,
+        token: CapabilityToken,
+    ) -> None:
+        agent = StatisticsAgent(
+            mock_policy_engine, mock_schema_registry, mock_audit,
+            llm_client=_FakeStreamLLM(_CONVERSATIONAL_LLM_RESPONSE),
+        )
+        payload = {
+            **_BASE_PAYLOAD,
+            "conversational_mode": True,
+            "data_quality_report": {"quality_gate_passed": False},
+        }
+        events = await _collect_stream(agent, payload, token)
+        assert events == [{"type": "error", "reason": "quality_gate_blocked"}]
+
+
+class _CapturingStreamLLM:
+    """Stream stub that records the (system, messages) it was called with."""
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self.provider = "anthropic"
+        self.model = "test-model"
+        self.system: str | None = None
+        self.messages: list | None = None
+
+    async def stream_messages(self, system, messages, assistant_prefill=None):
+        self.system = system
+        self.messages = messages
+        yield self._text
+
+
+class TestStreamingContinuation:
+    """Follow-up (continuation) turns stream as conversational proposals too."""
+
+    async def test_continuation_query_grounds_prompt_and_flags_provenance(
+        self,
+        mock_policy_engine: MagicMock,
+        mock_schema_registry: MagicMock,
+        mock_audit: MagicMock,
+        token: CapabilityToken,
+    ) -> None:
+        llm = _CapturingStreamLLM(_CONVERSATIONAL_LLM_RESPONSE)
+        agent = StatisticsAgent(
+            mock_policy_engine, mock_schema_registry, mock_audit, llm_client=llm,
+        )
+        payload = {
+            **_BASE_PAYLOAD,
+            "conversational_mode": True,
+            "continuation_query": "サブグループごとに効果量も出したい",
+            "prior_statistical_results": {
+                "test_name": "Welch t-test", "p_value": 0.03,
+                "effect_size": 0.42, "effect_size_measure": "Cohen's d",
+                # Not in the whitelist — must NOT be echoed back to the model.
+                "raw_rows": [[1, 2], [3, 4]],
+            },
+            "prior_r_script": "data <- read.csv('x')\nt.test(BP ~ Sex)",
+        }
+        events = await _collect_stream(agent, payload, token)
+
+        # Provenance marks it as a continuation.
+        proposal_ev = next(e for e in events if e["type"] == "proposal")
+        assert proposal_ev["r_script_provenance"]["continuation"] is True
+
+        # The follow-up query + whitelisted prior results reached the prompt; the
+        # non-whitelisted key (raw rows) did not.
+        user_msg = llm.messages[0]["content"]
+        assert "サブグループごとに効果量も出したい" in user_msg
+        assert "Welch t-test" in user_msg
+        assert "raw_rows" not in user_msg
+        # The follow-up framing preamble is prepended to the system prompt.
+        assert "FOLLOW-UP" in llm.system
+
+    async def test_continuation_offers_single_candidate(
+        self,
+        mock_policy_engine: MagicMock,
+        mock_schema_registry: MagicMock,
+        mock_audit: MagicMock,
+        token: CapabilityToken,
+    ) -> None:
+        """A follow-up stays focused: no parametric/non-parametric fork request."""
+        llm = _CapturingStreamLLM(_CONVERSATIONAL_LLM_RESPONSE)
+        agent = StatisticsAgent(
+            mock_policy_engine, mock_schema_registry, mock_audit, llm_client=llm,
+        )
+        payload = {
+            **_BASE_PAYLOAD,
+            "conversational_mode": True,
+            "continuation_query": "信頼区間も表示して",
+        }
+        await _collect_stream(agent, payload, token)
+
+        # No alternative method is offered to the model on a follow-up turn.
+        assert '"alternative_method": null' in llm.messages[0]["content"]

@@ -109,9 +109,24 @@ export interface StorageDirectoryRequest {
 }
 
 // POST /api/intent (§3.1)
+export interface ConversationTurn {
+  role: "user" | "assistant";
+  text: string;
+}
+
 export interface IntentRequest {
   prompt: string;
   dataset_uploaded?: boolean;
+  // Recent chat turns (oldest→newest, excluding the current prompt) so the
+  // Planner reads a correction in context instead of as an isolated fragment.
+  conversation_history?: ConversationTurn[];
+}
+
+// One clarification option the Planner offers; clicking applies intent_override.
+export interface ClarificationOption {
+  option_id?: string;
+  label: string;
+  intent_override?: Record<string, unknown>;
 }
 
 export interface IntentResponse {
@@ -128,6 +143,8 @@ export interface ProposeRequest {
   continuation_query?: string | null;
   prior_statistical_results?: Record<string, unknown> | null;
   prior_r_script?: string | null;
+  // Recent chat turns so the conversational explanation reflects the dialogue.
+  conversation_history?: ConversationTurn[];
 }
 
 export interface CodeCandidate {
@@ -140,6 +157,10 @@ export interface AnalysisProposal {
   explanation_markdown?: string;
   code_candidates?: CodeCandidate[];
   recommended_candidate_id?: string;
+  // True when the request did not map onto a vetted Skill (off-catalogue). The
+  // chat shows caveat_markdown as a warning above the code candidates.
+  off_catalog?: boolean;
+  caveat_markdown?: string;
 }
 
 export interface RScriptProvenance {
@@ -148,6 +169,9 @@ export interface RScriptProvenance {
   knowledge_references?: unknown[];
   // Always present when generation failed (§3.2) — the frontend must show it.
   reason?: string;
+  // Off-catalogue transparency: whether a vetted Skill grounded the generation.
+  off_catalog?: boolean;
+  grounded_by_skill?: boolean;
 }
 
 export interface ProposeResponse {
@@ -155,6 +179,43 @@ export interface ProposeResponse {
   analysis_proposal: AnalysisProposal | null;
   r_script_provenance: RScriptProvenance;
 }
+
+// WS /ws/chat (Phase 2) — the streaming counterpart of POST /api/propose.
+// The server streams the explanation as `delta` frames, then delivers the
+// structured candidates in a single `proposal` frame, then `done`. A failure
+// arrives as `error` (never silent, §5). The R code is only ever in `proposal`
+// — execution stays human-gated (POST /api/run), never auto-run.
+export type ChatStreamEvent =
+  // Planner routing frames (server-side deterministic routing).
+  | {
+      type: "intent";
+      intent_object: Record<string, unknown>;
+      confidence_score?: number;
+    }
+  | {
+      type: "clarify";
+      intent_object: Record<string, unknown>;
+      clarification_options: Array<Record<string, unknown>>;
+    }
+  | { type: "confirm"; intent_object: Record<string, unknown> }
+  // Proposal streaming frames.
+  | { type: "delta"; text: string }
+  | {
+      type: "proposal";
+      execution_id?: string;
+      analysis_proposal: AnalysisProposal;
+      r_script_provenance: RScriptProvenance;
+    }
+  // Tool frames (deterministic-gated routing): the Dialog agent ran the
+  // visualization or reporting tool on the prior results.
+  | { type: "figures"; execution_id?: string; figures: Figure[] }
+  | {
+      type: "manuscript";
+      execution_id?: string;
+      manuscript_sections: ManuscriptSection[];
+    }
+  | { type: "error"; reason: string; r_script_provenance?: RScriptProvenance }
+  | { type: "done" };
 
 // POST /api/run (§3.3)
 export interface RunRequest {

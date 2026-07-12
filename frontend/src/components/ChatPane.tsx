@@ -1,13 +1,25 @@
 import { useEffect, useRef, useState } from "react";
-import { ApiError, type CieApiClient } from "../api/client";
-import type { CodeCandidate } from "../api/types";
+import type { CieApiClient } from "../api/client";
+import type {
+  ClarificationOption,
+  CodeCandidate,
+  Figure,
+  ManuscriptSection,
+} from "../api/types";
 
 type Msg =
   | { id: string; kind: "user"; text: string }
   | { id: string; kind: "ai"; text: string }
   | { id: string; kind: "system"; text: string }
   | { id: string; kind: "error"; text: string; detail?: string | null }
-  | { id: string; kind: "clarify"; text: string; options: string[] }
+  | {
+      id: string;
+      kind: "clarify";
+      text: string;
+      options: ClarificationOption[];
+      intent: Record<string, unknown>;
+      answered?: boolean;
+    }
   | { id: string; kind: "confirm"; intent: Record<string, unknown>; summary: string }
   | {
       id: string;
@@ -16,7 +28,11 @@ type Msg =
       candidates: CodeCandidate[];
       recommendedId?: string;
       intent: Record<string, unknown>;
-    };
+      offCatalog?: boolean;
+      caveat?: string;
+    }
+  | { id: string; kind: "figures"; figures: Figure[] }
+  | { id: string; kind: "manuscript"; sections: ManuscriptSection[] };
 
 interface ChatPaneProps {
   client: CieApiClient;
@@ -25,8 +41,6 @@ interface ChatPaneProps {
   onOpenSettings: () => void;
   onInsertCode: (code: string) => void;
   onRunCode: (code: string, intent?: Record<string, unknown>) => void;
-  /** Real dataset state — rides in POST /api/intent (replaces the hardcode). */
-  datasetUploaded: boolean;
   /** statistical_results of the most recent run (null → continuation disabled). */
   priorStats: Record<string, unknown> | null;
   /** R script of the most recent run — carried as prior_r_script (§3.2). */
@@ -38,6 +52,16 @@ interface ChatPaneProps {
 let seq = 0;
 const nextId = () => `m${++seq}`;
 
+/** Stable per-mount conversation id so the server can keep the running chat
+ *  history for WS /ws/chat (falls back when crypto.randomUUID is unavailable). */
+function newConversationId(): string {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `c${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+}
+
 // Send-shortcut label: ⌘ on macOS, Ctrl elsewhere (both are accepted).
 const modKeyLabel = /Mac|iP(hone|ad|od)/.test(navigator.platform) ? "⌘" : "Ctrl";
 
@@ -46,6 +70,23 @@ function optionLabel(opt: Record<string, unknown>, i: number): string {
     opt.label ?? opt.question ?? opt.option_text ?? opt.text ?? opt.description;
   if (typeof cand === "string" && cand.trim()) return cand;
   return `選択肢 ${i + 1}: ${JSON.stringify(opt)}`;
+}
+
+/** Normalize a raw API clarification option into the structured shape the chat
+ *  renders and acts on (a clickable answer carries its intent_override). */
+function toClarificationOption(
+  opt: Record<string, unknown>,
+  i: number,
+): ClarificationOption {
+  const override =
+    opt.intent_override && typeof opt.intent_override === "object"
+      ? (opt.intent_override as Record<string, unknown>)
+      : undefined;
+  return {
+    option_id: typeof opt.option_id === "string" ? opt.option_id : undefined,
+    label: optionLabel(opt, i),
+    intent_override: override,
+  };
 }
 
 function intentSummary(intent: Record<string, unknown>): string {
@@ -75,7 +116,6 @@ export function ChatPane({
   onOpenSettings,
   onInsertCode,
   onRunCode,
-  datasetUploaded,
   priorStats,
   priorScript,
   priorIntent,
@@ -95,6 +135,7 @@ export function ChatPane({
   const [newAnalysisPending, setNewAnalysisPending] = useState(false);
   const resetStatsRef = useRef<Record<string, unknown> | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
+  const conversationId = useRef<string>(newConversationId());
 
   const add = (m: Msg) => setMessages((prev) => [...prev, m]);
 
@@ -115,8 +156,8 @@ export function ChatPane({
   }, [priorStats, newAnalysisPending]);
 
   function send() {
-    if (continuationActive) void sendContinuation();
-    else void sendIntent();
+    if (continuationActive) sendContinuation();
+    else sendIntent();
   }
 
   function newAnalysis() {
@@ -130,126 +171,220 @@ export function ChatPane({
     });
   }
 
-  async function sendContinuation() {
+  // Follow-up (継続) turn: stream over WS just like a fresh turn, but ride the
+  // lineage intent + prior results/script so the server extends the prior
+  // analysis. The explanation types in live (delta) and the proposal inherits
+  // priorIntent so a re-run still drafts the manuscript. R execution stays
+  // human-gated — candidates are never auto-run.
+  function sendContinuation() {
     const query = input.trim();
     if (!query || busy) return;
     setInput("");
     add({ id: nextId(), kind: "user", text: query });
-    setBusy(true);
-    add({ id: nextId(), kind: "system", text: "追加解析を生成しています…" });
-    try {
-      const res = await client.propose({
-        continuation_query: query,
-        prior_statistical_results: priorStats,
-        prior_r_script: priorScript,
-      });
-      if (!res.analysis_proposal) {
-        const reason =
-          res.r_script_provenance?.reason || "追加解析を生成できませんでした。";
-        add({
-          id: nextId(),
-          kind: "error",
-          text: "追加解析の生成に失敗しました。",
-          detail: reason,
-        });
-        return;
-      }
-      const p = res.analysis_proposal;
-      add({
-        id: nextId(),
-        kind: "proposal",
-        explanation: p.explanation_markdown ?? "",
-        candidates: p.code_candidates ?? [],
-        recommendedId: p.recommended_candidate_id,
-        // Inherit the lineage intent so a re-run still drafts the manuscript.
-        intent: priorIntent,
-      });
-    } catch (err) {
-      pushError(err);
-    } finally {
-      setBusy(false);
-    }
+    runChat({
+      intentObject: priorIntent,
+      continuationQuery: query,
+      priorStatisticalResults: priorStats,
+      priorRScript: priorScript,
+    });
   }
 
-  async function sendIntent() {
+  function sendIntent() {
     const prompt = input.trim();
     if (!prompt || busy) return;
     setInput("");
     add({ id: nextId(), kind: "user", text: prompt });
-    setBusy(true);
-    try {
-      const res = await client.intent({ prompt, dataset_uploaded: datasetUploaded });
-      if (res.requires_human_clarification) {
-        add({
-          id: nextId(),
-          kind: "clarify",
-          text: "もう少し詳しく教えてください。以下を確認させてください:",
-          options: (res.clarification_options ?? []).map(optionLabel),
-        });
-      } else {
-        add({
-          id: nextId(),
-          kind: "confirm",
-          intent: res.intent_object,
-          summary: intentSummary(res.intent_object),
-        });
-      }
-    } catch (err) {
-      pushError(err);
-    } finally {
-      setBusy(false);
-    }
+    runChat({ prompt });
   }
 
-  async function propose(intent: Record<string, unknown>) {
+  // Explicit tool affordance (図/原稿): the Dialog agent's deterministic routing
+  // gate. Runs the chosen tool on the prior run's results over WS /ws/chat — no
+  // free-text guessing, so a code refinement is never mistaken for a tool call.
+  function runTool(tool: "visualization" | "reporting") {
+    if (busy || priorStats == null) return;
+    add({
+      id: nextId(),
+      kind: "user",
+      text: tool === "visualization" ? "この結果で図を作成" : "この結果で原稿を作成",
+    });
+    runChat({
+      requestedTool: tool,
+      intentObject: priorIntent,
+      priorStatisticalResults: priorStats,
+      priorRScript: priorScript,
+    });
+  }
+
+  // Apply a clicked clarification option: merge its intent_override into the
+  // Planner's intent and stream the proposal for it (skips the Planner). The
+  // merged intent carries the resolved field (outcome_variables, paired, …),
+  // which the StatisticsAgent reads directly.
+  function answerClarification(
+    msgId: string,
+    opt: ClarificationOption,
+    intent: Record<string, unknown>,
+  ) {
     if (busy) return;
-    setBusy(true);
-    add({ id: nextId(), kind: "system", text: "解析コードを生成しています…" });
-    try {
-      const res = await client.propose({ intent_object: intent });
-      if (!res.analysis_proposal) {
-        const reason =
-          res.r_script_provenance?.reason || "提案を生成できませんでした。";
-        add({
-          id: nextId(),
-          kind: "error",
-          text: "コード生成に失敗しました。",
-          detail: reason,
-        });
-        return;
-      }
-      const p = res.analysis_proposal;
-      add({
-        id: nextId(),
-        kind: "proposal",
-        explanation: p.explanation_markdown ?? "",
-        candidates: p.code_candidates ?? [],
-        recommendedId: p.recommended_candidate_id,
-        intent,
-      });
-    } catch (err) {
-      pushError(err);
-    } finally {
-      setBusy(false);
-    }
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === msgId && m.kind === "clarify" ? { ...m, answered: true } : m,
+      ),
+    );
+    add({ id: nextId(), kind: "user", text: opt.label });
+    const merged = { ...intent, ...(opt.intent_override ?? {}) };
+    runChat({ intentObject: merged });
   }
 
-  function pushError(err: unknown) {
-    if (err instanceof ApiError) {
-      add({
-        id: nextId(),
-        kind: "error",
-        text: err.message,
-        detail: err.detail,
-      });
-    } else {
-      add({
-        id: nextId(),
-        kind: "error",
-        text: "予期しないエラーが発生しました。",
-        detail: String((err as Error)?.message ?? err),
-      });
-    }
+  // Confirm a low-confidence intent → stream its proposal (skips the Planner).
+  function confirmIntent(intent: Record<string, unknown>) {
+    if (busy) return;
+    runChat({ intentObject: intent });
+  }
+
+  // Drive one chat turn over WS /ws/chat. With `prompt`, the server runs the
+  // Planner and routes to a clarify/confirm frame or (high confidence) an
+  // `intent` echo + streamed proposal. With `intentObject`, it streams the
+  // proposal directly. The explanation types in live (delta frames) inside one
+  // AI bubble that becomes the full proposal on the terminal `proposal` frame.
+  // Overlap is prevented by callers (inputs disabled while busy); R execution
+  // stays human-gated — candidates are never auto-run here.
+  function runChat(opts: {
+    prompt?: string;
+    intentObject?: Record<string, unknown>;
+    continuationQuery?: string;
+    priorStatisticalResults?: Record<string, unknown> | null;
+    priorRScript?: string;
+    requestedTool?: "visualization" | "reporting";
+  }) {
+    setBusy(true);
+    let streamId: string | null = null;
+    let settled = false;
+    let resolvedIntent: Record<string, unknown> = opts.intentObject ?? {};
+
+    const ensureStreamBubble = (): string => {
+      if (streamId == null) {
+        streamId = nextId();
+        add({ id: streamId, kind: "ai", text: "" });
+      }
+      return streamId;
+    };
+
+    client.streamChat({
+      conversationId: conversationId.current,
+      prompt: opts.prompt,
+      intentObject: opts.intentObject,
+      continuationQuery: opts.continuationQuery,
+      priorStatisticalResults: opts.priorStatisticalResults,
+      priorRScript: opts.priorRScript,
+      requestedTool: opts.requestedTool,
+      onMessage: (ev) => {
+        switch (ev.type) {
+          case "intent":
+            // High-confidence hand-off: echo the understood intent so the step
+            // is transparent, never silent (the user can correct it next turn).
+            resolvedIntent = ev.intent_object ?? resolvedIntent;
+            add({
+              id: nextId(),
+              kind: "ai",
+              text: `${intentSummary(resolvedIntent)}\n解析コードを提案します。`,
+            });
+            break;
+          case "clarify":
+            settled = true;
+            add({
+              id: nextId(),
+              kind: "clarify",
+              text: "もう少し詳しく教えてください。以下から選ぶか、自由入力で訂正してください:",
+              options: (ev.clarification_options ?? []).map(toClarificationOption),
+              intent: ev.intent_object ?? {},
+            });
+            break;
+          case "confirm":
+            settled = true;
+            add({
+              id: nextId(),
+              kind: "confirm",
+              intent: ev.intent_object ?? {},
+              summary: intentSummary(ev.intent_object ?? {}),
+            });
+            break;
+          case "delta": {
+            const id = ensureStreamBubble();
+            setMessages((prev) =>
+              prev.map((x) =>
+                x.id === id && x.kind === "ai"
+                  ? { ...x, text: x.text + ev.text }
+                  : x,
+              ),
+            );
+            break;
+          }
+          case "proposal": {
+            settled = true;
+            const p = ev.analysis_proposal;
+            const msg: Msg = {
+              id: streamId ?? nextId(),
+              kind: "proposal",
+              explanation: p.explanation_markdown ?? "",
+              candidates: p.code_candidates ?? [],
+              recommendedId: p.recommended_candidate_id,
+              intent: resolvedIntent,
+              offCatalog: p.off_catalog,
+              caveat: p.caveat_markdown,
+            };
+            if (streamId != null) {
+              const sid = streamId;
+              setMessages((prev) => prev.map((x) => (x.id === sid ? msg : x)));
+            } else {
+              add(msg);
+            }
+            break;
+          }
+          case "figures":
+            settled = true;
+            add({ id: nextId(), kind: "figures", figures: ev.figures ?? [] });
+            break;
+          case "manuscript":
+            settled = true;
+            add({
+              id: nextId(),
+              kind: "manuscript",
+              sections: ev.manuscript_sections ?? [],
+            });
+            break;
+          case "error":
+            settled = true;
+            add({
+              id: nextId(),
+              kind: "error",
+              text: "コード生成に失敗しました。",
+              detail:
+                ev.reason ||
+                ev.r_script_provenance?.reason ||
+                "提案を生成できませんでした。",
+            });
+            break;
+          // "done" → no action; onClose clears busy.
+        }
+      },
+      onError: (message) => {
+        if (settled) return;
+        settled = true;
+        add({ id: nextId(), kind: "error", text: "接続エラー", detail: message });
+      },
+      onClose: () => {
+        if (!settled) {
+          // Socket closed before any terminal frame — surface it, never silent.
+          add({
+            id: nextId(),
+            kind: "error",
+            text: "処理が中断されました。",
+            detail: "サーバとの接続が終了しました。",
+          });
+        }
+        setBusy(false);
+      },
+    });
   }
 
   return (
@@ -277,7 +412,9 @@ export function ChatPane({
             key={m.id}
             msg={m}
             busy={busy}
-            onConfirm={propose}
+            client={client}
+            onConfirm={confirmIntent}
+            onClarify={answerClarification}
             onInsertCode={onInsertCode}
             onRunCode={onRunCode}
           />
@@ -303,6 +440,28 @@ export function ChatPane({
               ? "新しい解析（次の入力は新規の意図）"
               : "統計結果なし（初回の意図を入力）"}
         </span>
+        {/* 明示的なツール操作（決定論ゲート）: 直近の解析結果に対して図/原稿を
+            生成する。自由文からの推測はせず、押下＝そのツールに確定ルーティング。 */}
+        <button
+          type="button"
+          className="mini-btn"
+          data-testid="tool-visualize"
+          onClick={() => runTool("visualization")}
+          disabled={busy || !continuationActive}
+          title="直近の結果から図を生成します"
+        >
+          📊 図を作成
+        </button>
+        <button
+          type="button"
+          className="mini-btn"
+          data-testid="tool-report"
+          onClick={() => runTool("reporting")}
+          disabled={busy || !continuationActive}
+          title="直近の結果から原稿セクションを生成します"
+        >
+          📝 原稿を作成
+        </button>
         <button
           type="button"
           className="mini-btn"
@@ -356,13 +515,21 @@ export function ChatPane({
 function MessageView({
   msg,
   busy,
+  client,
   onConfirm,
+  onClarify,
   onInsertCode,
   onRunCode,
 }: {
   msg: Msg;
   busy: boolean;
+  client: CieApiClient;
   onConfirm: (intent: Record<string, unknown>) => void;
+  onClarify: (
+    msgId: string,
+    opt: ClarificationOption,
+    intent: Record<string, unknown>,
+  ) => void;
   onInsertCode: (code: string) => void;
   onRunCode: (code: string, intent?: Record<string, unknown>) => void;
 }) {
@@ -396,11 +563,29 @@ function MessageView({
           <span className="msg__role">AI</span>
           {msg.text}
           <div className="clarify">
-            {msg.options.map((o, i) => (
-              <span key={i} className="mini-btn" style={{ cursor: "default" }}>
-                {o}
-              </span>
-            ))}
+            {msg.options.map((o, i) => {
+              // An option with an intent_override is answerable — clicking it
+              // applies the choice and proceeds. Options without an override
+              // (rare, e.g. an informational prompt) stay non-interactive.
+              const actionable = !!o.intent_override && !msg.answered;
+              return (
+                <button
+                  key={o.option_id ?? i}
+                  type="button"
+                  className="mini-btn"
+                  data-testid="clarify-option"
+                  disabled={!actionable || busy}
+                  style={actionable ? undefined : { cursor: "default" }}
+                  onClick={
+                    actionable
+                      ? () => onClarify(msg.id, o, msg.intent)
+                      : undefined
+                  }
+                >
+                  {o.label}
+                </button>
+              );
+            })}
           </div>
         </div>
       );
@@ -425,6 +610,12 @@ function MessageView({
       return (
         <div className="msg msg--ai" data-testid="chat-proposal">
           <span className="msg__role">AI</span>
+          {msg.offCatalog && (
+            <div className="msg msg--warn" data-testid="off-catalog-warning" role="alert">
+              {msg.caveat ??
+                "⚠️ この解析は標準Skillに無いパターンです。生成コードの統計的妥当性を必ずご確認ください。"}
+            </div>
+          )}
           {msg.explanation && (
             <div data-testid="proposal-explanation">{msg.explanation}</div>
           )}
@@ -464,7 +655,98 @@ function MessageView({
           ))}
         </div>
       );
+    case "figures":
+      return (
+        <div className="msg msg--ai" data-testid="chat-figures">
+          <span className="msg__role">AI</span>
+          {msg.figures.length === 0 ? (
+            <div data-testid="chat-figures-empty">生成された図はありません。</div>
+          ) : (
+            <div className="figures">
+              {msg.figures.map((f, i) => (
+                <figure className="figure" key={i} data-testid="chat-figure">
+                  {f.path && <ChatFigureImg client={client} path={f.path} title={f.title} />}
+                  <figcaption className="figure__caption">{f.title}</figcaption>
+                </figure>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    case "manuscript":
+      return (
+        <div className="msg msg--ai" data-testid="chat-manuscript">
+          <span className="msg__role">AI</span>
+          {msg.sections.length === 0 ? (
+            <div data-testid="chat-manuscript-empty">
+              生成された原稿セクションはありません。
+            </div>
+          ) : (
+            msg.sections.map((s) => (
+              <section
+                key={s.section_id}
+                className="manuscript"
+                data-testid="chat-manuscript-section"
+              >
+                <div className="manuscript__bar">
+                  <span className="manuscript__title">{s.section_id}</span>
+                  {s.is_ai_generated && <span className="manuscript__ai">AI生成</span>}
+                </div>
+                {/* Copyable text: a plain, selectable block — no auto-clipboard (§3.5). */}
+                <pre className="manuscript__text">{s.text}</pre>
+              </section>
+            ))
+          )}
+        </div>
+      );
     default:
       return null;
   }
+}
+
+/** Load a workspace figure as an auth-fetched object URL (a bare <img src> can't
+ *  send the X-CIE-Token header). Revokes the URL on unmount / path change. */
+function ChatFigureImg({
+  client,
+  path,
+  title,
+}: {
+  client: CieApiClient;
+  path: string;
+  title: string;
+}) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let revoked: string | null = null;
+    let cancelled = false;
+    client
+      .fetchImageObjectUrl(path)
+      .then((u) => {
+        if (cancelled) {
+          URL.revokeObjectURL(u);
+          return;
+        }
+        revoked = u;
+        setUrl(u);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+      if (revoked) URL.revokeObjectURL(revoked);
+    };
+  }, [client, path]);
+
+  if (failed) {
+    return (
+      <div className="figure__error" data-testid="chat-figure-error">
+        図を読み込めませんでした（{path}）。
+      </div>
+    );
+  }
+  if (!url) return <div className="figure__loading">図を読み込み中…</div>;
+  return <img src={url} alt={title} className="figure__img" data-testid="chat-figure-img" />;
 }

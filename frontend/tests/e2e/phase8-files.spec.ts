@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { installStandardChat } from "./support/wsChat";
 
 // Phase 8 (R8-2): ファイルツリー（§3.4 読み取り専用）。GET /api/files の一覧、
 // GET /api/files/content のプレビュー（text→<pre><code> / image→<img>）、
@@ -36,6 +37,13 @@ const RUN_RESPONSE = {
 };
 
 async function connect(page: Page): Promise<void> {
+  // Chat streams over WS /ws/chat (install before goto). High confidence →
+  // intent echo + proposal directly.
+  await installStandardChat(page, {
+    intent: INTENT_RESPONSE.intent_object,
+    proposal: PROPOSE_RESPONSE.analysis_proposal,
+    provenance: PROPOSE_RESPONSE.r_script_provenance,
+  });
   await page.goto("/");
   await page.getByTestId("open-settings-from-chat").click();
   await page.getByTestId("settings-token-input").fill("test-token-abc");
@@ -95,8 +103,6 @@ test.describe("Phase 8 — ファイルツリー（§3.4）", () => {
     await dl;
 
     // run で図を生成 → refreshKey で一覧が更新され png が現れる。
-    await page.route("**/api/intent", (r) => r.fulfill({ json: INTENT_RESPONSE }));
-    await page.route("**/api/propose", (r) => r.fulfill({ json: PROPOSE_RESPONSE }));
     await page.route("**/api/run", (r) => r.fulfill({ json: RUN_RESPONSE }));
     await page.route("**/api/visualize", (r) =>
       r.fulfill({ json: { execution_id: "viz", figures: [], error_detail: null } }),
@@ -104,7 +110,6 @@ test.describe("Phase 8 — ファイルツリー（§3.4）", () => {
 
     await page.getByTestId("chat-input").fill("男女で収縮期血圧を比べたい");
     await page.getByTestId("chat-send").click();
-    await page.getByTestId("confirm-propose").click();
     await page.getByTestId("candidate-run").click();
 
     await expect(page.getByTestId("files-list")).toContainText("output/fig_group.png");

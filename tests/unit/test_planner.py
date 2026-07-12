@@ -49,6 +49,11 @@ _BASE_LLM_RESPONSE: dict = {
         "objective": "between_group_comparison",
         "outcome_type": "continuous",
         "study_design": "observational",
+        # The Planner now receives column names and returns explicit variable
+        # mappings; supplying them here keeps the success path off the
+        # empty-outcome clarification fallback.
+        "outcome_variables": [{"var_n": "var_1", "role": "primary_outcome"}],
+        "predictor_variables": [{"var_n": "var_2", "role": "grouping_variable"}],
     },
     "paired": False,
     "subject_id_var": None,
@@ -143,8 +148,16 @@ def agent_input(planner_token: CapabilityToken) -> AgentInput:
         payload={
             "user_natural_language_prompt": "Compare blood pressure between Group A and Group B",
             "dataset_structural_metadata": {
-                "var_1": {"inferred_type": "continuous", "unique_count": 200},
-                "var_2": {"inferred_type": "categorical_binary", "unique_count": 2},
+                "var_1": {
+                    "inferred_type": "continuous",
+                    "unique_count": 200,
+                    "name": "収縮期血圧_mmHg",
+                },
+                "var_2": {
+                    "inferred_type": "categorical_binary",
+                    "unique_count": 2,
+                    "name": "性別",
+                },
             },
         },
         input_schema_ref=INPUT_SCHEMA,
@@ -172,7 +185,7 @@ class TestPlannerIdentity:
         assert planner.agent_id == "planner"
 
     def test_input_schema_ref(self, planner: PlannerAgent) -> None:
-        assert planner.input_schema_ref == "cie://schemas/task.schema.json"
+        assert planner.input_schema_ref == "cie://schemas/planner-input.schema.json"
 
     def test_output_schema_ref(self, planner: PlannerAgent) -> None:
         assert planner.output_schema_ref == "cie://schemas/analysis-request.schema.json"
@@ -588,3 +601,98 @@ class TestSemanticCacheIntegration:
             await cached_planner.run(agent_input)
 
         assert llm_mock.await_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Fix A — empty-outcome fallback resolves by name or defers to a human
+# ---------------------------------------------------------------------------
+
+
+def _agent_input_with(prompt: str, metadata: dict, token: CapabilityToken) -> AgentInput:
+    return AgentInput(
+        execution_id=EXEC_ID,
+        node_id=NODE_ID,
+        capability_token=token,
+        payload={
+            "user_natural_language_prompt": prompt,
+            "dataset_structural_metadata": metadata,
+        },
+        input_schema_ref=INPUT_SCHEMA,
+    )
+
+
+def _llm_no_outcome() -> dict:
+    resp = {
+        "intent_object": {
+            "objective": "between_group_comparison",
+            "outcome_type": "continuous",
+            "study_design": "cross_sectional",
+        },
+        "paired": False,
+        "subject_id_var": None,
+        "n_groups_estimate": 2,
+        "confidence_score": 0.85,
+        "requires_human_clarification": False,
+        "clarification_options": [],
+    }
+    return resp
+
+
+class TestEmptyOutcomeFallback:
+    async def test_confident_name_match_selects_column(
+        self, planner: PlannerAgent, planner_token: CapabilityToken
+    ) -> None:
+        """One column name matches the prompt → pick it, no clarification."""
+        metadata = {
+            "var_1": {"inferred_type": "continuous", "unique_count": 5, "name": "検査年"},
+            "var_2": {"inferred_type": "continuous", "unique_count": 90, "name": "収縮期血圧_mmHg"},
+            "var_3": {"inferred_type": "categorical_binary", "unique_count": 2, "name": "性別"},
+        }
+        ai = _agent_input_with("男女の血圧を比較したい", metadata, planner_token)
+        with patch.object(planner, "_call_llm", new=_llm_mock(_llm_no_outcome())):
+            result = await planner.run(ai)
+
+        assert result.status == "success"
+        outcomes = result.output_payload["intent_object"]["outcome_variables"]
+        assert outcomes == [{"var_n": "var_2", "role": "primary_outcome"}]
+
+    async def test_ambiguous_match_requires_clarification(
+        self, planner: PlannerAgent, planner_token: CapabilityToken
+    ) -> None:
+        """Two columns match "血圧" → defer to the human, offer them as options."""
+        metadata = {
+            "var_1": {"inferred_type": "continuous", "unique_count": 5, "name": "検査年"},
+            "var_2": {"inferred_type": "continuous", "unique_count": 90, "name": "収縮期血圧_mmHg"},
+            "var_3": {"inferred_type": "continuous", "unique_count": 70, "name": "拡張期血圧_mmHg"},
+        }
+        ai = _agent_input_with("血圧を比較したい", metadata, planner_token)
+        with patch.object(planner, "_call_llm", new=_llm_mock(_llm_no_outcome())):
+            result = await planner.run(ai)
+
+        assert result.status == "clarification_required"
+        opts = result.output_payload.get("clarification_options", [])
+        outcome_opts = [
+            o for o in opts if str(o.get("option_id", "")).startswith("outcome:")
+        ]
+        # One clickable option per named continuous column, each carrying the
+        # override that pins outcome_variables to that column.
+        assert {o["option_id"] for o in outcome_opts} == {
+            "outcome:var_1", "outcome:var_2", "outcome:var_3"
+        }
+        first_override = outcome_opts[0]["intent_override"]["outcome_variables"][0]
+        assert first_override["role"] == "primary_outcome"
+
+    async def test_never_selects_pii_masked_column(
+        self, planner: PlannerAgent, planner_token: CapabilityToken
+    ) -> None:
+        """A nameless (PII-masked) column is never offered/selected as outcome."""
+        metadata = {
+            "var_1": {"inferred_type": "continuous", "unique_count": 190},  # masked, no name
+            "var_2": {"inferred_type": "continuous", "unique_count": 90, "name": "収縮期血圧_mmHg"},
+        }
+        ai = _agent_input_with("血圧を見たい", metadata, planner_token)
+        with patch.object(planner, "_call_llm", new=_llm_mock(_llm_no_outcome())):
+            result = await planner.run(ai)
+
+        outcomes = result.output_payload["intent_object"]["outcome_variables"]
+        assert outcomes == [{"var_n": "var_2", "role": "primary_outcome"}]

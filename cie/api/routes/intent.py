@@ -10,6 +10,7 @@ from cie.api.deps import (
     invoke_agent,
     new_execution_id,
 )
+from cie.api.intent_display import resolve_intent_display
 from cie.api.models import IntentRequest, IntentResponse
 from cie.security.capability_token import CapabilityScope
 
@@ -24,7 +25,10 @@ async def analyze_intent(request: Request, body: IntentRequest) -> IntentRespons
     """
     services = get_services(request)
     execution_id = new_execution_id()
-    col_meta = get_dataset_context(request).get("dataset_structural_metadata", {})
+    dataset_context = get_dataset_context(request)
+    col_meta = dataset_context.get("dataset_structural_metadata", {})
+    alias_map = dataset_context.get("var_n_alias_map", {})
+    masked_vars = set(dataset_context.get("pii_masked_vars", []))
 
     output = await invoke_agent(
         services,
@@ -39,6 +43,9 @@ async def analyze_intent(request: Request, body: IntentRequest) -> IntentRespons
         payload={
             "user_natural_language_prompt": body.prompt,
             "dataset_structural_metadata": col_meta,
+            "conversation_history": [
+                {"role": t.role, "text": t.text} for t in body.conversation_history
+            ],
             "inject_raw_data_rows": False,
         },
         input_schema_ref="cie://schemas/planner-input.schema.json",
@@ -57,12 +64,19 @@ async def analyze_intent(request: Request, body: IntentRequest) -> IntentRespons
         )
 
     op = output.output_payload
+    intent_object = op.get("intent_object", {}) or {}
+    clarification_options = op.get("clarification_options") or []
+    # Un-mask var_n aliases in user-facing prose so the chat never shows raw
+    # internal identifiers like "var_4" (Fix C).
+    resolve_intent_display(
+        intent_object, clarification_options, alias_map, masked_vars
+    )
     return IntentResponse(
         execution_id=execution_id,
-        intent_object=op.get("intent_object", {}) or {},
+        intent_object=intent_object,
         confidence_score=float(op.get("confidence_score") or 0.0),
         requires_human_clarification=bool(
             op.get("requires_human_clarification", False)
         ),
-        clarification_options=op.get("clarification_options") or [],
+        clarification_options=clarification_options,
     )

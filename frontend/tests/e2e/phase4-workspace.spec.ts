@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { installStandardChat } from "./support/wsChat";
 
 // Phase 4 (R4-1): Workspace/Data pane renders the persisted R variables
 // (name・型・要約) from workspace_summary, and "ワークスペースをリセット" clears
@@ -43,19 +44,23 @@ const RUN_RESPONSE = {
 };
 
 async function connect(page: Page): Promise<void> {
+  // Chat streams over WS /ws/chat (install before goto). High confidence →
+  // intent echo + proposal, no confirm gate.
+  await installStandardChat(page, {
+    intent: INTENT_RESPONSE.intent_object,
+    proposal: PROPOSE_RESPONSE.analysis_proposal,
+    provenance: PROPOSE_RESPONSE.r_script_provenance,
+  });
   await page.goto("/");
   await page.getByTestId("open-settings-from-chat").click();
   await page.getByTestId("settings-token-input").fill("test-token-abc");
   await page.getByTestId("settings-token-save").click();
   await page.getByTestId("settings-close").click();
-  await page.route("**/api/intent", (r) => r.fulfill({ json: INTENT_RESPONSE }));
-  await page.route("**/api/propose", (r) => r.fulfill({ json: PROPOSE_RESPONSE }));
 }
 
 async function runCandidate(page: Page): Promise<void> {
   await page.getByTestId("chat-input").fill("BMIカテゴリを作りたい");
   await page.getByTestId("chat-send").click();
-  await page.getByTestId("confirm-propose").click();
   const candidate = page.getByTestId("code-candidate");
   await expect(candidate).toBeVisible();
   await candidate.getByTestId("candidate-run").click();

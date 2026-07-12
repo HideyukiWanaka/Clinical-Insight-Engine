@@ -10,6 +10,7 @@
 //   _render_output_pane which always shows error_detail).
 
 import type {
+  ChatStreamEvent,
   ConsoleMessage,
   DatasetFromExistingRequest,
   DatasetStatusResponse,
@@ -486,6 +487,72 @@ export class CieApiClient {
       params.onError(
         `コンソール接続に失敗しました (${this.getWsBaseUrl()}/ws/console)。`,
       );
+    };
+    ws.onclose = finish;
+    return ws;
+  }
+
+  /** WS /ws/chat — drive one chat turn with streaming (§4, Phase 2). Auth is
+   *  the first message (`{token,…}`), like streamConsole.
+   *
+   * Send a `prompt` for a fresh natural-language turn (the server runs the
+   * Planner and routes to `clarify` / `confirm` / streamed `proposal`), or an
+   * `intentObject` to skip the Planner and stream the proposal for a
+   * confirmed/clarified intent. The server emits `intent`/`clarify`/`confirm`
+   * routing frames, then `delta`* + `proposal` (or `error`), then `done`.
+   * `onClose` fires exactly once. `conversationId` lets the server keep the
+   * running history so the reply reflects the whole dialogue. Returns the
+   * socket so the caller can close it early. */
+  streamChat(params: {
+    conversationId: string;
+    prompt?: string;
+    intentObject?: Record<string, unknown>;
+    /** Follow-up (continuation) query — rides with intentObject (the lineage
+     *  intent) so the server streams a proposal that extends the prior run. */
+    continuationQuery?: string;
+    priorStatisticalResults?: Record<string, unknown> | null;
+    priorRScript?: string;
+    /** Explicit tool affordance ("visualization" | "reporting") — the Dialog
+     *  agent's deterministic routing gate for running a tool on the prior run. */
+    requestedTool?: string;
+    onMessage: (event: ChatStreamEvent) => void;
+    onError: (message: string) => void;
+    onClose: () => void;
+  }): WebSocket {
+    const ws = new WebSocket(`${this.getWsBaseUrl()}/ws/chat`);
+    let closed = false;
+    const finish = () => {
+      if (closed) return;
+      closed = true;
+      params.onClose();
+    };
+
+    ws.onopen = () => {
+      ws.send(
+        JSON.stringify({
+          token: this.token,
+          conversation_id: params.conversationId,
+          // Omitted-when-absent: the server routes by which one is present.
+          intent_object: params.intentObject ?? null,
+          prompt: params.prompt ?? "",
+          // Follow-up context (empty/null for a fresh turn).
+          continuation_query: params.continuationQuery ?? "",
+          prior_statistical_results: params.priorStatisticalResults ?? null,
+          prior_r_script: params.priorRScript ?? "",
+          // Explicit tool gate (empty for a normal analysis/continuation turn).
+          requested_tool: params.requestedTool ?? "",
+        }),
+      );
+    };
+    ws.onmessage = (event) => {
+      try {
+        params.onMessage(JSON.parse(event.data as string) as ChatStreamEvent);
+      } catch {
+        // A non-JSON frame should never happen; ignore rather than crash.
+      }
+    };
+    ws.onerror = () => {
+      params.onError(`チャット接続に失敗しました (${this.getWsBaseUrl()}/ws/chat)。`);
     };
     ws.onclose = finish;
     return ws;

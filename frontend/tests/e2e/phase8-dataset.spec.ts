@@ -1,9 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
+import { routeWsChat } from "./support/wsChat";
 
 // Phase 8 (R8-1): 解析データ投入口。Header「解析データ」→ モーダル → CSV アップロード
 // → 集計メタ（列名エイリアス・型・欠測）のみを表示する。行データ（セル値）は DOM に
-// 一切出さない（§5, CLAUDE.md inject_raw_data_rows=False）。以降の POST /api/intent に
-// dataset_uploaded:true が載る。失敗（空/PII拒否）は理由を表示（無言失敗禁止 §5）。
+// 一切出さない（§5, CLAUDE.md inject_raw_data_rows=False）。投入後もチャット（WS
+// /ws/chat）は通常どおり進む。失敗（空/PII拒否）は理由を表示（無言失敗禁止 §5）。
 //
 // API はスタブ（design §6）。dataset.csv の中身はサーバ側で集計されるため、フロントの
 // 責務は「サーバが返す集計メタだけを描画する」こと。フィクスチャに置いた SENTINEL 値が
@@ -43,11 +44,18 @@ async function connect(page: Page): Promise<void> {
 }
 
 test.describe("Phase 8 — データセット投入（§3.1 前提 / §5）", () => {
-  test("モーダルでCSVアップロード→列メタ表示、行データは出ない、intentにdataset_uploaded:true", async ({
+  test("モーダルでCSVアップロード→列メタ表示、行データは出ない、投入後もチャットが進む", async ({
     page,
   }) => {
     const pageErrors: string[] = [];
     page.on("pageerror", (e) => pageErrors.push(String(e)));
+
+    // Chat streams over WS /ws/chat; a prompt asks to confirm (install before
+    // goto). The dataset itself lives server-side (§3.1), so the analysis knows
+    // about it via dataset_context — the client no longer sends a flag.
+    await routeWsChat(page, () => [
+      { type: "confirm", intent_object: INTENT_RESPONSE.intent_object },
+    ]);
 
     await connect(page);
     await page.route("**/api/dataset", (r) => r.fulfill({ json: DATASET_RESPONSE }));
@@ -74,17 +82,10 @@ test.describe("Phase 8 — データセット投入（§3.1 前提 / §5）", ()
     await page.getByTestId("dataset-close").click();
     await expect(page.getByTestId("dataset-modal")).toHaveCount(0);
 
-    // 以降の intent に dataset_uploaded:true が載る。
-    let intentBody: Record<string, unknown> | null = null;
-    await page.route("**/api/intent", (r) => {
-      intentBody = r.request().postDataJSON() as Record<string, unknown>;
-      return r.fulfill({ json: INTENT_RESPONSE });
-    });
+    // データ投入後もチャットは通常どおり確認まで進む（投入は解析の前提 §3.1）。
     await page.getByTestId("chat-input").fill("男女で収縮期血圧を比べたい");
     await page.getByTestId("chat-send").click();
     await expect(page.getByTestId("chat-confirm")).toBeVisible();
-    expect(intentBody).not.toBeNull();
-    expect(intentBody!.dataset_uploaded).toBe(true);
 
     expect(pageErrors, `uncaught page errors: ${pageErrors.join("\n")}`).toEqual([]);
   });

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { installStandardChat } from "./support/wsChat";
 
 // Run-error guidance: the runtime's static security validator rejects a script
 // BEFORE execution with a terse, security-worded reason. Those words are opaque
@@ -32,13 +33,17 @@ async function connectAndRunWith(page: Page, errorDetail: string) {
       ws.close();
     });
   });
+  // Chat streams over WS /ws/chat (install before goto).
+  await installStandardChat(page, {
+    intent: INTENT_RESPONSE.intent_object,
+    proposal: PROPOSE_RESPONSE.analysis_proposal,
+    provenance: PROPOSE_RESPONSE.r_script_provenance,
+  });
   await page.goto("/");
   await page.getByTestId("open-settings-from-chat").click();
   await page.getByTestId("settings-token-input").fill("test-token-abc");
   await page.getByTestId("settings-token-save").click();
   await page.getByTestId("settings-close").click();
-  await page.route("**/api/intent", (r) => r.fulfill({ json: INTENT_RESPONSE }));
-  await page.route("**/api/propose", (r) => r.fulfill({ json: PROPOSE_RESPONSE }));
   await page.route("**/api/run", (r) =>
     r.fulfill({
       json: {
@@ -54,7 +59,6 @@ async function connectAndRunWith(page: Page, errorDetail: string) {
   );
   await page.getByTestId("chat-input").fill("分析して");
   await page.getByTestId("chat-send").click();
-  await page.getByTestId("confirm-propose").click();
   await page.getByTestId("code-candidate").getByTestId("candidate-run").click();
 }
 
