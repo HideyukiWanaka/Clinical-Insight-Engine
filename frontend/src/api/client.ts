@@ -507,6 +507,11 @@ export class CieApiClient {
     conversationId: string;
     prompt?: string;
     intentObject?: Record<string, unknown>;
+    /** Follow-up (continuation) query — rides with intentObject (the lineage
+     *  intent) so the server streams a proposal that extends the prior run. */
+    continuationQuery?: string;
+    priorStatisticalResults?: Record<string, unknown> | null;
+    priorRScript?: string;
     onMessage: (event: ChatStreamEvent) => void;
     onError: (message: string) => void;
     onClose: () => void;
@@ -527,6 +532,10 @@ export class CieApiClient {
           // Omitted-when-absent: the server routes by which one is present.
           intent_object: params.intentObject ?? null,
           prompt: params.prompt ?? "",
+          // Follow-up context (empty/null for a fresh turn).
+          continuation_query: params.continuationQuery ?? "",
+          prior_statistical_results: params.priorStatisticalResults ?? null,
+          prior_r_script: params.priorRScript ?? "",
         }),
       );
     };

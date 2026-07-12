@@ -5,7 +5,10 @@ sends a natural-language ``prompt`` and the server deterministically routes it �
 run the Planner, then either ask for clarification, ask for confirmation, or (on
 a high-confidence unambiguous intent) stream the code proposal. When the client
 instead sends a resolved ``intent_object`` (after clicking a confirm/clarify
-option), the Planner is skipped and the proposal streams directly.
+option), the Planner is skipped and the proposal streams directly. A follow-up
+turn adds a ``continuation_query`` (plus the prior results/script) alongside the
+lineage ``intent_object``: the Planner is skipped and the streamed proposal
+extends the prior analysis.
 
 Deterministic routing (safety): an LLM never decides *what to do* here. The
 Planner and Statistics agents run over their existing governed paths (issue
@@ -92,6 +95,20 @@ async def ws_chat(websocket: WebSocket) -> None:
     intent_object = first.get("intent_object")
     has_intent = isinstance(intent_object, dict) and bool(intent_object)
     prompt = str(first.get("prompt") or "")
+
+    # Follow-up (continuation) turn: a natural-language request that extends the
+    # PRIOR analysis. It rides alongside intent_object (the lineage intent) and
+    # carries the prior results/script as context — the Planner is skipped and
+    # the proposal streams as a follow-up (see _stream_proposal).
+    continuation_query = str(first.get("continuation_query") or "")
+    continuation: dict | None = None
+    if continuation_query:
+        continuation = {
+            "continuation_query": continuation_query,
+            "prior_statistical_results": first.get("prior_statistical_results"),
+            "prior_r_script": first.get("prior_r_script"),
+        }
+
     if not has_intent and not prompt:
         # Need a prompt to plan from, or a resolved intent to propose for. Never
         # silent — surface the reason (§5).
@@ -105,12 +122,15 @@ async def ws_chat(websocket: WebSocket) -> None:
 
     try:
         if has_intent:
-            # Confirm/clarify follow-through: the client resolved the intent, so
-            # skip the Planner and stream the proposal for it directly.
-            if prompt:
-                state.add_turn("user", prompt)
+            # Confirm/clarify follow-through OR a continuation turn: the client
+            # already has the intent, so skip the Planner and stream directly.
+            # For a continuation the user-visible text is the follow-up query.
+            user_text = continuation_query or prompt
+            if user_text:
+                state.add_turn("user", user_text)
             await _stream_proposal(
-                websocket, services, state, intent_object, dataset_context
+                websocket, services, state, intent_object, dataset_context,
+                continuation=continuation,
             )
         else:
             # Fresh natural-language turn: run the Planner first, then route.
@@ -226,6 +246,7 @@ async def _stream_proposal(
     state: ConversationState,
     intent_object: dict,
     dataset_context: dict,
+    continuation: dict | None = None,
 ) -> None:
     """Stream a conversational proposal for ``intent_object`` over the socket.
 
@@ -233,6 +254,11 @@ async def _stream_proposal(
     always revoked in finally — same lifecycle as cie/api/deps.invoke_agent) and
     forwards its delta/proposal/error events, recording the assistant reply so
     the next turn's streamed explanation reflects it.
+
+    When ``continuation`` is given (a follow-up turn), its query + prior
+    results/script ride in the payload so the streamed proposal extends the
+    prior analysis rather than starting fresh (StatisticsAgent detects it via
+    ``continuation_query`` — same fields as REST /api/propose).
     """
     payload: dict = {
         "data_quality_report": {"quality_gate_passed": True},
@@ -245,6 +271,12 @@ async def _stream_proposal(
         "conversational_mode": True,
         "inject_raw_data_rows": False,
     }
+    if continuation:
+        payload["continuation_query"] = continuation["continuation_query"]
+        payload["prior_statistical_results"] = continuation.get(
+            "prior_statistical_results"
+        )
+        payload["prior_r_script"] = continuation.get("prior_r_script")
 
     execution_id = new_execution_id()
     token_manager = services["token_manager"]

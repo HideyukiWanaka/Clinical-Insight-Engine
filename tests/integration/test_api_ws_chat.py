@@ -35,7 +35,11 @@ class _FakeStreamingStatistics:
 
     agent_id = "statistics"
 
+    def __init__(self) -> None:
+        self.last_payload: dict | None = None
+
     async def stream_conversational_proposal(self, agent_input):
+        self.last_payload = agent_input.payload
         yield {"type": "delta", "text": "性別間で血圧を"}
         yield {"type": "delta", "text": "比較します。"}
         yield {
@@ -173,6 +177,41 @@ def test_ws_chat_prompt_ambiguous_asks_clarify(tmp_path) -> None:
     clarify = next(f for f in frames if f["type"] == "clarify")
     assert clarify["clarification_options"][0]["label"] == "収縮期血圧"
     assert "proposal" not in [f["type"] for f in frames]
+
+
+# ── continuation (follow-up) path ───────────────────────────────────────────
+
+
+def test_ws_chat_continuation_streams_and_forwards_prior_context(tmp_path) -> None:
+    stats = _FakeStreamingStatistics()
+    with _make_client(tmp_path, statistics=stats) as client:
+        with client.websocket_connect("/ws/chat") as ws:
+            ws.send_json({
+                "token": TOKEN,
+                "conversation_id": "cont-1",
+                # Lineage intent + follow-up query + prior context (Planner skipped).
+                "intent_object": _INTENT,
+                "continuation_query": "効果量の信頼区間も出したい",
+                "prior_statistical_results": {"test_name": "Welch t-test"},
+                "prior_r_script": "t.test(BP ~ Sex)",
+            })
+            frames = _drain(ws)
+
+    types = [f["type"] for f in frames]
+    assert "intent" not in types  # Planner skipped on a continuation turn
+    assert "delta" in types and "proposal" in types
+    assert types[-1] == "done"
+
+    # The follow-up context was forwarded to the streaming StatisticsAgent.
+    assert stats.last_payload["continuation_query"] == "効果量の信頼区間も出したい"
+    assert stats.last_payload["prior_statistical_results"] == {"test_name": "Welch t-test"}
+    assert stats.last_payload["prior_r_script"] == "t.test(BP ~ Sex)"
+
+    # The user turn recorded is the follow-up query (not empty), then the reply.
+    state = client.app.state.conversations.get_or_create("cont-1")
+    roles = [t["role"] for t in state.turns]
+    assert roles == ["user", "assistant"]
+    assert state.turns[0]["text"] == "効果量の信頼区間も出したい"
 
 
 # ── guards ──────────────────────────────────────────────────────────────────

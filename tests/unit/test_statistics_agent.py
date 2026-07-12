@@ -658,3 +658,83 @@ class TestStreamingConversationalProposal:
         }
         events = await _collect_stream(agent, payload, token)
         assert events == [{"type": "error", "reason": "quality_gate_blocked"}]
+
+
+class _CapturingStreamLLM:
+    """Stream stub that records the (system, messages) it was called with."""
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self.provider = "anthropic"
+        self.model = "test-model"
+        self.system: str | None = None
+        self.messages: list | None = None
+
+    async def stream_messages(self, system, messages, assistant_prefill=None):
+        self.system = system
+        self.messages = messages
+        yield self._text
+
+
+class TestStreamingContinuation:
+    """Follow-up (continuation) turns stream as conversational proposals too."""
+
+    async def test_continuation_query_grounds_prompt_and_flags_provenance(
+        self,
+        mock_policy_engine: MagicMock,
+        mock_schema_registry: MagicMock,
+        mock_audit: MagicMock,
+        token: CapabilityToken,
+    ) -> None:
+        llm = _CapturingStreamLLM(_CONVERSATIONAL_LLM_RESPONSE)
+        agent = StatisticsAgent(
+            mock_policy_engine, mock_schema_registry, mock_audit, llm_client=llm,
+        )
+        payload = {
+            **_BASE_PAYLOAD,
+            "conversational_mode": True,
+            "continuation_query": "サブグループごとに効果量も出したい",
+            "prior_statistical_results": {
+                "test_name": "Welch t-test", "p_value": 0.03,
+                "effect_size": 0.42, "effect_size_measure": "Cohen's d",
+                # Not in the whitelist — must NOT be echoed back to the model.
+                "raw_rows": [[1, 2], [3, 4]],
+            },
+            "prior_r_script": "data <- read.csv('x')\nt.test(BP ~ Sex)",
+        }
+        events = await _collect_stream(agent, payload, token)
+
+        # Provenance marks it as a continuation.
+        proposal_ev = next(e for e in events if e["type"] == "proposal")
+        assert proposal_ev["r_script_provenance"]["continuation"] is True
+
+        # The follow-up query + whitelisted prior results reached the prompt; the
+        # non-whitelisted key (raw rows) did not.
+        user_msg = llm.messages[0]["content"]
+        assert "サブグループごとに効果量も出したい" in user_msg
+        assert "Welch t-test" in user_msg
+        assert "raw_rows" not in user_msg
+        # The follow-up framing preamble is prepended to the system prompt.
+        assert "FOLLOW-UP" in llm.system
+
+    async def test_continuation_offers_single_candidate(
+        self,
+        mock_policy_engine: MagicMock,
+        mock_schema_registry: MagicMock,
+        mock_audit: MagicMock,
+        token: CapabilityToken,
+    ) -> None:
+        """A follow-up stays focused: no parametric/non-parametric fork request."""
+        llm = _CapturingStreamLLM(_CONVERSATIONAL_LLM_RESPONSE)
+        agent = StatisticsAgent(
+            mock_policy_engine, mock_schema_registry, mock_audit, llm_client=llm,
+        )
+        payload = {
+            **_BASE_PAYLOAD,
+            "conversational_mode": True,
+            "continuation_query": "信頼区間も表示して",
+        }
+        await _collect_stream(agent, payload, token)
+
+        # No alternative method is offered to the model on a follow-up turn.
+        assert '"alternative_method": null' in llm.messages[0]["content"]

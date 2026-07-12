@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ApiError, type CieApiClient } from "../api/client";
+import type { CieApiClient } from "../api/client";
 import type { ClarificationOption, CodeCandidate } from "../api/types";
 
 type Msg =
@@ -149,8 +149,8 @@ export function ChatPane({
   }, [priorStats, newAnalysisPending]);
 
   function send() {
-    if (continuationActive) void sendContinuation();
-    else void sendIntent();
+    if (continuationActive) sendContinuation();
+    else sendIntent();
   }
 
   function newAnalysis() {
@@ -164,47 +164,22 @@ export function ChatPane({
     });
   }
 
-  async function sendContinuation() {
+  // Follow-up (継続) turn: stream over WS just like a fresh turn, but ride the
+  // lineage intent + prior results/script so the server extends the prior
+  // analysis. The explanation types in live (delta) and the proposal inherits
+  // priorIntent so a re-run still drafts the manuscript. R execution stays
+  // human-gated — candidates are never auto-run.
+  function sendContinuation() {
     const query = input.trim();
     if (!query || busy) return;
     setInput("");
     add({ id: nextId(), kind: "user", text: query });
-    setBusy(true);
-    add({ id: nextId(), kind: "system", text: "追加解析を生成しています…" });
-    try {
-      const res = await client.propose({
-        continuation_query: query,
-        prior_statistical_results: priorStats,
-        prior_r_script: priorScript,
-      });
-      if (!res.analysis_proposal) {
-        const reason =
-          res.r_script_provenance?.reason || "追加解析を生成できませんでした。";
-        add({
-          id: nextId(),
-          kind: "error",
-          text: "追加解析の生成に失敗しました。",
-          detail: reason,
-        });
-        return;
-      }
-      const p = res.analysis_proposal;
-      add({
-        id: nextId(),
-        kind: "proposal",
-        explanation: p.explanation_markdown ?? "",
-        candidates: p.code_candidates ?? [],
-        recommendedId: p.recommended_candidate_id,
-        // Inherit the lineage intent so a re-run still drafts the manuscript.
-        intent: priorIntent,
-        offCatalog: p.off_catalog,
-        caveat: p.caveat_markdown,
-      });
-    } catch (err) {
-      pushError(err);
-    } finally {
-      setBusy(false);
-    }
+    runChat({
+      intentObject: priorIntent,
+      continuationQuery: query,
+      priorStatisticalResults: priorStats,
+      priorRScript: priorScript,
+    });
   }
 
   function sendIntent() {
@@ -251,6 +226,9 @@ export function ChatPane({
   function runChat(opts: {
     prompt?: string;
     intentObject?: Record<string, unknown>;
+    continuationQuery?: string;
+    priorStatisticalResults?: Record<string, unknown> | null;
+    priorRScript?: string;
   }) {
     setBusy(true);
     let streamId: string | null = null;
@@ -269,6 +247,9 @@ export function ChatPane({
       conversationId: conversationId.current,
       prompt: opts.prompt,
       intentObject: opts.intentObject,
+      continuationQuery: opts.continuationQuery,
+      priorStatisticalResults: opts.priorStatisticalResults,
+      priorRScript: opts.priorRScript,
       onMessage: (ev) => {
         switch (ev.type) {
           case "intent":
@@ -365,24 +346,6 @@ export function ChatPane({
         setBusy(false);
       },
     });
-  }
-
-  function pushError(err: unknown) {
-    if (err instanceof ApiError) {
-      add({
-        id: nextId(),
-        kind: "error",
-        text: err.message,
-        detail: err.detail,
-      });
-    } else {
-      add({
-        id: nextId(),
-        kind: "error",
-        text: "予期しないエラーが発生しました。",
-        detail: String((err as Error)?.message ?? err),
-      });
-    }
   }
 
   return (
