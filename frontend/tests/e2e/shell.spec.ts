@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { hasIntentObject, proposalFrames, routeWsChat } from "./support/wsChat";
 
 const INTENT_RESPONSE = {
   execution_id: "exec-e2e-1",
@@ -35,6 +36,18 @@ test.describe("CIE Workbench shell", () => {
     const pageErrors: string[] = [];
     page.on("pageerror", (e) => pageErrors.push(String(e)));
 
+    // Chat streams over WS /ws/chat. A low-confidence prompt asks to confirm;
+    // confirming (an intent_object turn) streams the proposal. Install before
+    // goto (routeWebSocket adds a page init script).
+    await routeWsChat(page, (msg) =>
+      hasIntentObject(msg)
+        ? proposalFrames(
+            PROPOSE_RESPONSE.analysis_proposal,
+            PROPOSE_RESPONSE.r_script_provenance,
+          )
+        : [{ type: "confirm", intent_object: INTENT_RESPONSE.intent_object }],
+    );
+
     await page.goto("/");
 
     // Header + four panes present (spec §2).
@@ -58,14 +71,6 @@ test.describe("CIE Workbench shell", () => {
     await page.getByTestId("settings-close").click();
     await expect(page.getByTestId("status-connection")).toContainText(
       "API接続済み",
-    );
-
-    // Stub the Phase 1 API.
-    await page.route("**/api/intent", (route) =>
-      route.fulfill({ json: INTENT_RESPONSE }),
-    );
-    await page.route("**/api/propose", (route) =>
-      route.fulfill({ json: PROPOSE_RESPONSE }),
     );
 
     // Type a research question → intent → confirm bubble.
@@ -99,28 +104,19 @@ test.describe("CIE Workbench shell", () => {
   test("生成失敗の理由がチャットに表示される（無言失敗禁止 §5）", async ({
     page,
   }) => {
+    // The Planner confirms, then proposal generation fails — the stream ends
+    // with an `error` frame whose reason is surfaced (never silent, §5).
+    await routeWsChat(page, (msg) =>
+      hasIntentObject(msg)
+        ? [{ type: "error", reason: "LLM_API_KEY_NOT_CONFIGURED" }]
+        : [{ type: "confirm", intent_object: INTENT_RESPONSE.intent_object }],
+    );
+
     await page.goto("/");
     await page.getByTestId("open-settings-from-chat").click();
     await page.getByTestId("settings-token-input").fill("test-token-abc");
     await page.getByTestId("settings-token-save").click();
     await page.getByTestId("settings-close").click();
-
-    // Intent succeeds, propose fails with a reason in provenance.
-    await page.route("**/api/intent", (route) =>
-      route.fulfill({ json: INTENT_RESPONSE }),
-    );
-    await page.route("**/api/propose", (route) =>
-      route.fulfill({
-        json: {
-          execution_id: "exec-e2e-2",
-          analysis_proposal: null,
-          r_script_provenance: {
-            llm_generated: false,
-            reason: "LLM_API_KEY_NOT_CONFIGURED",
-          },
-        },
-      }),
-    );
 
     await page.getByTestId("chat-input").fill("男女で収縮期血圧を比べたい");
     await page.getByTestId("chat-send").click();

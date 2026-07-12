@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { installStandardChat } from "./support/wsChat";
 
 // Phase 3 (R3-1): insert → run → console/result/output, and no silent failure.
 // The API + WS are stubbed here (the real-R E2E is run against a live backend);
@@ -41,19 +42,24 @@ const PROPOSE_RESPONSE = {
 const PNG_FIXTURE = "tests/e2e/fixtures/pixel.png";
 
 async function connect(page: Page): Promise<void> {
+  // Chat streams over WS /ws/chat now: a high-confidence prompt echoes the
+  // intent and streams the proposal directly (no confirm gate). Install before
+  // goto (routeWebSocket adds a page init script).
+  await installStandardChat(page, {
+    intent: INTENT_RESPONSE.intent_object,
+    proposal: PROPOSE_RESPONSE.analysis_proposal,
+    provenance: PROPOSE_RESPONSE.r_script_provenance,
+  });
   await page.goto("/");
   await page.getByTestId("open-settings-from-chat").click();
   await page.getByTestId("settings-token-input").fill("test-token-abc");
   await page.getByTestId("settings-token-save").click();
   await page.getByTestId("settings-close").click();
-  await page.route("**/api/intent", (r) => r.fulfill({ json: INTENT_RESPONSE }));
-  await page.route("**/api/propose", (r) => r.fulfill({ json: PROPOSE_RESPONSE }));
 }
 
 async function getCandidate(page: Page) {
   await page.getByTestId("chat-input").fill("男女で収縮期血圧を比べたい");
   await page.getByTestId("chat-send").click();
-  await page.getByTestId("confirm-propose").click();
   const candidate = page.getByTestId("code-candidate");
   await expect(candidate).toBeVisible();
   return candidate;
