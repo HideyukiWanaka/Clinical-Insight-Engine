@@ -1,22 +1,22 @@
-"""WS /ws/consult — minimal streaming chat core (Step 1).
+"""WS /ws/consult — structured chat core (Step 2).
 
-Skeleton translated from ``cie/api/routes/ws_chat.py``: one socket carries
-several turns; the server owns the running history via ``ConversationStore`` so
-the second turn sees the first in context, and the reply streams back token by
-token.
+Step 1 streamed plain-text deltas. Step 2 emits SPEC 4.4 message types: each
+user turn yields an ordered stream of ``assistant_text`` (一言理由 + 折りたたみ
+用の詳細) and ``assistant_code`` (Rコード本体) frames — one response may carry
+several ``assistant_code`` blocks, and every code block carries a one-line
+reason. The server still owns the running history so later turns keep context.
 
-Step 1 scope: plain conversational text only. No code/reason structuring
-(Step 2), no environment context / references / images / RStudio wiring (later
-steps), and — being a localhost personal app — no auth or rate limiting yet.
+Out of scope here: frontend rendering (Step 3), environment/references/images/
+RStudio wiring (later steps). Localhost personal app, so no auth/rate-limit yet.
 
 Frames the client sends (one JSON object, or bare text, per message):
   {"text": "...", "conversation_id": "..."}   — a user turn
-  (a bare non-JSON string is also accepted as the text, for easy websocat use)
 
 Frames the server emits (each a JSON object with ``type``):
-  delta — a chunk of the assistant reply as it streams
-  done  — end of this turn
-  error — anything that could not complete (never silent)
+  assistant_text — {reason: 一言, detail: 折りたたみ用の詳細}
+  assistant_code — {reason: 一言の理由・前提, language, code}
+  done           — end of this turn
+  error          — anything that could not complete (never silent)
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ import uuid
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from .llm import stream_reply
+from .llm import blocks_to_text, generate_blocks
 from .prompts import SYSTEM_PROMPT
 
 _log = logging.getLogger(__name__)
@@ -55,9 +55,27 @@ def _parse_frame(raw: str) -> tuple[str, str]:
     return "", ""
 
 
+def _frame_for(block: dict) -> dict | None:
+    """Map a model block to a SPEC 4.4 outgoing frame (or None to skip)."""
+    if block.get("type") == "text":
+        return {
+            "type": "assistant_text",
+            "reason": str(block.get("reason", "")),
+            "detail": str(block.get("detail", "")),
+        }
+    if block.get("type") == "code":
+        return {
+            "type": "assistant_code",
+            "reason": str(block.get("reason", "")),
+            "language": str(block.get("language") or "r"),
+            "code": str(block.get("code", "")),
+        }
+    return None
+
+
 @router.websocket("/ws/consult")
 async def ws_consult(websocket: WebSocket) -> None:
-    """Accept a socket, then stream a chat reply per user turn, keeping context."""
+    """Accept a socket, then stream structured reply frames per user turn."""
     await websocket.accept()
     store = websocket.app.state.conversations
     # One conversation per socket by default; a client may override per frame.
@@ -76,11 +94,8 @@ async def ws_consult(websocket: WebSocket) -> None:
             state = store.get_or_create(conversation_id or default_conversation_id)
             state.add_turn("user", text)
 
-            reply_parts: list[str] = []
             try:
-                async for chunk in stream_reply(SYSTEM_PROMPT, state.history()):
-                    reply_parts.append(chunk)
-                    await websocket.send_json({"type": "delta", "text": chunk})
+                blocks = await generate_blocks(SYSTEM_PROMPT, state.history())
             except Exception as exc:  # noqa: BLE001 — never leak a raw traceback
                 _log.warning("ws_consult generation error: %s", exc)
                 await websocket.send_json(
@@ -88,7 +103,12 @@ async def ws_consult(websocket: WebSocket) -> None:
                 )
                 continue
 
-            state.add_turn("assistant", "".join(reply_parts))
+            for block in blocks:
+                frame = _frame_for(block)
+                if frame is not None:
+                    await websocket.send_json(frame)
+
+            state.add_turn("assistant", blocks_to_text(blocks))
             await websocket.send_json({"type": "done"})
     except WebSocketDisconnect:
         return
