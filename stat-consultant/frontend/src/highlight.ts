@@ -2,7 +2,7 @@
 // registered, keeping the bundle small. Replies are R (SPEC §6).
 import hljs from "highlight.js/lib/core";
 import r from "highlight.js/lib/languages/r";
-import "highlight.js/styles/github.css"; // light theme (SPEC 4.2 Light & Clean)
+import "highlight.js/styles/nord.css"; // dark code theme (navy, cool tones)
 
 hljs.registerLanguage("r", r);
 

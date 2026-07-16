@@ -1,9 +1,10 @@
 import type { Message } from "../types";
+import { AssistantAvatarIcon } from "../icons";
 import { AssistantText } from "./AssistantText";
 import { CodeCard } from "./CodeCard";
 
-/** Render one chat message: a user bubble, an assistant turn (a sequence of
- *  text / code blocks), or an error notice. */
+/** Render one chat message: a user bubble, an assistant turn (avatar + a
+ *  sequence of text / code blocks), or an error notice. */
 export function ChatMessage({ msg }: { msg: Message }) {
   if (msg.role === "user") {
     return (
@@ -16,6 +17,9 @@ export function ChatMessage({ msg }: { msg: Message }) {
   if (msg.role === "error") {
     return (
       <div className="msg msg--assistant">
+        <span className="msg__avatar" aria-hidden="true">
+          <AssistantAvatarIcon />
+        </span>
         <div className="msg__error">{msg.text}</div>
       </div>
     );
@@ -23,6 +27,9 @@ export function ChatMessage({ msg }: { msg: Message }) {
 
   return (
     <div className="msg msg--assistant">
+      <span className="msg__avatar" aria-hidden="true">
+        <AssistantAvatarIcon />
+      </span>
       <div className="msg__blocks">
         {msg.blocks.map((b, i) =>
           b.kind === "text" ? (
