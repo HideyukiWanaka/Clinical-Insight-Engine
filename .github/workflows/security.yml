@@ -24,6 +24,9 @@ jobs:
       - name: Install pip-audit
         run: pip install pip-audit
 
+      - name: Upgrade setuptools to a patched version (PYSEC-2026-3447)
+        run: pip install --upgrade "setuptools>=83.0.0"
+
       - name: Scan installed dependencies for known CVEs
         run: pip-audit --desc
 
