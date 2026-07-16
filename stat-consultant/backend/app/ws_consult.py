@@ -28,6 +28,7 @@ import uuid
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from .llm import blocks_to_text, generate_blocks
+from .models_registry import is_available, resolve_model
 from .prompts import SYSTEM_PROMPT
 from .references import build_reference_context, extract_query_terms
 
@@ -36,24 +37,26 @@ _log = logging.getLogger(__name__)
 router = APIRouter(tags=["ws"])
 
 
-def _parse_frame(raw: str) -> tuple[str, str]:
-    """Return ``(text, conversation_id)`` from a client message.
+def _parse_frame(raw: str) -> tuple[str, str, str]:
+    """Return ``(text, conversation_id, model)`` from a client message.
 
-    Accepts a JSON object ``{"text", "conversation_id"}`` or a bare string
-    (treated as the text). Unknown shapes yield empty text, which the caller
-    surfaces as an error rather than acting on.
+    Accepts a JSON object ``{"text", "conversation_id", "model"}`` or a bare
+    string (treated as the text). Unknown shapes yield empty text, which the
+    caller surfaces as an error rather than acting on.
     """
     try:
         parsed = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
-        return raw.strip(), ""
+        return raw.strip(), "", ""
     if isinstance(parsed, str):
-        return parsed.strip(), ""
+        return parsed.strip(), "", ""
     if isinstance(parsed, dict):
-        return str(parsed.get("text") or "").strip(), str(
-            parsed.get("conversation_id") or ""
+        return (
+            str(parsed.get("text") or "").strip(),
+            str(parsed.get("conversation_id") or ""),
+            str(parsed.get("model") or ""),
         )
-    return "", ""
+    return "", "", ""
 
 
 def _frame_for(block: dict) -> dict | None:
@@ -85,10 +88,22 @@ async def ws_consult(websocket: WebSocket) -> None:
     try:
         while True:
             raw = await websocket.receive_text()
-            text, conversation_id = _parse_frame(raw)
+            text, conversation_id, model = _parse_frame(raw)
             if not text:
                 await websocket.send_json(
                     {"type": "error", "reason": "empty message: expected text"}
+                )
+                continue
+
+            # Resolve the chosen model; require its provider key to be configured.
+            spec = resolve_model(model)
+            if not is_available(spec):
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "reason": f"モデル {spec.label} は未設定です"
+                        f"（サーバーに {spec.provider} のAPIキーがありません）",
+                    }
                 )
                 continue
 
@@ -102,7 +117,7 @@ async def ws_consult(websocket: WebSocket) -> None:
             system = SYSTEM_PROMPT + build_reference_context(refs)
 
             try:
-                blocks = await generate_blocks(system, state.history())
+                blocks = await generate_blocks(spec, system, state.history())
             except Exception as exc:  # noqa: BLE001 — never leak a raw traceback
                 _log.warning("ws_consult generation error: %s", exc)
                 await websocket.send_json(

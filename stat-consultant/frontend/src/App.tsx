@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import researcherArt from "./assets/researcher.png";
-import { isTextReference, uploadReference } from "./api";
+import { fetchModels, isTextReference, type ModelInfo, uploadReference } from "./api";
 import { ChatMessage } from "./components/ChatMessage";
 import { PaperclipIcon, SendIcon } from "./icons";
 import { useConsult } from "./useConsult";
@@ -10,9 +10,21 @@ function App() {
   const { messages, connected, busy, send } = useConsult();
   const [input, setInput] = useState("");
   const [toast, setToast] = useState<string | null>(null);
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [model, setModel] = useState("");
   const logRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<number | undefined>(undefined);
+
+  // Load the selectable models once; default to the server's choice.
+  useEffect(() => {
+    fetchModels()
+      .then((data) => {
+        setModels(data.models);
+        setModel(data.default);
+      })
+      .catch(() => setModels([]));
+  }, []);
 
   // Keep the newest message in view as the conversation grows.
   useEffect(() => {
@@ -29,7 +41,7 @@ function App() {
 
   function submit() {
     if (!input.trim() || busy) return;
-    send(input);
+    send(input, model);
     setInput("");
   }
 
@@ -52,10 +64,28 @@ function App() {
     <div className="app">
       <header className="app__header">
         <span className="app__title">Stat Consultant</span>
-        <span
-          className={`app__status ${connected ? "is-on" : "is-off"}`}
-          title={connected ? "接続中" : "未接続"}
-        />
+        <div className="app__header-right">
+          {models.length > 0 && (
+            <select
+              className="app__model"
+              data-testid="model-select"
+              aria-label="モデルを選択"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+            >
+              {models.map((m) => (
+                <option key={m.id} value={m.id} disabled={!m.available}>
+                  {m.label}
+                  {m.available ? "" : "（未設定）"}
+                </option>
+              ))}
+            </select>
+          )}
+          <span
+            className={`app__status ${connected ? "is-on" : "is-off"}`}
+            title={connected ? "接続中" : "未接続"}
+          />
+        </div>
       </header>
 
       <main className="app__log" ref={logRef}>

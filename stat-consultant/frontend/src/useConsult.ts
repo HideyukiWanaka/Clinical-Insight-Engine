@@ -84,14 +84,18 @@ export function useConsult() {
     return () => ws.close();
   }, []);
 
-  const send = useCallback((text: string) => {
+  const send = useCallback((text: string, model: string) => {
     const trimmed = text.trim();
     const ws = wsRef.current;
     if (!trimmed || !ws || ws.readyState !== WebSocket.OPEN) return;
     setMessages((m) => [...m, { id: nextId(), role: "user", text: trimmed }]);
     setBusy(true);
     ws.send(
-      JSON.stringify({ text: trimmed, conversation_id: conversationId.current }),
+      JSON.stringify({
+        text: trimmed,
+        conversation_id: conversationId.current,
+        model,
+      }),
     );
   }, []);
 

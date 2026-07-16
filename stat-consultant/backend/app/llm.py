@@ -1,32 +1,35 @@
-"""Claude call that returns SPEC 4.4 structured blocks (Step 2).
+"""Multi-provider LLM call that returns SPEC 4.4 structured blocks.
 
-Step 1 streamed plain text. Step 2 constrains the reply to a small JSON schema —
-an ordered list of ``text`` / ``code`` blocks — so the WebSocket can emit
-``assistant_text`` / ``assistant_code`` frames with a reason always attached to
-every code block (BUILD_PROMPTS Step 2 / SPEC 4.4).
+Supports Anthropic, OpenAI, and Gemini (the last via OpenAI's compatible
+endpoint, reusing the ``openai`` SDK). The reply is constrained to a small
+JSON schema — an ordered list of ``text`` / ``code`` blocks — so the WebSocket
+can emit ``assistant_text`` / ``assistant_code`` frames with a reason always
+attached to every code block (BUILD_PROMPTS Step 2 / SPEC 4.4).
 
-Structure is enforced by ``output_config.format`` (json_schema), not by parsing
-prose, so the frames are reliable. We still call through ``messages.stream(...)``
-for HTTP-timeout safety on large replies, then take the final message. The
-``async with`` remains the minimal try/finally lifecycle port (SPEC §10): the
-stream is always torn down on every exit path.
+Structure comes from each provider's native JSON output (Anthropic
+``output_config.format``; OpenAI ``response_format`` json_schema; Gemini
+``response_format`` json_object) plus a robust JSON parse that tolerates fences
+or stray prose as a fallback.
 
-Auth is zero-config: ``AsyncAnthropic()`` resolves ``ANTHROPIC_API_KEY`` (or an
-``ant auth login`` profile) from the environment — nothing is hardcoded.
+Auth is zero-config per provider: keys are read from the environment by each
+SDK (``ANTHROPIC_API_KEY`` / ``OPENAI_API_KEY`` / ``GEMINI_API_KEY``) — nothing
+is hardcoded. The ``async with`` on the Anthropic stream remains the minimal
+try/finally lifecycle port (SPEC §10).
 """
 
 from __future__ import annotations
 
 import json
+import os
+import re
 
 from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 
-# Opus 4.8 — current, most capable, Vision-capable; the right default for
-# statistical advice where correctness matters (SPEC §6, 痛み②手法選択).
-_MODEL = "claude-opus-4-8"
-# Structured reply may carry several code blocks + reasons (+ adaptive thinking);
-# streaming makes a generous ceiling safe (no HTTP-timeout risk).
+from .models_registry import ModelSpec
+
 _MAX_TOKENS = 16000
+_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
 # SPEC 4.4 message types as an ordered list of blocks. ``reason`` is required on
 # every block, which is what guarantees 「理由が常に付与されている」 for code.
@@ -66,60 +69,112 @@ _RESPONSE_SCHEMA = {
     "additionalProperties": False,
 }
 
-# One process-wide async client, constructed lazily so importing this module
-# never requires credentials to be present (e.g. at test-collection time).
-_client: AsyncAnthropic | None = None
+# Lazily-built, cached clients keyed by provider.
+_clients: dict[str, object] = {}
 
 
-def _get_client() -> AsyncAnthropic:
-    global _client
-    if _client is None:
-        _client = AsyncAnthropic()
-    return _client
+def _anthropic() -> AsyncAnthropic:
+    if "anthropic" not in _clients:
+        _clients["anthropic"] = AsyncAnthropic()
+    return _clients["anthropic"]  # type: ignore[return-value]
 
 
-async def generate_blocks(system: str, messages: list[dict]) -> list[dict]:
-    """Return the reply as an ordered list of SPEC 4.4 blocks.
+def _openai_compatible(spec: ModelSpec) -> AsyncOpenAI:
+    """An OpenAI-SDK client for OpenAI (default) or Gemini (compat base_url)."""
+    if spec.provider == "gemini":
+        if "gemini" not in _clients:
+            key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY", "")
+            _clients["gemini"] = AsyncOpenAI(api_key=key, base_url=_GEMINI_BASE_URL)
+        return _clients["gemini"]  # type: ignore[return-value]
+    if "openai" not in _clients:
+        _clients["openai"] = AsyncOpenAI()
+    return _clients["openai"]  # type: ignore[return-value]
 
-    Each element is either ``{"type": "text", "reason", "detail"}`` or
-    ``{"type": "code", "reason", "language", "code"}``. ``thinking`` is adaptive
-    so the model reasons deeply on a real methods question and not at all on
-    chitchat.
+
+def openai_messages(system: str, messages: list[dict]) -> list[dict]:
+    """Prepend the system prompt as a system message (OpenAI/Gemini shape)."""
+    return [{"role": "system", "content": system}, *messages]
+
+
+def openai_response_format(spec: ModelSpec) -> dict:
+    """Native structured-output config for the OpenAI-compatible providers.
+
+    OpenAI supports strict ``json_schema``; Gemini's compat endpoint is more
+    reliable with plain ``json_object`` (the schema is described in the prompt,
+    and the parser is tolerant), so use that there.
+    """
+    if spec.provider == "gemini":
+        return {"type": "json_object"}
+    return {
+        "type": "json_schema",
+        "json_schema": {"name": "stat_reply", "strict": True, "schema": _RESPONSE_SCHEMA},
+    }
+
+
+def parse_blocks(text: str) -> list[dict]:
+    """Parse the model's JSON reply into blocks, tolerating fences/stray prose."""
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```[A-Za-z]*\n?", "", stripped)
+        stripped = re.sub(r"\n?```$", "", stripped).strip()
+    try:
+        data = json.loads(stripped)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", stripped, re.DOTALL)
+        if not match:
+            return []
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return []
+    blocks = data.get("blocks", []) if isinstance(data, dict) else []
+    return [b for b in blocks if isinstance(b, dict) and b.get("type") in ("text", "code")]
+
+
+async def _anthropic_json(model: str, system: str, messages: list[dict]) -> str:
+    async with _anthropic().messages.stream(
+        model=model,
+        max_tokens=_MAX_TOKENS,
+        thinking={"type": "adaptive"},
+        system=system,
+        messages=messages,
+        output_config={"format": {"type": "json_schema", "schema": _RESPONSE_SCHEMA}},
+    ) as stream:
+        message = await stream.get_final_message()
+    return next((b.text for b in message.content if b.type == "text"), "")
+
+
+async def _openai_compat_json(spec: ModelSpec, system: str, messages: list[dict]) -> str:
+    resp = await _openai_compatible(spec).chat.completions.create(
+        model=spec.model,
+        messages=openai_messages(system, messages),
+        response_format=openai_response_format(spec),
+    )
+    return resp.choices[0].message.content or ""
+
+
+async def generate_blocks(
+    spec: ModelSpec, system: str, messages: list[dict]
+) -> list[dict]:
+    """Return the reply as an ordered list of SPEC 4.4 blocks, via ``spec``'s provider.
 
     Args:
-        system:   The persona/system prompt.
+        spec:     The chosen model (provider + provider model id).
+        system:   The persona/system prompt (+ any retrieved reference context).
         messages: Ordered turns ``[{"role", "content"}, ...]`` (oldest→newest).
 
     Raises:
         Anything the SDK raises; the caller turns it into an error frame.
     """
-    client = _get_client()
-    async with client.messages.stream(
-        model=_MODEL,
-        max_tokens=_MAX_TOKENS,
-        thinking={"type": "adaptive"},
-        system=system,
-        messages=messages,
-        output_config={
-            "format": {"type": "json_schema", "schema": _RESPONSE_SCHEMA}
-        },
-    ) as stream:
-        message = await stream.get_final_message()
-
-    # With output_config.format the first text block is guaranteed valid JSON
-    # matching the schema; thinking blocks (if any) precede it and are skipped.
-    text = next((b.text for b in message.content if b.type == "text"), "")
-    data = json.loads(text)
-    blocks = data.get("blocks", [])
-    return [b for b in blocks if isinstance(b, dict) and b.get("type") in ("text", "code")]
+    if spec.provider == "anthropic":
+        text = await _anthropic_json(spec.model, system, messages)
+    else:
+        text = await _openai_compat_json(spec, system, messages)
+    return parse_blocks(text)
 
 
 def blocks_to_text(blocks: list[dict]) -> str:
-    """Render blocks to a plain-text assistant turn for the running history.
-
-    History is stored as text so the next turn threads context; the exact
-    structured shape is a rendering concern for the client, not the model.
-    """
+    """Render blocks to a plain-text assistant turn for the running history."""
     parts: list[str] = []
     for b in blocks:
         if b.get("type") == "text":

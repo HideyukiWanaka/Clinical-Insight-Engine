@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .conversation import ConversationStore
+from .models_api import router as models_router
 from .references import ReferenceLibrary
 from .references_api import router as references_router
 from .ws_consult import router as ws_consult_router
@@ -28,6 +29,7 @@ app.add_middleware(
 
 app.include_router(ws_consult_router)
 app.include_router(references_router)
+app.include_router(models_router)
 
 
 @app.get("/health")

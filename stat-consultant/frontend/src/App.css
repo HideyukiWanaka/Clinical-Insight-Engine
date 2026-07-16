@@ -12,6 +12,7 @@
 .app__header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
   padding: 12px 22px;
   border-bottom: 1px solid var(--border);
@@ -20,6 +21,26 @@
   font-weight: 600;
   font-size: 15px;
   color: var(--text-strong);
+}
+.app__header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+/* Minimal model picker — no settings screen (SPEC 4.5 minimalism). */
+.app__model {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+.app__model:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 .app__status {
   width: 8px;
