@@ -29,6 +29,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from .llm import blocks_to_text, generate_blocks
 from .prompts import SYSTEM_PROMPT
+from .references import build_reference_context, extract_query_terms
 
 _log = logging.getLogger(__name__)
 
@@ -94,8 +95,14 @@ async def ws_consult(websocket: WebSocket) -> None:
             state = store.get_or_create(conversation_id or default_conversation_id)
             state.add_turn("user", text)
 
+            # Ground on the user's uploaded references: retrieve the top hits for
+            # the latest message and fold their excerpts into the system prompt.
+            library = websocket.app.state.references
+            refs = library.retrieve(extract_query_terms(text), top_k=2)
+            system = SYSTEM_PROMPT + build_reference_context(refs)
+
             try:
-                blocks = await generate_blocks(SYSTEM_PROMPT, state.history())
+                blocks = await generate_blocks(system, state.history())
             except Exception as exc:  # noqa: BLE001 — never leak a raw traceback
                 _log.warning("ws_consult generation error: %s", exc)
                 await websocket.send_json(

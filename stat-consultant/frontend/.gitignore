@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Track source image assets (repo root ignores *.png globally).
+!src/assets/*.png

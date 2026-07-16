@@ -31,24 +31,6 @@ export function RLogoIcon() {
   );
 }
 
-/** Empty-state illustration: a stats report + a researcher. */
-export function ResearcherIllustration() {
-  return (
-    <svg viewBox="0 0 120 96" fill="none" stroke="currentColor" strokeWidth="2.4"
-      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="8" y="14" width="66" height="52" rx="6" />
-      <line x1="20" y1="54" x2="68" y2="54" />
-      <line x1="24" y1="54" x2="24" y2="44" />
-      <line x1="32" y1="54" x2="32" y2="36" />
-      <line x1="40" y1="54" x2="40" y2="47" />
-      <circle cx="58" cy="34" r="10" />
-      <path d="M58 34 58 24 A10 10 0 0 1 66.5 39 Z" fill="currentColor" stroke="none" />
-      <circle cx="94" cy="40" r="9" />
-      <path d="M80 72 a14 14 0 0 1 28 0" />
-    </svg>
-  );
-}
-
 /** Small assistant avatar glyph (a mini bar chart). */
 export function AssistantAvatarIcon() {
   return (

@@ -1,8 +1,8 @@
 # stat-consultant
 
 See `docs/SPEC.md` (正典) and `docs/BUILD_PROMPTS.md` for the implementation plan.
-Built through Step 3 (chat UI over the structured WebSocket). Later features
-(attach button, RStudio wiring, environment sync) are not here yet.
+Built through Step 4 (reference upload + lightweight RAG grounding). Later
+features (RStudio wiring, environment sync, image/Vision) are not here yet.
 
 ## backend (FastAPI + uvicorn)
 
@@ -42,6 +42,16 @@ Server → client frames:
 The reply is shaped by an `output_config.format` JSON schema and grounded with an
 R method-selection few-shot distilled from `skills/core/statistics/*/SKILL.md`.
 
+### references: `POST /api/references`
+
+Upload a Markdown/text reference (multipart `file`). It is saved to the single
+`user_references/` folder and reflected into a lightweight keyword index
+(adapted from `cie/knowledge/reference_library.py`). On each chat turn the
+backend runs `retrieve(query_terms, top_k=2)` over the latest user message and
+folds the top hits into the system prompt, so answers ground on the user's own
+material (proper nouns included). No approval flow or hierarchy — individual use.
+Non-UTF-8 uploads (e.g. images) are rejected with 415; images are Step 9.
+
 ## frontend (Vite + React + TypeScript)
 
 ```
@@ -50,13 +60,14 @@ npm install
 npm run dev            # start the backend on :8000 first
 ```
 
-Open the printed local URL. A minimal chat SPA (SPEC 4.1/4.2 — Light & Clean,
-one Deep Teal accent): message list + input (Enter to send, Shift+Enter for a
-newline, IME-safe). Assistant replies render as `assistant_text` (一言理由 +
-click-to-expand detail) and syntax-highlighted `assistant_code` cards, each with
-a「RStudioへ送る」button (visual only — wired in Step 5). The attach button
-(Step 4) and history sidebar / model select / settings / auth UI (SPEC 4.5, never
-built) are intentionally absent.
+Open the printed local URL. A minimal chat SPA (dark code panels + a dark
+RStudio button per the design mockup): message list + input (Enter to send,
+Shift+Enter for a newline, IME-safe). Assistant replies render as `assistant_text`
+(一言理由 + click-to-expand detail) and syntax-highlighted `assistant_code` cards,
+each with a「RStudioへ送る」button (visual only — wired in Step 5). One attach
+button (paperclip) uploads a Markdown/text reference to `POST /api/references`
+and shows a toast; images are Step 9. The history sidebar / model select /
+settings / auth UI (SPEC 4.5) are intentionally absent.
 
 The UI connects to `ws://<host>:8000/ws/consult`, so run the backend (with
 `ANTHROPIC_API_KEY`) first.

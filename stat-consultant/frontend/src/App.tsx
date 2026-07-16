@@ -1,23 +1,51 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
+import researcherArt from "./assets/researcher.png";
+import { isTextReference, uploadReference } from "./api";
 import { ChatMessage } from "./components/ChatMessage";
-import { PaperclipIcon, ResearcherIllustration, SendIcon } from "./icons";
+import { PaperclipIcon, SendIcon } from "./icons";
 import { useConsult } from "./useConsult";
 
 function App() {
   const { messages, connected, busy, send } = useConsult();
   const [input, setInput] = useState("");
+  const [toast, setToast] = useState<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const toastTimer = useRef<number | undefined>(undefined);
 
   // Keep the newest message in view as the conversation grows.
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
   }, [messages]);
 
+  useEffect(() => () => window.clearTimeout(toastTimer.current), []);
+
+  function showToast(msg: string) {
+    setToast(msg);
+    window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), 2800);
+  }
+
   function submit() {
     if (!input.trim() || busy) return;
     send(input);
     setInput("");
+  }
+
+  function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-selecting the same file
+    if (!file) return;
+    // One attach button, auto-routed by type. Markdown/text → reference store;
+    // images are handled in Step 9.
+    if (!isTextReference(file)) {
+      showToast("テキスト/Markdown を選んでください（画像は今後対応）");
+      return;
+    }
+    uploadReference(file)
+      .then(() => showToast("参考資料として保存しました"))
+      .catch(() => showToast("アップロードに失敗しました"));
   }
 
   return (
@@ -33,9 +61,7 @@ function App() {
       <main className="app__log" ref={logRef}>
         {messages.length === 0 ? (
           <div className="app__empty">
-            <span className="app__empty-art" aria-hidden="true">
-              <ResearcherIllustration />
-            </span>
+            <img className="app__empty-art" src={researcherArt} alt="" />
             <p className="app__empty-title">こんにちは、研究者さん</p>
             <p className="app__empty-sub">Rコードのこと、気軽に聞いてください。</p>
           </div>
@@ -46,13 +72,21 @@ function App() {
 
       <footer className="app__composer">
         <div className="composer__pill">
-          {/* Visual placeholder — the attach flow is wired in Step 4. */}
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".md,.markdown,.txt,text/markdown,text/plain"
+            hidden
+            data-testid="file-input"
+            onChange={onPickFile}
+          />
           <button
             type="button"
             className="composer__attach"
             data-testid="attach"
-            aria-label="添付"
-            title="添付（Step 4 で対応）"
+            aria-label="参考資料を添付"
+            title="参考資料（Markdown/テキスト）を添付"
+            onClick={() => fileRef.current?.click()}
           >
             <PaperclipIcon />
           </button>
@@ -88,6 +122,12 @@ function App() {
           </button>
         </div>
       </footer>
+
+      {toast && (
+        <div className="toast" role="status" data-testid="toast">
+          {toast}
+        </div>
+      )}
     </div>
   );
 }
