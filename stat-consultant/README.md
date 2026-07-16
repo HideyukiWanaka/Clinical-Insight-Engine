@@ -1,8 +1,8 @@
 # stat-consultant
 
 See `docs/SPEC.md` (正典) and `docs/BUILD_PROMPTS.md` for the implementation plan.
-Built through Step 2 (structured code/reason chat over WebSocket). Later features
-(frontend UI, references, environment sync, RStudio wiring) are not here yet.
+Built through Step 3 (chat UI over the structured WebSocket). Later features
+(attach button, RStudio wiring, environment sync) are not here yet.
 
 ## backend (FastAPI + uvicorn)
 
@@ -47,10 +47,19 @@ R method-selection few-shot distilled from `skills/core/statistics/*/SKILL.md`.
 ```
 cd stat-consultant/frontend
 npm install
-npm run dev
+npm run dev            # start the backend on :8000 first
 ```
 
-Open the printed local URL in a browser to see the default Vite screen.
+Open the printed local URL. A minimal chat SPA (SPEC 4.1/4.2 — Light & Clean,
+one Deep Teal accent): message list + input (Enter to send, Shift+Enter for a
+newline, IME-safe). Assistant replies render as `assistant_text` (一言理由 +
+click-to-expand detail) and syntax-highlighted `assistant_code` cards, each with
+a「RStudioへ送る」button (visual only — wired in Step 5). The attach button
+(Step 4) and history sidebar / model select / settings / auth UI (SPEC 4.5, never
+built) are intentionally absent.
+
+The UI connects to `ws://<host>:8000/ws/consult`, so run the backend (with
+`ANTHROPIC_API_KEY`) first.
 
 ## r-addin (RStudio Addin, R package skeleton)
 
