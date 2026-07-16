@@ -1,0 +1,4 @@
+Name: Stat Consultant
+Description: Placeholder addin entry (Step 0 scaffold). No behavior implemented yet.
+Binding: statConsultantAddin
+Interactive: false

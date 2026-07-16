@@ -1,0 +1,14 @@
+Package: statConsultantAddin
+Type: Package
+Title: Stat Consultant RStudio Addin
+Version: 0.0.1
+Description: RStudio Addin scaffold for Stat Consultant. Connects the
+    chat app to the user's RStudio session (code insertion and
+    environment sync). No functionality implemented yet (Step 0
+    scaffold only).
+License: Proprietary
+Encoding: UTF-8
+LazyData: true
+Imports:
+    rstudioapi
+RoxygenNote: 7.3.2
