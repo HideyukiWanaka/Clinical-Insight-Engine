@@ -20,12 +20,12 @@ try/finally lifecycle port (SPEC §10).
 from __future__ import annotations
 
 import json
-import os
 import re
 
 from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
+from . import secrets_store
 from .models_registry import ModelSpec
 
 _MAX_TOKENS = 16000
@@ -69,26 +69,16 @@ _RESPONSE_SCHEMA = {
     "additionalProperties": False,
 }
 
-# Lazily-built, cached clients keyed by provider.
-_clients: dict[str, object] = {}
+def _new_openai_client(spec: ModelSpec) -> AsyncOpenAI:
+    """A fresh OpenAI-SDK client for OpenAI (default) or Gemini (compat base_url).
 
-
-def _anthropic() -> AsyncAnthropic:
-    if "anthropic" not in _clients:
-        _clients["anthropic"] = AsyncAnthropic()
-    return _clients["anthropic"]  # type: ignore[return-value]
-
-
-def _openai_compatible(spec: ModelSpec) -> AsyncOpenAI:
-    """An OpenAI-SDK client for OpenAI (default) or Gemini (compat base_url)."""
+    Built per request from the current stored key so a key change in the
+    settings screen takes effect on the very next turn (no cache to bust).
+    """
+    key = secrets_store.load_api_key(spec.provider) or ""
     if spec.provider == "gemini":
-        if "gemini" not in _clients:
-            key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY", "")
-            _clients["gemini"] = AsyncOpenAI(api_key=key, base_url=_GEMINI_BASE_URL)
-        return _clients["gemini"]  # type: ignore[return-value]
-    if "openai" not in _clients:
-        _clients["openai"] = AsyncOpenAI()
-    return _clients["openai"]  # type: ignore[return-value]
+        return AsyncOpenAI(api_key=key, base_url=_GEMINI_BASE_URL)
+    return AsyncOpenAI(api_key=key)
 
 
 def openai_messages(system: str, messages: list[dict]) -> list[dict]:
@@ -132,24 +122,30 @@ def parse_blocks(text: str) -> list[dict]:
 
 
 async def _anthropic_json(model: str, system: str, messages: list[dict]) -> str:
-    async with _anthropic().messages.stream(
-        model=model,
-        max_tokens=_MAX_TOKENS,
-        thinking={"type": "adaptive"},
-        system=system,
-        messages=messages,
-        output_config={"format": {"type": "json_schema", "schema": _RESPONSE_SCHEMA}},
-    ) as stream:
-        message = await stream.get_final_message()
+    # Fresh client from the current stored key (settings-screen changes apply
+    # on the next turn); the async-with pair is the try/finally lifecycle port.
+    async with AsyncAnthropic(
+        api_key=secrets_store.load_api_key("anthropic") or ""
+    ) as client:
+        async with client.messages.stream(
+            model=model,
+            max_tokens=_MAX_TOKENS,
+            thinking={"type": "adaptive"},
+            system=system,
+            messages=messages,
+            output_config={"format": {"type": "json_schema", "schema": _RESPONSE_SCHEMA}},
+        ) as stream:
+            message = await stream.get_final_message()
     return next((b.text for b in message.content if b.type == "text"), "")
 
 
 async def _openai_compat_json(spec: ModelSpec, system: str, messages: list[dict]) -> str:
-    resp = await _openai_compatible(spec).chat.completions.create(
-        model=spec.model,
-        messages=openai_messages(system, messages),
-        response_format=openai_response_format(spec),
-    )
+    async with _new_openai_client(spec) as client:
+        resp = await client.chat.completions.create(
+            model=spec.model,
+            messages=openai_messages(system, messages),
+            response_format=openai_response_format(spec),
+        )
     return resp.choices[0].message.content or ""
 
 

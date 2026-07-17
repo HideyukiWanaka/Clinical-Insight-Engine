@@ -3,7 +3,8 @@ import "./App.css";
 import researcherArt from "./assets/researcher.png";
 import { fetchModels, isTextReference, type ModelInfo, uploadReference } from "./api";
 import { ChatMessage } from "./components/ChatMessage";
-import { PaperclipIcon, SendIcon } from "./icons";
+import { SettingsModal } from "./components/SettingsModal";
+import { GearIcon, PaperclipIcon, SendIcon } from "./icons";
 import { useConsult } from "./useConsult";
 
 function App() {
@@ -12,19 +13,26 @@ function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [model, setModel] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<number | undefined>(undefined);
 
-  // Load the selectable models once; default to the server's choice.
-  useEffect(() => {
+  // Load the selectable models; keep a valid selection as availability changes
+  // (e.g. after a key is saved in settings).
+  function refreshModels() {
     fetchModels()
       .then((data) => {
         setModels(data.models);
-        setModel(data.default);
+        setModel((current) => {
+          const ok = data.models.find((m) => m.id === current && m.available);
+          return ok ? current : data.default;
+        });
       })
       .catch(() => setModels([]));
-  }, []);
+  }
+
+  useEffect(refreshModels, []);
 
   // Keep the newest message in view as the conversation grows.
   useEffect(() => {
@@ -81,6 +89,16 @@ function App() {
               ))}
             </select>
           )}
+          <button
+            type="button"
+            className="app__gear"
+            data-testid="open-settings"
+            aria-label="設定"
+            title="APIキーの設定"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <GearIcon />
+          </button>
           <span
             className={`app__status ${connected ? "is-on" : "is-off"}`}
             title={connected ? "接続中" : "未接続"}
@@ -152,6 +170,14 @@ function App() {
           </button>
         </div>
       </footer>
+
+      {settingsOpen && (
+        <SettingsModal
+          onClose={() => setSettingsOpen(false)}
+          onKeysChanged={refreshModels}
+          onToast={showToast}
+        />
+      )}
 
       {toast && (
         <div className="toast" role="status" data-testid="toast">

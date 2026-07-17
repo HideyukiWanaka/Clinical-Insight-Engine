@@ -20,6 +20,48 @@ export async function fetchModels(): Promise<ModelList> {
   return (await res.json()) as ModelList;
 }
 
+export interface KeyStatus {
+  provider: string;
+  label: string;
+  has_key: boolean;
+}
+
+async function keysResponse(res: Response): Promise<KeyStatus[]> {
+  if (!res.ok) {
+    let detail = `${res.status}`;
+    try {
+      detail = (await res.json()).detail || detail;
+    } catch {
+      /* keep status */
+    }
+    throw new Error(detail);
+  }
+  return ((await res.json()) as { providers: KeyStatus[] }).providers;
+}
+
+/** Which providers already have a stored key (never the key itself). */
+export async function fetchKeyStatus(): Promise<KeyStatus[]> {
+  return keysResponse(await fetch(`${API_BASE}/api/settings/keys`));
+}
+
+/** Save a provider's API key (stored server-side in the OS keychain). */
+export async function saveApiKey(provider: string, apiKey: string): Promise<KeyStatus[]> {
+  return keysResponse(
+    await fetch(`${API_BASE}/api/settings/keys`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider, api_key: apiKey }),
+    }),
+  );
+}
+
+/** Remove a provider's stored key. */
+export async function clearApiKey(provider: string): Promise<KeyStatus[]> {
+  return keysResponse(
+    await fetch(`${API_BASE}/api/settings/keys/${provider}`, { method: "DELETE" }),
+  );
+}
+
 /** Upload one Markdown/text reference to the backend. Returns the saved name. */
 export async function uploadReference(file: File): Promise<string> {
   const form = new FormData();

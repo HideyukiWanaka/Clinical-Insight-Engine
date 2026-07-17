@@ -11,8 +11,9 @@ the exact strings.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
+
+from . import secrets_store
 
 Provider = str  # "anthropic" | "openai" | "gemini"
 
@@ -38,21 +39,20 @@ MODELS: tuple[ModelSpec, ...] = (
 
 _BY_ID: dict[str, ModelSpec] = {m.id: m for m in MODELS}
 
-# Env var(s) that supply each provider's key.
-_KEY_ENV: dict[Provider, tuple[str, ...]] = {
-    "anthropic": ("ANTHROPIC_API_KEY",),
-    "openai": ("OPENAI_API_KEY",),
-    "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+# Distinct providers appearing in MODELS (order-stable).
+_PROVIDERS: tuple[Provider, ...] = tuple(dict.fromkeys(m.provider for m in MODELS))
+
+# Human labels for the settings screen.
+PROVIDER_LABELS: dict[Provider, str] = {
+    "anthropic": "Anthropic (Claude)",
+    "openai": "OpenAI (GPT)",
+    "gemini": "Google (Gemini)",
 }
 
 
 def configured_providers() -> set[Provider]:
-    """Providers whose API key is present in the environment."""
-    return {
-        prov
-        for prov, names in _KEY_ENV.items()
-        if any(os.environ.get(n) for n in names)
-    }
+    """Providers with a configured API key (OS keyring or environment)."""
+    return {p for p in _PROVIDERS if secrets_store.has_api_key(p)}
 
 
 def is_available(spec: ModelSpec) -> bool:

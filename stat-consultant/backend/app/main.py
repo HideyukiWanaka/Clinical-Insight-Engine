@@ -7,6 +7,7 @@ from .conversation import ConversationStore
 from .models_api import router as models_router
 from .references import ReferenceLibrary
 from .references_api import router as references_router
+from .settings_api import router as settings_router
 from .ws_consult import router as ws_consult_router
 
 # Single flat folder for the user's uploaded references (SPEC 5.6).
@@ -30,6 +31,7 @@ app.add_middleware(
 app.include_router(ws_consult_router)
 app.include_router(references_router)
 app.include_router(models_router)
+app.include_router(settings_router)
 
 
 @app.get("/health")
