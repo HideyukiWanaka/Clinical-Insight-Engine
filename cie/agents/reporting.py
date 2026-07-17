@@ -131,6 +131,15 @@ STRICT REQUIREMENTS:
 6. Ground section structure in the MANUSCRIPT STRUCTURE GUIDE reference provided.
 7. Do not use causal language ("proves", "confirms causation", "demonstrates that X causes Y").
 8. Items marked "human_required" in the reporting checklist must appear in unresolved_items_additions.
+9. When "statistical_results.outcome_results" is present (more than one outcome
+   variable was tested, e.g. systolic AND diastolic blood pressure), the
+   results.primary_outcome text MUST report EVERY entry in outcome_results
+   separately — its "outcome_variable" name, p_value, and effect_size, each
+   with its own [TRACE: statistical_results.outcome_results[i].p_value]-style
+   tag — and state the multiple-comparison correction from
+   "statistical_results.multiple_comparison" (method + n_comparisons), citing
+   p_value_adjusted rather than the raw p_value as the corrected result. Never
+   report only the first outcome when others are present.
 
 OUTPUT JSON SCHEMA (all fields required):
 {
@@ -467,6 +476,9 @@ class ReportingAgent(BaseAgent):
                 "method_id", "test_name", "test_statistic", "df",
                 "p_value", "effect_size", "effect_size_measure",
                 "ci_lower", "ci_upper", "sample_size", "group_summaries",
+                # Multiple outcome variables (e.g. systolic + diastolic BP) —
+                # per-outcome breakdown and the correction applied across them.
+                "outcome_results", "multiple_comparison",
             }
         }
 
@@ -666,13 +678,41 @@ class ReportingAgent(BaseAgent):
             else "[TRACE: n_total]"
         )
 
-        return (
+        text = (
             f"A total of {n_str} participants were included in the primary analysis "
             f"[TRACE: statistical_results.n_total]. "
             f"The primary outcome showed {p_str} ({es_str}), "
             f"with a 95% confidence interval of [TRACE: confidence_interval]. "
             f"Detailed results are presented in Table 1."
         )
+
+        # Multiple outcome variables (e.g. systolic + diastolic BP): the template
+        # fallback above only reflects outcome_results[0] via the flat keys, so
+        # append every additional outcome rather than silently dropping them.
+        outcome_results = statistical_results.get("outcome_results")
+        if isinstance(outcome_results, list) and len(outcome_results) > 1:
+            correction = statistical_results.get("multiple_comparison") or {}
+            method = correction.get("method", "multiple comparison correction")
+            extra = []
+            for r in outcome_results:
+                name = r.get("outcome_variable", "additional outcome")
+                p_adj = r.get("p_value_adjusted")
+                p_adj_str = (
+                    self._format_p_value(p_adj, journal_style)
+                    if isinstance(p_adj, float)
+                    else "p_adjusted = [TRACE: p_value_adjusted]"
+                )
+                extra.append(
+                    f"For {name}, the adjusted result was {p_adj_str} "
+                    f"[TRACE: statistical_results.outcome_results.p_value_adjusted]."
+                )
+            text += (
+                f" {len(outcome_results)} outcome variables were tested; "
+                f"p-values were adjusted using {method} "
+                f"[TRACE: statistical_results.multiple_comparison]. "
+                + " ".join(extra)
+            )
+        return text
 
     # ------------------------------------------------------------------
     # Journal style p-value formatting

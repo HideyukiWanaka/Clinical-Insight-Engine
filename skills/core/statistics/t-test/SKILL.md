@@ -251,9 +251,47 @@ skill_result <- list(
 
 ---
 
+## Multiple Outcome Variables
+
+The procedure above (Steps 1-5) is written for a SINGLE `outcome_var`. When
+`intent_object.outcome_variables` lists MORE THAN ONE column (e.g. the user
+asked to compare BOTH systolic AND diastolic blood pressure between groups),
+run Steps 1-5 once per outcome variable — same `group_var`, same method for
+each — inside one script, then merge the results:
+
+```r
+outcome_vars <- c("var_1", "var_4")  # every entry from intent_object.outcome_variables
+
+per_outcome_results <- lapply(outcome_vars, function(outcome_var) {
+  # ... Steps 1-4 exactly as above, using this outcome_var ...
+  skill_result  # the Step 5 list, plus outcome_variable = outcome_var
+})
+
+p_values          <- sapply(per_outcome_results, function(r) r$primary_result$p_value)
+p_values_adjusted <- p.adjust(p_values, method = "bonferroni")
+for (i in seq_along(per_outcome_results)) {
+  per_outcome_results[[i]]$p_value_adjusted <- p_values_adjusted[i]
+}
+
+final_result <- per_outcome_results[[1]]          # backward-compat flat fields
+final_result$outcome_results   <- per_outcome_results
+final_result$multiple_comparison <- list(
+  method = "bonferroni", n_comparisons = length(outcome_vars)
+)
+```
+
+Never analyse only the first outcome variable and drop the rest — every entry
+in `outcome_variables` must appear in `outcome_results`. When there is only
+ONE outcome variable, skip this section entirely and write `result.json`
+exactly as Step 5 shows (no `outcome_results` / `multiple_comparison` keys).
+
+---
+
 ## Validation Rules
 
 - `design` must be `"paired"` or `"independent"` — never inferred silently
+- If `intent_object.outcome_variables` has >1 entry: `outcome_results` must have
+  exactly that many entries, each with its own `p_value_adjusted`
 - If `design = "paired"`: `subject_id_var` must not be NULL
 - If `design = "paired"`: `n_pairs` must equal `min(n_per_group)` when no missing data
 - `p_value` must be in (0, 1)

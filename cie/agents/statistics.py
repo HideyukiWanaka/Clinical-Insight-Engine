@@ -217,6 +217,41 @@ KNOWLEDGE REFERENCE PATTERNS provided above. You MUST:
 Never fabricate results — compute everything from the data.
 """
 
+# Appended to every R-generation prompt (fresh, chat, continuation) so a request
+# naming MORE THAN ONE outcome variable (e.g. "compare systolic AND diastolic BP
+# between men and women") is not silently narrowed to just the first one. The
+# vetted SKILL.md block shown alongside this instruction walks through a SINGLE
+# outcome_var/group_var — without this explicit loop instruction the model
+# anchors on that single-variable example and drops every outcome after the
+# first. Kept as one shared constant so all three R-gen prompts (and every
+# Skill they may be grounded with) apply it identically.
+_MULTI_OUTCOME_R_INSTRUCTIONS = """\
+
+=== MULTIPLE OUTCOME VARIABLES ===
+The ANALYSIS REQUEST's intent_object.outcome_variables list may contain MORE
+THAN ONE entry (e.g. the user asked to compare both systolic AND diastolic
+blood pressure between groups). The SKILL procedure above illustrates the
+single-outcome case only — when outcome_variables has more than one entry,
+you MUST extend it as follows, in ONE script (one execution, one result.json):
+1. Repeat the full procedure (assumption checks → test → effect size) once per
+   outcome variable, using the SAME grouping/predictor variable(s) and the SAME
+   method for every one of them. Never analyse only the first and drop the rest.
+2. Collect every run's p-value and compute Bonferroni-adjusted p-values with
+   base R: p.adjust(p_values, method = "bonferroni") (no package needed).
+3. Write result.json as ONE JSON object:
+   - The usual top-level keys (method_id, test_name, test_statistic, df,
+     p_value, effect_size, effect_size_measure, ci_lower, ci_upper,
+     sample_size, group_summaries) populated from the FIRST outcome variable,
+     so single-outcome consumers reading only these keys keep working.
+   - "outcome_results": a JSON array with ONE object per outcome variable (same
+     order as outcome_variables), each carrying the SAME key set as above PLUS
+     "outcome_variable" (that column's real name, exactly as it appears in
+     dataset_columns) and "p_value_adjusted" (its Bonferroni-adjusted p-value).
+   - "multiple_comparison": {"method": "bonferroni", "n_comparisons": <N>}.
+When outcome_variables has exactly ONE entry, write result.json exactly as the
+SKILL procedure shows — do not add outcome_results/multiple_comparison keys.
+"""
+
 # ---------------------------------------------------------------------------
 # Method catalogue (statistics.yaml method_selection_framework)
 # ---------------------------------------------------------------------------
@@ -756,7 +791,7 @@ class StatisticsAgent(BaseAgent):
             method["method_id"], off_catalog
         )
         provenance["grounded_by_skill"] = grounded_by_skill
-        system_prompt = _R_GEN_SYSTEM_PROMPT + skill_block
+        system_prompt = _R_GEN_SYSTEM_PROMPT + skill_block + _MULTI_OUTCOME_R_INSTRUCTIONS
         if off_catalog:
             system_prompt += _R_OFFCATALOG_GUIDANCE
         user_message = self._build_r_gen_user_message(
@@ -826,6 +861,7 @@ class StatisticsAgent(BaseAgent):
                 "outcome_variables": _resolve_variable_list(
                     intent_obj.get("outcome_variables", []), alias_map or {}
                 ),
+                "outcome_count": len(intent_obj.get("outcome_variables") or []),
                 "predictor_variables": _resolve_variable_list(
                     intent_obj.get("predictor_variables", []), alias_map or {}
                 ),
@@ -981,7 +1017,7 @@ class StatisticsAgent(BaseAgent):
             method["method_id"], off_catalog
         )
         provenance["grounded_by_skill"] = grounded_by_skill
-        system_prompt = _R_GEN_CHAT_SYSTEM_PROMPT + skill_block
+        system_prompt = _R_GEN_CHAT_SYSTEM_PROMPT + skill_block + _MULTI_OUTCOME_R_INSTRUCTIONS
         if is_continuation:
             provenance["continuation"] = True
             # Prepend the follow-up framing; the EXPLANATION/CODE contract and R
@@ -1255,6 +1291,7 @@ class StatisticsAgent(BaseAgent):
                 "outcome_variables": _resolve_variable_list(
                     intent_obj.get("outcome_variables", []), alias_map or {}
                 ),
+                "outcome_count": len(intent_obj.get("outcome_variables") or []),
                 "predictor_variables": _resolve_variable_list(
                     intent_obj.get("predictor_variables", []), alias_map or {}
                 ),
@@ -1408,7 +1445,9 @@ class StatisticsAgent(BaseAgent):
             method["method_id"], off_catalog
         )
         provenance["grounded_by_skill"] = grounded_by_skill
-        system_prompt = _R_CONTINUATION_SYSTEM_PROMPT + skill_block
+        system_prompt = (
+            _R_CONTINUATION_SYSTEM_PROMPT + skill_block + _MULTI_OUTCOME_R_INSTRUCTIONS
+        )
         if off_catalog:
             system_prompt += _R_OFFCATALOG_GUIDANCE
         user_message = self._build_continuation_r_gen_user_message(
@@ -1486,6 +1525,7 @@ class StatisticsAgent(BaseAgent):
                 "outcome_variables": _resolve_variable_list(
                     intent_obj.get("outcome_variables", []), alias_map or {}
                 ),
+                "outcome_count": len(intent_obj.get("outcome_variables") or []),
                 "predictor_variables": _resolve_variable_list(
                     intent_obj.get("predictor_variables", []), alias_map or {}
                 ),

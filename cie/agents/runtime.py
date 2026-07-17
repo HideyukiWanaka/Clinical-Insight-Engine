@@ -174,15 +174,29 @@ class RuntimeAgent(BaseAgent):
         # (visualization/reporting/reviewer) reads. Never fabricated: absent or
         # unparsable result.json yields statistical_results=None with a reason.
         statistical_results, stats_reason = self._parse_statistical_results()
+        execution_result: dict = {
+            "status": "completed" if result.exit_code == 0 else "nonzero_exit",
+            "exit_code": result.exit_code,
+            "duration_ms": result.duration_ms,
+            "sanitized_stdout_summary": result.sanitized_stdout_summary,
+            "sanitized_stderr_summary": result.sanitized_stderr_summary,
+            "r_version": result.r_version,
+        }
+        if result.exit_code != 0:
+            # R's tryCatch/stop() writes the actual error message to stderr, not
+            # stdout — surface it as `detail` so /api/run's error_detail is more
+            # than a bare exit code (previously only stderr's *digest* was kept,
+            # discarding the message a user needs to fix their script).
+            stderr_text = (result.sanitized_stderr_summary or "").strip()
+            execution_result["detail"] = (
+                f"Rスクリプトの実行がエラー終了しました（exit_code={result.exit_code}）。\n{stderr_text}"
+                if stderr_text
+                else f"Rスクリプトの実行がエラー終了しました（exit_code={result.exit_code}）。"
+                "stderr出力はありませんでした。"
+            )
         output_payload = {
             "execution_id": agent_input.execution_id,
-            "execution_result": {
-                "status": "completed" if result.exit_code == 0 else "nonzero_exit",
-                "exit_code": result.exit_code,
-                "duration_ms": result.duration_ms,
-                "sanitized_stdout_summary": result.sanitized_stdout_summary,
-                "r_version": result.r_version,
-            },
+            "execution_result": execution_result,
             "statistical_results": statistical_results,
             "generated_files": list(result.output_artifacts),
             "runtime_execution_detail": result_dict,

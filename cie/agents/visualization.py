@@ -125,9 +125,15 @@ STRICT REQUIREMENTS:
 1. Output ONLY R code inside one ```r ... ``` fenced block. No prose outside it.
 2. When raw data is needed for the chart (box plots, jitter, scatter, etc.), read:
        data <- read.csv(file.path(Sys.getenv("WORKSPACE_DIR"), "dataset.csv"),
-                        stringsAsFactors = FALSE)
-   Use the column names from dataset_columns. If group/outcome columns are ambiguous,
-   select them defensively and comment your choice.
+                        stringsAsFactors = FALSE,
+                        check.names = FALSE, fileEncoding = "UTF-8")
+   check.names=FALSE keeps the exact (e.g. Japanese) headers — WITHOUT it R
+   silently mangles non-ASCII/non-syntactic column names via make.names(),
+   so a later data[[outcome_var]] using the name given in dataset_columns
+   silently returns NA for every row and the figure renders blank with no
+   error. fileEncoding="UTF-8" decodes them correctly regardless of the R
+   process locale. Use the column names from dataset_columns. If group/outcome
+   columns are ambiguous, select them defensively and comment your choice.
    For aggregated charts (forest plots, bar charts from summaries), build data frames
    directly from the statistical_results values provided.
 3. Save the figure with ggsave EXACTLY as shown (use the figure_id from the request):
@@ -158,6 +164,21 @@ STRICT REQUIREMENTS:
 10. Never hard-code absolute paths; always use Sys.getenv("WORKSPACE_DIR") and
     Sys.getenv("OUTPUT_DIR") only.
 11. Never call install.packages(), system(), system2(), shell(), or source().
+
+=== MULTIPLE OUTCOME VARIABLES ===
+If "statistical_results.outcome_results" is present (more than one outcome
+variable was tested, e.g. systolic AND diastolic blood pressure), produce ONE
+figure PER entry in outcome_results, in this SAME script — never just the
+first. For each entry (using its "outcome_variable" as the column to plot and
+its p_value/effect_size for the annotation), save with a distinct filename
+that still contains the figure_id given above, e.g.:
+    ggsave(
+      file.path(Sys.getenv("OUTPUT_DIR"),
+                 paste0("figure_<figure_id>_", i, ".png")),
+      plot = p_i, width = 180, height = 120, units = "mm", dpi = 300
+    )
+where i is the 1-based index into outcome_results. When outcome_results is
+absent or has only one entry, save exactly one figure as instructed above.
 """
 
 
@@ -377,15 +398,43 @@ class VisualizationAgent(BaseAgent):
                     "status": "completed" if result.exit_code == 0 else "nonzero_exit",
                     "exit_code": result.exit_code,
                     "duration_ms": result.duration_ms,
+                    "sanitized_stderr_summary": result.sanitized_stderr_summary,
                 }
                 # Update figure_manifest with real PNG paths from OUTPUT_DIR
                 real_paths = self._collect_figure_paths(figure_id)
+                # Multiple outcome variables (see _VZ_R_GEN_SYSTEM_PROMPT's
+                # MULTIPLE OUTCOME VARIABLES section) expect one PNG per entry
+                # in outcome_results — the script can fail partway through the
+                # loop (ggsave already wrote earlier iterations) and still
+                # exit 0 or nonzero, so a naive "any PNGs found" check would
+                # silently report success on a partial figure set.
+                outcome_results = statistical_results.get("outcome_results")
+                expected_count = (
+                    len(outcome_results)
+                    if isinstance(outcome_results, list) and len(outcome_results) > 1
+                    else 1
+                )
                 if real_paths:
                     figure_manifest = real_paths
                     provenance["png_generated"] = True
+                    if len(real_paths) < expected_count:
+                        provenance["png_generated"] = "partial"
+                        provenance["png_reason"] = (
+                            f"expected {expected_count} figures (one per outcome "
+                            f"variable) but only {len(real_paths)} were produced"
+                            + (
+                                f"; stderr: {result.sanitized_stderr_summary}"
+                                if result.sanitized_stderr_summary
+                                else ""
+                            )
+                        )
                 else:
                     provenance["png_generated"] = False
-                    provenance["png_reason"] = "no_output_png_found"
+                    provenance["png_reason"] = (
+                        f"no_output_png_found; stderr: {result.sanitized_stderr_summary}"
+                        if result.sanitized_stderr_summary
+                        else "no_output_png_found"
+                    )
             except Exception as exc:  # noqa: BLE001
                 _log.warning("Visualization R execution failed: %s", exc)
                 execution_detail = {"status": "execution_failed", "detail": str(exc)}
@@ -551,6 +600,9 @@ class VisualizationAgent(BaseAgent):
                 "method_id", "test_name", "test_statistic", "p_value",
                 "effect_size", "effect_size_measure", "ci_lower", "ci_upper",
                 "sample_size", "group_summaries",
+                # Multiple outcome variables (e.g. systolic + diastolic BP) —
+                # per-outcome breakdown so the script can draw one figure each.
+                "outcome_results", "multiple_comparison",
             }
         }
 
@@ -594,7 +646,12 @@ class VisualizationAgent(BaseAgent):
     def _collect_figure_paths(self, figure_id: str) -> list[dict]:
         """Scan OUTPUT_DIR for PNG files matching the figure_id.
 
-        Returns a list of figure_manifest entries with real absolute paths.
+        Returns a list of figure_manifest entries with real absolute paths. A
+        multi-outcome request (see _VZ_R_GEN_SYSTEM_PROMPT's MULTIPLE OUTCOME
+        VARIABLES section) makes the script save several PNGs sharing
+        figure_id as a filename substring (e.g. "figure_<figure_id>_1.png",
+        "..._2.png") — each gets its own figure_id (its filename stem) here so
+        the manifest distinguishes them instead of repeating one id for all.
         Returns an empty list if output_dir is not configured or no PNGs found.
         """
         if self._output_dir is None or not self._output_dir.exists():
@@ -606,7 +663,7 @@ class VisualizationAgent(BaseAgent):
             pngs = sorted(self._output_dir.glob("*.png"))
         return [
             {
-                "figure_id": figure_id,
+                "figure_id": p.stem,
                 "actual_path": str(p.resolve()),
                 "filename": p.name,
                 "format": "png",

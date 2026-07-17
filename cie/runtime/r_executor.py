@@ -111,6 +111,10 @@ class ExecutionResult:
         stdout_digest: SHA-256 hex digest of the sanitized stdout bytes.
         stderr_digest: SHA-256 hex digest of the sanitized stderr bytes.
         sanitized_stdout_summary: First 1 000 characters of sanitized stdout.
+        sanitized_stderr_summary: First 1 000 characters of sanitized stderr —
+            the human-readable surface for R error messages (tryCatch/stop()
+            writes to stderr, not stdout), so callers must read this field to
+            explain a nonzero exit code rather than the digest alone.
         output_artifacts: Relative paths of files found under OUTPUT_DIR.
         r_version: R version string extracted from sessionInfo() output.
         package_versions: Package-name → version-string mapping from sessionInfo().
@@ -124,6 +128,7 @@ class ExecutionResult:
     stdout_digest: str
     stderr_digest: str
     sanitized_stdout_summary: str
+    sanitized_stderr_summary: str = ""
     output_artifacts: list[str] = field(default_factory=list)
     r_version: str | None = None
     package_versions: dict[str, str] = field(default_factory=dict)
@@ -382,6 +387,7 @@ class LocalRExecutor:
             stdout_digest=stdout_digest,
             stderr_digest=stderr_digest,
             sanitized_stdout_summary=sanitized_stdout[:1000],
+            sanitized_stderr_summary=sanitized_stderr[:1000],
             output_artifacts=output_artifacts,
             r_version=session_info.get("r_version"),
             package_versions=session_info.get("package_versions", {}),

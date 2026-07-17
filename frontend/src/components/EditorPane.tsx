@@ -163,8 +163,21 @@ function ResultView({ result }: { result: RunResponse | null }) {
     );
   }
 
-  const stats = result.statistical_results;
+  const stats = result.statistical_results as Record<string, unknown> | null | undefined;
   const exec = result.execution_result ?? {};
+  // Multiple outcome variables (e.g. systolic + diastolic BP — see
+  // cie/agents/statistics.py's outcome_results contract) make the raw JSON
+  // dump noticeably bulkier (a duplicated flat summary plus a full per-outcome
+  // array). Show a compact table first and tuck the raw JSON behind <details>
+  // instead, without dropping any number a single-outcome result already showed.
+  const outcomeResults = Array.isArray(stats?.outcome_results)
+    ? (stats!.outcome_results as Record<string, unknown>[])
+    : null;
+  const hasMultipleOutcomes = !!outcomeResults && outcomeResults.length > 1;
+  const multipleComparison = stats?.multiple_comparison as
+    | { method?: string; n_comparisons?: number }
+    | undefined;
+
   return (
     <div className="result" data-testid="result-view">
       <dl className="kv">
@@ -182,9 +195,49 @@ function ResultView({ result }: { result: RunResponse | null }) {
         )}
       </dl>
       {stats ? (
-        <pre className="result__json" data-testid="result-stats">
-          {JSON.stringify(stats, null, 2)}
-        </pre>
+        <>
+          {hasMultipleOutcomes && (
+            <div className="result__summary" data-testid="result-outcome-summary">
+              {multipleComparison && (
+                <p className="result__summary-note">
+                  {outcomeResults!.length}個のアウトカムを比較（多重比較補正:{" "}
+                  {multipleComparison.method ?? "-"}）
+                </p>
+              )}
+              <table className="result__summary-table">
+                <thead>
+                  <tr>
+                    <th>アウトカム</th>
+                    <th>検定</th>
+                    <th>p値</th>
+                    <th>補正後p値</th>
+                    <th>効果量</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {outcomeResults!.map((r, i) => (
+                    <tr key={i}>
+                      <td>{String(r.outcome_variable ?? "-")}</td>
+                      <td>{String(r.test_name ?? "-")}</td>
+                      <td>{formatStatNumber(r.p_value)}</td>
+                      <td>{formatStatNumber(r.p_value_adjusted)}</td>
+                      <td>
+                        {formatStatNumber(r.effect_size)}
+                        {r.effect_size_measure ? ` (${r.effect_size_measure})` : ""}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <details className="result__raw" open={!hasMultipleOutcomes}>
+            <summary>詳細JSON</summary>
+            <pre className="result__json" data-testid="result-stats">
+              {JSON.stringify(stats, null, 2)}
+            </pre>
+          </details>
+        </>
       ) : (
         <div className="placeholder">
           統計結果は返りませんでした
@@ -195,4 +248,10 @@ function ResultView({ result }: { result: RunResponse | null }) {
       )}
     </div>
   );
+}
+
+/** Round a raw statistic to 3 decimals for the summary table; the full-precision
+ *  value is still available in the raw JSON <details> right below it. */
+function formatStatNumber(value: unknown): string {
+  return typeof value === "number" ? value.toFixed(3) : String(value ?? "-");
 }

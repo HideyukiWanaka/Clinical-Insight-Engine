@@ -46,6 +46,7 @@ def build_services() -> dict:
     from cie.core.audit import AuditService
     from cie.core.config import CIEConfig
     from cie.core.database import get_engine, get_session, init_db
+    from cie.core.env_file import DEFAULT_ENV_PATH
     from cie.core.llm_client import llm_client_from_env
     from cie.knowledge.embedding_index import EmbeddingReferenceLibrary
     from cie.knowledge.ingestion_agent import KnowledgeIngestionAgent
@@ -249,6 +250,11 @@ def build_services() -> dict:
         # /api/settings/storage: display-only, current-process values (a
         # change only takes effect after restart — see build_dataset_context).
         "database_filepath": config.database_filepath,
+        # The .env file /api/settings/{storage,llm} write to. Injected (rather
+        # than each route importing DEFAULT_ENV_PATH directly) so tests can
+        # override it with a tmp_path — otherwise a test exercising these
+        # routes would corrupt the real repo .env (it did; see git history).
+        "env_path": DEFAULT_ENV_PATH,
         # Phase 8: Skill self-improvement
         "skill_lifecycle": skill_lifecycle,
         "session_factory": lambda: get_session(engine),

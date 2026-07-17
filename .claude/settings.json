@@ -17,7 +17,9 @@
       "Bash(python3 -c \"import ast; ast.parse\\(open\\('cie/core/llm_client.py'\\).read\\(\\)\\); print\\('✓ llm_client.py syntax valid'\\)\")",
       "Bash(ls -la cie/cache/planner_cache.json)",
       "Bash(python3 -c ' *)",
-      "Bash(python3 -c \"import json; json.load\\(open\\('/Users/wanakahideyuki/Desktop/Clinical insight engine/.claude/settings.json'\\)\\)\")"
+      "Bash(python3 -c \"import json; json.load\\(open\\('/Users/wanakahideyuki/Desktop/Clinical insight engine/.claude/settings.json'\\)\\)\")",
+      "Bash(python -m pytest tests/unit/test_r_executor.py tests/unit/test_runtime_agent_persistence.py tests/unit/test_runtime_provider.py -q)",
+      "Bash(python -m pytest tests/integration/test_api_endpoints.py -q)"
     ]
   }
 }

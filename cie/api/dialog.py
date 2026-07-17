@@ -364,8 +364,27 @@ class DialogService:
             for f in manifest
             if isinstance(f, dict)
         ]
-        state.add_turn("assistant", f"{len(figures)}件の図を生成しました。")
-        yield {"type": "figures", "execution_id": execution_id, "figures": figures}
+        # png_generated is False/"partial" when the script produced fewer PNGs
+        # than outcome_results called for (see VisualizationAgent._execute) —
+        # surface that rather than silently claiming full success (never
+        # silent, §5): a multi-outcome request that only rendered 1 of 2
+        # figures must not read as "done".
+        png_generated = (
+            output.output_payload.get("r_script_provenance", {}).get("png_generated")
+        )
+        warning: str | None = None
+        if png_generated in (False, "partial"):
+            warning = output.output_payload.get("r_script_provenance", {}).get(
+                "png_reason"
+            ) or "figure generation did not fully complete"
+        summary = f"{len(figures)}件の図を生成しました。"
+        if warning:
+            summary += f"（一部生成できませんでした: {warning}）"
+        state.add_turn("assistant", summary)
+        frame: dict = {"type": "figures", "execution_id": execution_id, "figures": figures}
+        if warning:
+            frame["warning"] = warning
+        yield frame
 
     async def _dispatch_report(
         self, turn: DialogTurn, state: ConversationState

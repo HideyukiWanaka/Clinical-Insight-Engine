@@ -103,9 +103,10 @@ async def set_llm_provider(
 ) -> LlmSettingsResponse:
     """Switch the active provider. Persists to .env; takes effect immediately."""
     _require_known_provider(body.provider)
-    llm_client = get_services(request)["llm_client"]
+    services = get_services(request)
+    llm_client = services["llm_client"]
     llm_client.set_credentials(body.provider, load_api_key(body.provider) or "")
-    set_env_var("CIE_ACTIVE_AI_PROVIDER", body.provider)
+    set_env_var("CIE_ACTIVE_AI_PROVIDER", body.provider, env_path=services["env_path"])
     return _status(body.provider)
 
 
@@ -235,6 +236,9 @@ async def set_workspace_directory(
         ) from exc
 
     resolved = str(candidate.resolve())
-    set_env_var("CIE_WORKSPACE_DIRECTORY", resolved)
+    set_env_var(
+        "CIE_WORKSPACE_DIRECTORY", resolved,
+        env_path=get_services(request)["env_path"],
+    )
     request.app.state.pending_workspace_directory = resolved
     return _storage_status(request)

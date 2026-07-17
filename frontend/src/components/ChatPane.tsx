@@ -31,7 +31,7 @@ type Msg =
       offCatalog?: boolean;
       caveat?: string;
     }
-  | { id: string; kind: "figures"; figures: Figure[] }
+  | { id: string; kind: "figures"; figures: Figure[]; warning?: string }
   | { id: string; kind: "manuscript"; sections: ManuscriptSection[] };
 
 interface ChatPaneProps {
@@ -342,7 +342,12 @@ export function ChatPane({
           }
           case "figures":
             settled = true;
-            add({ id: nextId(), kind: "figures", figures: ev.figures ?? [] });
+            add({
+              id: nextId(),
+              kind: "figures",
+              figures: ev.figures ?? [],
+              warning: ev.warning,
+            });
             break;
           case "manuscript":
             settled = true;
@@ -659,6 +664,11 @@ function MessageView({
       return (
         <div className="msg msg--ai" data-testid="chat-figures">
           <span className="msg__role">AI</span>
+          {msg.warning && (
+            <div className="figure__warning" data-testid="chat-figures-warning">
+              ⚠️ 一部の図が生成できませんでした: {msg.warning}
+            </div>
+          )}
           {msg.figures.length === 0 ? (
             <div data-testid="chat-figures-empty">生成された図はありません。</div>
           ) : (

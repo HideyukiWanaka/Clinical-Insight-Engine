@@ -79,6 +79,10 @@ def _make_services(tmp_path, **overrides) -> dict:
         "context_guard": FakeContextGuard(),
         "workspace_dir": str(tmp_path),
         "database_filepath": str(tmp_path / "cie_database.db"),
+        # Isolated so /api/settings/{storage,llm} tests never write to the
+        # real repo .env (they used to, via set_env_var's module-level
+        # default — see cie/api/services.py's env_path comment).
+        "env_path": tmp_path / ".env",
         "planner": FakeAgent("planner", {
             "intent_object": {"objective": "between_group_comparison"},
             "confidence_score": 0.9,

@@ -208,7 +208,7 @@ export type ChatStreamEvent =
     }
   // Tool frames (deterministic-gated routing): the Dialog agent ran the
   // visualization or reporting tool on the prior results.
-  | { type: "figures"; execution_id?: string; figures: Figure[] }
+  | { type: "figures"; execution_id?: string; figures: Figure[]; warning?: string }
   | {
       type: "manuscript";
       execution_id?: string;
@@ -228,6 +228,7 @@ export interface ExecutionResult {
   exit_code?: number;
   duration_ms?: number;
   sanitized_stdout_summary?: string;
+  sanitized_stderr_summary?: string;
   detail?: string | null;
 }
 
