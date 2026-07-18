@@ -1,4 +1,9 @@
-Name: Stat Consultant
-Description: Placeholder addin entry (Step 0 scaffold). No behavior implemented yet.
-Binding: statConsultantAddin
+Name: コード挿入: 開始
+Description: /api/rstudio/pending をポーリングし、キューされたコードをアクティブドキュメントのカーソル位置へ挿入します。
+Binding: statConsultantInsertCode
+Interactive: false
+
+Name: コード挿入: 停止
+Description: コード挿入のポーリングを停止します。
+Binding: statConsultantStopInsert
 Interactive: false

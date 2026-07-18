@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import researcherArt from "./assets/researcher.png";
-import { fetchModels, isSupportedReference, type ModelInfo, uploadReference } from "./api";
+import {
+  fetchModels,
+  isSupportedReference,
+  type ModelInfo,
+  sendToRStudio,
+  uploadReference,
+} from "./api";
 import { ChatMessage } from "./components/ChatMessage";
 import { SettingsModal } from "./components/SettingsModal";
 import { GearIcon, PaperclipIcon, SendIcon } from "./icons";
@@ -51,6 +57,21 @@ function App() {
     if (!input.trim() || busy) return;
     send(input, model);
     setInput("");
+  }
+
+  // No live Addin connection signal exists yet (Step 6 adds the real Addin +
+  // heartbeat). Per SPEC 4.3, the clipboard copy is the permanent fallback —
+  // every click copies to clipboard, and best-effort queues the code too so
+  // a future Addin poll has something to consume.
+  function handleSendToRStudio(code: string, language: string) {
+    sendToRStudio(code, language).catch(() => {
+      /* queueing failure is non-fatal; the clipboard copy is the real fallback */
+    });
+
+    navigator.clipboard
+      .writeText(code)
+      .then(() => showToast("コピーしました"))
+      .catch(() => showToast("コピーに失敗しました。手動でコピーしてください"));
   }
 
   function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -116,7 +137,9 @@ function App() {
             <p className="app__empty-sub">Rコードのこと、気軽に聞いてください。</p>
           </div>
         ) : (
-          messages.map((m) => <ChatMessage key={m.id} msg={m} />)
+          messages.map((m) => (
+            <ChatMessage key={m.id} msg={m} onSendToRStudio={handleSendToRStudio} />
+          ))
         )}
       </main>
 

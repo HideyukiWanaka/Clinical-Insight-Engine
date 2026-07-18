@@ -5,7 +5,13 @@ import { CodeCard } from "./CodeCard";
 
 /** Render one chat message: a user bubble, an assistant turn (avatar + a
  *  sequence of text / code blocks), or an error notice. */
-export function ChatMessage({ msg }: { msg: Message }) {
+export function ChatMessage({
+  msg,
+  onSendToRStudio,
+}: {
+  msg: Message;
+  onSendToRStudio: (code: string, language: string) => void;
+}) {
   if (msg.role === "user") {
     return (
       <div className="msg msg--user">
@@ -35,7 +41,13 @@ export function ChatMessage({ msg }: { msg: Message }) {
           b.kind === "text" ? (
             <AssistantText key={i} reason={b.reason} detail={b.detail} />
           ) : (
-            <CodeCard key={i} reason={b.reason} language={b.language} code={b.code} />
+            <CodeCard
+              key={i}
+              reason={b.reason}
+              language={b.language}
+              code={b.code}
+              onSend={onSendToRStudio}
+            />
           ),
         )}
       </div>

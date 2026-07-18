@@ -1,14 +1,17 @@
 Package: statConsultantAddin
 Type: Package
 Title: Stat Consultant RStudio Addin
-Version: 0.0.1
-Description: RStudio Addin scaffold for Stat Consultant. Connects the
-    chat app to the user's RStudio session (code insertion and
-    environment sync). No functionality implemented yet (Step 0
-    scaffold only).
+Version: 0.1.0
+Description: RStudio Addin for Stat Consultant. Polls the chat backend's
+    pending-code queue and inserts received code at the cursor position of
+    the active source document (rstudioapi::insertText). Zero-config auth via
+    a local shared-secret file the backend generates. Environment sync is not
+    yet implemented (Step 7).
 License: Proprietary
 Encoding: UTF-8
 LazyData: true
 Imports:
-    rstudioapi
+    rstudioapi,
+    httr2,
+    later
 RoxygenNote: 7.3.2

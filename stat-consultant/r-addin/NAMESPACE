@@ -1,0 +1,5 @@
+# Hand-written (roxygen2 not available in this build env). Regenerate later with
+# roxygen2::roxygenise() once R is installed. Cross-package calls use ::, so no
+# importFrom() entries are needed here.
+export(statConsultantInsertCode)
+export(statConsultantStopInsert)

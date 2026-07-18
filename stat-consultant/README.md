@@ -1,10 +1,12 @@
 # stat-consultant
 
 See `docs/SPEC.md` (正典) and `docs/BUILD_PROMPTS.md` for the implementation plan.
-Built through Step 4 (reference upload + lightweight RAG grounding), plus
-multi-provider LLM support (Anthropic / OpenAI / Gemini) with an in-app model
-picker and BYOK API-key entry (keys stored in the OS keychain). Later features
-(RStudio wiring, environment sync, image/Vision) are not here yet.
+Built through Step 6 (RStudio Addin: code insertion), including reference
+upload + lightweight RAG grounding (Step 4), the send-to-RStudio queue +
+clipboard fallback (Step 5), plus multi-provider LLM support (Anthropic /
+OpenAI / Gemini) with an in-app model picker and BYOK API-key entry (keys
+stored in the OS keychain). Later features (environment sync, image/Vision)
+are not here yet.
 
 ## backend (FastAPI + uvicorn)
 
@@ -99,7 +101,31 @@ settings / auth UI (SPEC 4.5) are intentionally absent.
 The UI connects to `ws://<host>:8000/ws/consult`, so run the backend (with
 `ANTHROPIC_API_KEY`) first.
 
-## r-addin (RStudio Addin, R package skeleton)
+## r-addin (RStudio Addin)
 
-Empty scaffold only (`DESCRIPTION`, `inst/rstudio/addins.dcf`, placeholder function).
-No install/run steps yet — implemented starting at BUILD_PROMPTS.md Step 6.
+Code insertion (Step 6). Polls the backend's pending-code queue and inserts
+each queued block at the cursor of the active source document via
+`rstudioapi::insertText()`. Polling is non-blocking (runs on RStudio's idle
+event loop via `later`), so the console stays free to run the inserted code.
+
+Install into RStudio:
+
+```r
+install.packages(c("rstudioapi", "httr2", "later"))  # if not already present
+remotes::install_local("stat-consultant/r-addin")     # or devtools::install(...)
+```
+
+Then, in RStudio, run the backend first, and use the **Addins** menu:
+
+- **コード挿入: 開始** — start polling. Invoke once per session; each
+  「RStudioへ送る」in the chat then appears at your cursor within ~2s.
+- **コード挿入: 停止** — stop polling.
+
+Auth is zero-config: the backend writes a fresh shared secret to
+`~/.stat-consultant/rstudio_token` on every start, and the Addin reads it on
+each poll (so a backend restart self-heals — no need to restart the Addin).
+Only `GET /api/rstudio/pending` is token-gated; `POST /insert` (the browser's
+path) is unchanged. If the token file isn't found, the Addin prints the exact
+path it checked — compare it against the absolute path the backend logs at
+startup (relevant only on Windows, where R's `~` and Python's home dir can
+differ).

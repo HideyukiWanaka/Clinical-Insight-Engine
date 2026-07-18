@@ -92,3 +92,21 @@ export function isSupportedReference(file: File): boolean {
     file.type === "application/pdf"
   );
 }
+
+/** Queue one code block for the (not-yet-existing) RStudio Addin to consume (Step 6). */
+export async function sendToRStudio(code: string, language: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/rstudio/insert`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code, language }),
+  });
+  if (!res.ok) {
+    let detail = `送信に失敗しました: ${res.status}`;
+    try {
+      detail = (await res.json()).detail || detail;
+    } catch {
+      /* keep status */
+    }
+    throw new Error(detail);
+  }
+}
