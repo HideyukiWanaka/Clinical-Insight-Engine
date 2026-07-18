@@ -45,6 +45,10 @@ outputs/
 *.svg
 generated_figures/
 
+# 上記 *.html は生成レポート用。stat-consultant/frontend の Vite エントリ
+# ポイントは生成物ではなく必須のソースファイルなので除外しない。
+!stat-consultant/frontend/index.html
+
 # Rスクリプト実行時の一時ファイル
 *.Rhistory
 *.RData
