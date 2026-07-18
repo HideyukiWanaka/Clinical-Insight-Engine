@@ -1,64 +1,186 @@
-"""Thin Claude streaming wrapper (Step 1).
+"""Multi-provider LLM call that returns SPEC 4.4 structured blocks.
 
-Translated from the LLM-call lifecycle in ``cie/api/deps.py`` (``invoke_agent``):
-the original wraps every agent run in ``try: ... finally: revoke`` so the
-capability token is always released (CLAUDE.md / SPEC §10). Here the minimal
-form is the streaming context manager — ``async with client.messages.stream(...)``
-guarantees the stream (and its HTTP resources) are torn down on every exit path,
-success or error, which is exactly the try/finally invariant the port preserves.
+Supports Anthropic, OpenAI, and Gemini (the last via OpenAI's compatible
+endpoint, reusing the ``openai`` SDK). The reply is constrained to a small
+JSON schema — an ordered list of ``text`` / ``code`` blocks — so the WebSocket
+can emit ``assistant_text`` / ``assistant_code`` frames with a reason always
+attached to every code block (BUILD_PROMPTS Step 2 / SPEC 4.4).
 
-Auth is zero-config: ``AsyncAnthropic()`` resolves ``ANTHROPIC_API_KEY`` (or an
-``ant auth login`` profile) from the environment — nothing is hardcoded.
+Structure comes from each provider's native JSON output (Anthropic
+``output_config.format``; OpenAI ``response_format`` json_schema; Gemini
+``response_format`` json_object) plus a robust JSON parse that tolerates fences
+or stray prose as a fallback.
+
+Auth is zero-config per provider: keys are read from the environment by each
+SDK (``ANTHROPIC_API_KEY`` / ``OPENAI_API_KEY`` / ``GEMINI_API_KEY``) — nothing
+is hardcoded. The ``async with`` on the Anthropic stream remains the minimal
+try/finally lifecycle port (SPEC §10).
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import json
+import re
 
 from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 
-# Opus 4.8 is the current, most capable, Vision-capable model — the right default
-# for statistical advice where correctness matters (SPEC §6, 痛み②手法選択).
-_MODEL = "claude-opus-4-8"
-# Streaming reply, so a generous ceiling is safe (no HTTP-timeout risk).
-_MAX_TOKENS = 8000
+from . import secrets_store
+from .models_registry import ModelSpec
 
-# One process-wide async client. Constructed lazily so importing this module
-# never requires credentials to be present (e.g. at test-collection time).
-_client: AsyncAnthropic | None = None
+_MAX_TOKENS = 16000
+_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+# SPEC 4.4 message types as an ordered list of blocks. ``reason`` is required on
+# every block, which is what guarantees 「理由が常に付与されている」 for code.
+_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "blocks": {
+            "type": "array",
+            "items": {
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": {"type": "string", "const": "text"},
+                            "reason": {"type": "string"},
+                            "detail": {"type": "string"},
+                        },
+                        "required": ["type", "reason", "detail"],
+                        "additionalProperties": False,
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": {"type": "string", "const": "code"},
+                            "reason": {"type": "string"},
+                            "language": {"type": "string"},
+                            "code": {"type": "string"},
+                        },
+                        "required": ["type", "reason", "language", "code"],
+                        "additionalProperties": False,
+                    },
+                ]
+            },
+        }
+    },
+    "required": ["blocks"],
+    "additionalProperties": False,
+}
+
+def _new_openai_client(spec: ModelSpec) -> AsyncOpenAI:
+    """A fresh OpenAI-SDK client for OpenAI (default) or Gemini (compat base_url).
+
+    Built per request from the current stored key so a key change in the
+    settings screen takes effect on the very next turn (no cache to bust).
+    """
+    key = secrets_store.load_api_key(spec.provider) or ""
+    if spec.provider == "gemini":
+        return AsyncOpenAI(api_key=key, base_url=_GEMINI_BASE_URL)
+    return AsyncOpenAI(api_key=key)
 
 
-def _get_client() -> AsyncAnthropic:
-    global _client
-    if _client is None:
-        _client = AsyncAnthropic()
-    return _client
+def openai_messages(system: str, messages: list[dict]) -> list[dict]:
+    """Prepend the system prompt as a system message (OpenAI/Gemini shape)."""
+    return [{"role": "system", "content": system}, *messages]
 
 
-async def stream_reply(
-    system: str, messages: list[dict]
-) -> AsyncIterator[str]:
-    """Stream Claude's reply as incremental text chunks.
+def openai_response_format(spec: ModelSpec) -> dict:
+    """Native structured-output config for the OpenAI-compatible providers.
 
-    Yields text deltas as the model produces them. ``thinking`` is adaptive so
-    the model decides how much to reason per turn (deep for a real methods
-    question, none for chitchat); thinking deltas are not part of
-    ``text_stream``, so only the user-facing answer is yielded.
+    OpenAI supports strict ``json_schema``; Gemini's compat endpoint is more
+    reliable with plain ``json_object`` (the schema is described in the prompt,
+    and the parser is tolerant), so use that there.
+    """
+    if spec.provider == "gemini":
+        return {"type": "json_object"}
+    return {
+        "type": "json_schema",
+        "json_schema": {"name": "stat_reply", "strict": True, "schema": _RESPONSE_SCHEMA},
+    }
+
+
+def parse_blocks(text: str) -> list[dict]:
+    """Parse the model's JSON reply into blocks, tolerating fences/stray prose."""
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```[A-Za-z]*\n?", "", stripped)
+        stripped = re.sub(r"\n?```$", "", stripped).strip()
+    try:
+        data = json.loads(stripped)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", stripped, re.DOTALL)
+        if not match:
+            return []
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return []
+    blocks = data.get("blocks", []) if isinstance(data, dict) else []
+    return [b for b in blocks if isinstance(b, dict) and b.get("type") in ("text", "code")]
+
+
+async def _anthropic_json(model: str, system: str, messages: list[dict]) -> str:
+    # Fresh client from the current stored key (settings-screen changes apply
+    # on the next turn); the async-with pair is the try/finally lifecycle port.
+    async with AsyncAnthropic(
+        api_key=secrets_store.load_api_key("anthropic") or ""
+    ) as client:
+        async with client.messages.stream(
+            model=model,
+            max_tokens=_MAX_TOKENS,
+            thinking={"type": "adaptive"},
+            system=system,
+            messages=messages,
+            output_config={"format": {"type": "json_schema", "schema": _RESPONSE_SCHEMA}},
+        ) as stream:
+            message = await stream.get_final_message()
+    return next((b.text for b in message.content if b.type == "text"), "")
+
+
+async def _openai_compat_json(spec: ModelSpec, system: str, messages: list[dict]) -> str:
+    async with _new_openai_client(spec) as client:
+        resp = await client.chat.completions.create(
+            model=spec.model,
+            messages=openai_messages(system, messages),
+            response_format=openai_response_format(spec),
+        )
+    return resp.choices[0].message.content or ""
+
+
+async def generate_blocks(
+    spec: ModelSpec, system: str, messages: list[dict]
+) -> list[dict]:
+    """Return the reply as an ordered list of SPEC 4.4 blocks, via ``spec``'s provider.
 
     Args:
-        system:   The persona/system prompt.
+        spec:     The chosen model (provider + provider model id).
+        system:   The persona/system prompt (+ any retrieved reference context).
         messages: Ordered turns ``[{"role", "content"}, ...]`` (oldest→newest).
 
-    The ``async with`` context manager is the minimal try/finally port: the
-    stream is always closed, on success or on error.
+    Raises:
+        Anything the SDK raises; the caller turns it into an error frame.
     """
-    client = _get_client()
-    async with client.messages.stream(
-        model=_MODEL,
-        max_tokens=_MAX_TOKENS,
-        thinking={"type": "adaptive"},
-        system=system,
-        messages=messages,
-    ) as stream:
-        async for text in stream.text_stream:
-            yield text
+    if spec.provider == "anthropic":
+        text = await _anthropic_json(spec.model, system, messages)
+    else:
+        text = await _openai_compat_json(spec, system, messages)
+    return parse_blocks(text)
+
+
+def blocks_to_text(blocks: list[dict]) -> str:
+    """Render blocks to a plain-text assistant turn for the running history."""
+    parts: list[str] = []
+    for b in blocks:
+        if b.get("type") == "text":
+            parts.append(b.get("reason", ""))
+            detail = b.get("detail", "")
+            if detail:
+                parts.append(detail)
+        elif b.get("type") == "code":
+            lang = b.get("language", "r")
+            parts.append(
+                f"{b.get('reason', '')}\n```{lang}\n{b.get('code', '')}\n```"
+            )
+    return "\n\n".join(p for p in parts if p)
