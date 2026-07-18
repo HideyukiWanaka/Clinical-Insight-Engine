@@ -3,8 +3,11 @@ import "./App.css";
 import researcherArt from "./assets/researcher.png";
 import {
   fetchModels,
+  type ImagePayload,
+  isImage,
   isSupportedReference,
   type ModelInfo,
+  readImagePayload,
   sendToRStudio,
   uploadReference,
 } from "./api";
@@ -16,6 +19,8 @@ import { useConsult } from "./useConsult";
 function App() {
   const { messages, connected, busy, send } = useConsult();
   const [input, setInput] = useState("");
+  // A reference figure staged for the next turn only (Step 9); not persisted.
+  const [pendingImage, setPendingImage] = useState<ImagePayload | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [model, setModel] = useState("");
@@ -54,9 +59,11 @@ function App() {
   }
 
   function submit() {
-    if (!input.trim() || busy) return;
-    send(input, model);
+    // Send when there's text OR a staged reference figure (Step 9).
+    if ((!input.trim() && !pendingImage) || busy) return;
+    send(input, model, pendingImage);
     setInput("");
+    setPendingImage(null);
   }
 
   // No live Addin connection signal exists yet (Step 6 adds the real Addin +
@@ -78,10 +85,21 @@ function App() {
     const file = e.target.files?.[0];
     e.target.value = ""; // allow re-selecting the same file
     if (!file) return;
-    // One attach button, auto-routed by type. Markdown/text/PDF → reference
-    // store; images are handled in Step 9.
+    // One attach button, auto-routed by type. Images → this-turn 参考図 (Step 9);
+    // Markdown/text/PDF → persisted reference store (Step 4).
+    if (isImage(file)) {
+      readImagePayload(file)
+        .then((img) => {
+          setPendingImage(img);
+          showToast("今回の参考図として送信します");
+        })
+        .catch((err) =>
+          showToast(err instanceof Error ? err.message : "画像の読み込みに失敗しました"),
+        );
+      return;
+    }
     if (!isSupportedReference(file)) {
-      showToast("テキスト/Markdown/PDF を選んでください（画像は今後対応）");
+      showToast("画像、またはテキスト/Markdown/PDF を選んでください");
       return;
     }
     uploadReference(file)
@@ -144,11 +162,30 @@ function App() {
       </main>
 
       <footer className="app__composer">
+        {pendingImage && (
+          <div className="composer__figure" data-testid="pending-figure">
+            <img
+              className="composer__figure-thumb"
+              src={pendingImage.dataUrl}
+              alt="添付した参考図"
+            />
+            <span className="composer__figure-label">今回の参考図</span>
+            <button
+              type="button"
+              className="composer__figure-remove"
+              aria-label="参考図を取り消す"
+              title="参考図を取り消す"
+              onClick={() => setPendingImage(null)}
+            >
+              ×
+            </button>
+          </div>
+        )}
         <div className="composer__pill">
           <input
             ref={fileRef}
             type="file"
-            accept=".md,.markdown,.txt,.pdf,text/markdown,text/plain,application/pdf"
+            accept=".md,.markdown,.txt,.pdf,.png,.jpg,.jpeg,.gif,.webp,text/markdown,text/plain,application/pdf,image/png,image/jpeg,image/gif,image/webp"
             hidden
             data-testid="file-input"
             onChange={onPickFile}
@@ -157,8 +194,8 @@ function App() {
             type="button"
             className="composer__attach"
             data-testid="attach"
-            aria-label="参考資料を添付"
-            title="参考資料（Markdown/テキスト/PDF）を添付"
+            aria-label="ファイルを添付"
+            title="参考資料（Markdown/テキスト/PDF）または参考図（画像）を添付"
             onClick={() => fileRef.current?.click()}
           >
             <PaperclipIcon />
@@ -188,7 +225,7 @@ function App() {
             className="composer__send"
             data-testid="chat-send"
             aria-label="送信"
-            disabled={busy || !input.trim()}
+            disabled={busy || (!input.trim() && !pendingImage)}
             onClick={submit}
           >
             <SendIcon />

@@ -27,9 +27,10 @@ import uuid
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from .environment import build_environment_context
 from .llm import blocks_to_text, generate_blocks
 from .models_registry import is_available, resolve_model
-from .prompts import SYSTEM_PROMPT
+from .prompts import IMAGE_INSTRUCTION, SYSTEM_PROMPT
 from .references import build_reference_context, extract_query_terms
 
 _log = logging.getLogger(__name__)
@@ -37,26 +38,55 @@ _log = logging.getLogger(__name__)
 router = APIRouter(tags=["ws"])
 
 
-def _parse_frame(raw: str) -> tuple[str, str, str]:
-    """Return ``(text, conversation_id, model)`` from a client message.
+# A reference figure is small (papers' figures downscale well); cap the decoded
+# data URL so a pathological upload can't blow up the prompt / provider request.
+_MAX_IMAGE_B64_CHARS = 8_000_000  # ~6 MB decoded — ample for a figure screenshot
+_ALLOWED_IMAGE_MEDIA = frozenset(
+    {"image/png", "image/jpeg", "image/gif", "image/webp"}
+)
 
-    Accepts a JSON object ``{"text", "conversation_id", "model"}`` or a bare
-    string (treated as the text). Unknown shapes yield empty text, which the
+
+def _parse_image(parsed: dict) -> dict | None:
+    """Extract a this-turn reference figure ``{media_type, data}`` if present.
+
+    The figure is ephemeral (SPEC §9 / Step 9: 「その場限りの参考図」) — sent only
+    for this turn, never persisted. Malformed or oversized images are dropped
+    (returned as ``None``) rather than raised, so a bad attachment degrades to a
+    text-only turn instead of failing the whole message.
+    """
+    img = parsed.get("image")
+    if not isinstance(img, dict):
+        return None
+    media_type = str(img.get("media_type") or "")
+    data = str(img.get("data") or "")
+    if media_type not in _ALLOWED_IMAGE_MEDIA or not data:
+        return None
+    if len(data) > _MAX_IMAGE_B64_CHARS:
+        return None
+    return {"media_type": media_type, "data": data}
+
+
+def _parse_frame(raw: str) -> tuple[str, str, str, dict | None]:
+    """Return ``(text, conversation_id, model, image)`` from a client message.
+
+    Accepts a JSON object ``{"text", "conversation_id", "model", "image"}`` or a
+    bare string (treated as the text). Unknown shapes yield empty text, which the
     caller surfaces as an error rather than acting on.
     """
     try:
         parsed = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
-        return raw.strip(), "", ""
+        return raw.strip(), "", "", None
     if isinstance(parsed, str):
-        return parsed.strip(), "", ""
+        return parsed.strip(), "", "", None
     if isinstance(parsed, dict):
         return (
             str(parsed.get("text") or "").strip(),
             str(parsed.get("conversation_id") or ""),
             str(parsed.get("model") or ""),
+            _parse_image(parsed),
         )
-    return "", "", ""
+    return "", "", "", None
 
 
 def _frame_for(block: dict) -> dict | None:
@@ -88,7 +118,11 @@ async def ws_consult(websocket: WebSocket) -> None:
     try:
         while True:
             raw = await websocket.receive_text()
-            text, conversation_id, model = _parse_frame(raw)
+            text, conversation_id, model, image = _parse_frame(raw)
+            # A reference figure may arrive with no typed text — synthesise a
+            # default ask so the turn is meaningful and the history stays useful.
+            if not text and image is not None:
+                text = "添付した図を参考に、私のデータで同様の図を描くRコードを提案してください。"
             if not text:
                 await websocket.send_json(
                     {"type": "error", "reason": "empty message: expected text"}
@@ -112,14 +146,22 @@ async def ws_consult(websocket: WebSocket) -> None:
             state.add_turn("user", text)
             store.persist(resolved_conversation_id)
 
-            # Ground on the user's uploaded references: retrieve the top hits for
-            # the latest message and fold their excerpts into the system prompt.
+            # Ground the reply on (1) the user's uploaded references and (2) the
+            # latest RStudio environment snapshot (Step 8), folded into the
+            # system prompt. When a reference figure is attached (Step 9), add
+            # the vision-to-ggplot2 instruction too.
             library = websocket.app.state.references
             refs = library.retrieve(extract_query_terms(text), top_k=2)
-            system = SYSTEM_PROMPT + build_reference_context(refs)
+            system = (
+                SYSTEM_PROMPT
+                + build_reference_context(refs)
+                + build_environment_context(websocket.app.state.environment.latest)
+            )
+            if image is not None:
+                system += IMAGE_INSTRUCTION
 
             try:
-                blocks = await generate_blocks(spec, system, state.history())
+                blocks = await generate_blocks(spec, system, state.history(), image)
             except Exception as exc:  # noqa: BLE001 — never leak a raw traceback
                 _log.warning("ws_consult generation error: %s", exc)
                 await websocket.send_json(

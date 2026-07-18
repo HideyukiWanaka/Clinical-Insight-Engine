@@ -85,6 +85,41 @@ def openai_messages(system: str, messages: list[dict]) -> list[dict]:
     return [{"role": "system", "content": system}, *messages]
 
 
+def _attach_image_last_user(
+    messages: list[dict], image: dict | None, *, provider: str
+) -> list[dict]:
+    """Return ``messages`` with *image* attached to the last user turn (Step 9).
+
+    The reference figure is ephemeral — it belongs to this one call only, so it
+    is injected into the request messages here rather than stored in history.
+    Anthropic and the OpenAI-compatible providers expect different multimodal
+    content shapes, selected by ``provider``.
+    """
+    if not image or not messages or messages[-1].get("role") != "user":
+        return messages
+    out = [dict(m) for m in messages]
+    text = str(out[-1].get("content", ""))
+    if provider == "anthropic":
+        out[-1]["content"] = [
+            {"type": "text", "text": text},
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": image["media_type"],
+                    "data": image["data"],
+                },
+            },
+        ]
+    else:  # openai / gemini (OpenAI-compatible content parts)
+        data_url = f"data:{image['media_type']};base64,{image['data']}"
+        out[-1]["content"] = [
+            {"type": "text", "text": text},
+            {"type": "image_url", "image_url": {"url": data_url}},
+        ]
+    return out
+
+
 def openai_response_format(spec: ModelSpec) -> dict:
     """Native structured-output config for the OpenAI-compatible providers.
 
@@ -120,7 +155,9 @@ def parse_blocks(text: str) -> list[dict]:
     return [b for b in blocks if isinstance(b, dict) and b.get("type") in ("text", "code")]
 
 
-async def _anthropic_json(model: str, system: str, messages: list[dict]) -> str:
+async def _anthropic_json(
+    model: str, system: str, messages: list[dict], image: dict | None
+) -> str:
     # Fresh client from the current stored key (settings-screen changes apply
     # on the next turn); the async-with pair is the try/finally lifecycle port.
     async with AsyncAnthropic(
@@ -131,40 +168,45 @@ async def _anthropic_json(model: str, system: str, messages: list[dict]) -> str:
             max_tokens=_MAX_TOKENS,
             thinking={"type": "adaptive"},
             system=system,
-            messages=messages,
+            messages=_attach_image_last_user(messages, image, provider="anthropic"),
             output_config={"format": {"type": "json_schema", "schema": _RESPONSE_SCHEMA}},
         ) as stream:
             message = await stream.get_final_message()
     return next((b.text for b in message.content if b.type == "text"), "")
 
 
-async def _openai_compat_json(spec: ModelSpec, system: str, messages: list[dict]) -> str:
+async def _openai_compat_json(
+    spec: ModelSpec, system: str, messages: list[dict], image: dict | None
+) -> str:
+    with_image = _attach_image_last_user(messages, image, provider=spec.provider)
     async with _new_openai_client(spec) as client:
         resp = await client.chat.completions.create(
             model=spec.model,
-            messages=openai_messages(system, messages),
+            messages=openai_messages(system, with_image),
             response_format=openai_response_format(spec),
         )
     return resp.choices[0].message.content or ""
 
 
 async def generate_blocks(
-    spec: ModelSpec, system: str, messages: list[dict]
+    spec: ModelSpec, system: str, messages: list[dict], image: dict | None = None
 ) -> list[dict]:
     """Return the reply as an ordered list of SPEC 4.4 blocks, via ``spec``'s provider.
 
     Args:
         spec:     The chosen model (provider + provider model id).
-        system:   The persona/system prompt (+ any retrieved reference context).
+        system:   The persona/system prompt (+ any retrieved reference/环境 context).
         messages: Ordered turns ``[{"role", "content"}, ...]`` (oldest→newest).
+        image:    Optional ``{media_type, data}`` reference figure for this turn
+                  only (Step 9); attached to the last user message, not stored.
 
     Raises:
         Anything the SDK raises; the caller turns it into an error frame.
     """
     if spec.provider == "anthropic":
-        text = await _anthropic_json(spec.model, system, messages)
+        text = await _anthropic_json(spec.model, system, messages, image)
     else:
-        text = await _openai_compat_json(spec, system, messages)
+        text = await _openai_compat_json(spec, system, messages, image)
     return parse_blocks(text)
 
 

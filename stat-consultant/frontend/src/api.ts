@@ -93,6 +93,55 @@ export function isSupportedReference(file: File): boolean {
   );
 }
 
+/** A reference figure attached for one turn only (Step 9): base64 payload for
+ *  the WS frame plus a data URL for the in-chat preview. */
+export interface ImagePayload {
+  media_type: string;
+  data: string; // base64 (no data: prefix)
+  dataUrl: string; // full data URL for <img> preview
+}
+
+const IMAGE_MEDIA_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+]);
+
+/** True for the image types the backend vision call accepts (Step 9). */
+export function isImage(file: File): boolean {
+  return (
+    IMAGE_MEDIA_TYPES.has(file.type) ||
+    /\.(png|jpe?g|gif|webp)$/i.test(file.name)
+  );
+}
+
+/** Read an image File into an {@link ImagePayload} (base64 + data URL). */
+export function readImagePayload(file: File): Promise<ImagePayload> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("画像の読み込みに失敗しました"));
+    reader.onload = () => {
+      const dataUrl = String(reader.result || "");
+      const comma = dataUrl.indexOf(",");
+      const header = dataUrl.slice(0, comma);
+      const data = dataUrl.slice(comma + 1);
+      // Prefer the browser-reported type; fall back to what FileReader encoded.
+      const mediaMatch = /data:([^;]+)/.exec(header);
+      const media_type =
+        file.type && IMAGE_MEDIA_TYPES.has(file.type)
+          ? file.type
+          : mediaMatch?.[1] || "image/png";
+      if (!data) {
+        reject(new Error("画像が空です"));
+        return;
+      }
+      resolve({ media_type, data, dataUrl });
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 /** Queue one code block for the (not-yet-existing) RStudio Addin to consume (Step 6). */
 export async function sendToRStudio(code: string, language: string): Promise<void> {
   const res = await fetch(`${API_BASE}/api/rstudio/insert`, {

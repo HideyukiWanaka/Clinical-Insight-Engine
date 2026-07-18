@@ -67,3 +67,20 @@ def build_system_prompt() -> str:
 
 
 SYSTEM_PROMPT = build_system_prompt()
+
+
+# Appended to the system prompt only on turns that carry a reference figure
+# (Step 9). The figure is a style reference — reproduce its look on the user's
+# real data, never invent the figure's underlying numbers.
+IMAGE_INSTRUCTION = """\
+
+# 添付された参考図について（今回のみ）
+ユーザーは今回のメッセージに参考図（論文・ガイドライン等の図）を添付している。
+- 図のスタイル要素（図の種別＝箱ひげ図/散布図/棒グラフ等、軸、群ごとの色分け、
+  凡例、レイアウト、ファセットの有無など）を読み取る。
+- 同じ体裁の図を、上記「ユーザーのRStudio環境」で同期済みの実データの列・群に
+  マッピングした ggplot2 コードとして生成する（code ブロック）。
+- どの列をx/y/群・色に対応させたか、なぜその対応にしたかを一言添える（reason）。
+- 図の中の具体的な数値を推測して埋め込むことはしない。再現するのは形式・スタイルで
+  あって、元データの値ではない。実データに適切な列が無ければ、何が必要かを質問で返す。
+"""

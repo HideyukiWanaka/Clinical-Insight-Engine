@@ -15,7 +15,16 @@ export function ChatMessage({
   if (msg.role === "user") {
     return (
       <div className="msg msg--user">
-        <div className="msg__bubble">{msg.text}</div>
+        <div className="msg__bubble">
+          {msg.imageUrl && (
+            <img
+              className="msg__figure"
+              src={msg.imageUrl}
+              alt="添付した参考図"
+            />
+          )}
+          {msg.text && <span>{msg.text}</span>}
+        </div>
       </div>
     );
   }

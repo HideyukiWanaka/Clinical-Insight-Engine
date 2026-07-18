@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ImagePayload } from "./api";
 import type { AssistantBlock, Message, ServerFrame } from "./types";
 
 // Backend WS. Dev: Vite on 5173, FastAPI on 8000 (README). Same host, port 8000.
@@ -188,20 +189,36 @@ export function useConsult() {
     };
   }, []);
 
-  const send = useCallback((text: string, model: string) => {
-    const trimmed = text.trim();
-    const ws = wsRef.current;
-    if (!trimmed || !ws || ws.readyState !== WebSocket.OPEN) return;
-    setMessages((m) => [...m, { id: nextId(), role: "user", text: trimmed }]);
-    setBusy(true);
-    ws.send(
-      JSON.stringify({
-        text: trimmed,
-        conversation_id: conversationId.current,
-        model,
-      }),
-    );
-  }, []);
+  const send = useCallback(
+    (text: string, model: string, image?: ImagePayload | null) => {
+      const trimmed = text.trim();
+      const ws = wsRef.current;
+      // A reference figure alone (no text) is a valid turn (Step 9).
+      if ((!trimmed && !image) || !ws || ws.readyState !== WebSocket.OPEN) return;
+      setMessages((m) => [
+        ...m,
+        {
+          id: nextId(),
+          role: "user",
+          text: trimmed,
+          ...(image ? { imageUrl: image.dataUrl } : {}),
+        },
+      ]);
+      setBusy(true);
+      ws.send(
+        JSON.stringify({
+          text: trimmed,
+          conversation_id: conversationId.current,
+          model,
+          // The figure is sent for this turn only; the backend never persists it.
+          ...(image
+            ? { image: { media_type: image.media_type, data: image.data } }
+            : {}),
+        }),
+      );
+    },
+    [],
+  );
 
   return { messages, connected, busy, send };
 }
