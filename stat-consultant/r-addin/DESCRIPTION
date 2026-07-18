@@ -4,9 +4,11 @@ Title: Stat Consultant RStudio Addin
 Version: 0.1.0
 Description: RStudio Addin for Stat Consultant. Polls the chat backend's
     pending-code queue and inserts received code at the cursor position of
-    the active source document (rstudioapi::insertText). Zero-config auth via
-    a local shared-secret file the backend generates. Environment sync is not
-    yet implemented (Step 7).
+    the active source document (rstudioapi::insertText). Also transparently
+    scans the global environment and syncs an aggregate-only, PII-filtered
+    snapshot (column names/types/missing counts/category levels — never row
+    values) to the backend. Zero-config auth via a local shared-secret file
+    the backend generates.
 License: Proprietary
 Encoding: UTF-8
 LazyData: true

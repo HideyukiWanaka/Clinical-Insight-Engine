@@ -4,6 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .conversation import ConversationStore
+from .environment import EnvironmentStore
+from .environment_api import router as environment_router
 from .models_api import router as models_router
 from .references import ReferenceLibrary
 from .references_api import router as references_router
@@ -22,6 +24,8 @@ app = FastAPI(title="Stat Consultant Backend")
 app.state.conversations = ConversationStore()
 app.state.references = ReferenceLibrary(REFERENCES_DIR)
 app.state.rstudio_queue = RStudioQueue()
+# Latest RStudio GlobalEnv snapshot (Step 7); consumed by chat grounding (Step 8).
+app.state.environment = EnvironmentStore()
 # Fresh shared secret each start; the Addin re-reads it every poll (self-heals).
 app.state.rstudio_token = generate_and_write_token()
 
@@ -39,6 +43,7 @@ app.include_router(references_router)
 app.include_router(models_router)
 app.include_router(settings_router)
 app.include_router(rstudio_router)
+app.include_router(environment_router)
 
 
 @app.get("/health")
