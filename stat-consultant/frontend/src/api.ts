@@ -70,16 +70,25 @@ export async function uploadReference(file: File): Promise<string> {
     method: "POST",
     body: form,
   });
-  if (!res.ok) throw new Error(`upload failed: ${res.status}`);
+  if (!res.ok) {
+    let detail = `upload failed: ${res.status}`;
+    try {
+      detail = (await res.json()).detail || detail;
+    } catch {
+      /* keep status */
+    }
+    throw new Error(detail);
+  }
   const data = (await res.json()) as { filename: string };
   return data.filename;
 }
 
-/** A file counts as a text reference (Step 4). Images are Step 9. */
-export function isTextReference(file: File): boolean {
+/** A file the backend can turn into a reference (Step 4). Images are Step 9. */
+export function isSupportedReference(file: File): boolean {
   return (
-    /\.(md|markdown|txt)$/i.test(file.name) ||
+    /\.(md|markdown|txt|pdf)$/i.test(file.name) ||
     file.type === "text/markdown" ||
-    file.type === "text/plain"
+    file.type === "text/plain" ||
+    file.type === "application/pdf"
   );
 }

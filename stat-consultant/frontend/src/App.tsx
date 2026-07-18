@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import researcherArt from "./assets/researcher.png";
-import { fetchModels, isTextReference, type ModelInfo, uploadReference } from "./api";
+import { fetchModels, isSupportedReference, type ModelInfo, uploadReference } from "./api";
 import { ChatMessage } from "./components/ChatMessage";
 import { SettingsModal } from "./components/SettingsModal";
 import { GearIcon, PaperclipIcon, SendIcon } from "./icons";
@@ -57,15 +57,17 @@ function App() {
     const file = e.target.files?.[0];
     e.target.value = ""; // allow re-selecting the same file
     if (!file) return;
-    // One attach button, auto-routed by type. Markdown/text → reference store;
-    // images are handled in Step 9.
-    if (!isTextReference(file)) {
-      showToast("テキスト/Markdown を選んでください（画像は今後対応）");
+    // One attach button, auto-routed by type. Markdown/text/PDF → reference
+    // store; images are handled in Step 9.
+    if (!isSupportedReference(file)) {
+      showToast("テキスト/Markdown/PDF を選んでください（画像は今後対応）");
       return;
     }
     uploadReference(file)
       .then(() => showToast("参考資料として保存しました"))
-      .catch(() => showToast("アップロードに失敗しました"));
+      .catch((e) =>
+        showToast(e instanceof Error ? e.message : "アップロードに失敗しました"),
+      );
   }
 
   return (
@@ -123,7 +125,7 @@ function App() {
           <input
             ref={fileRef}
             type="file"
-            accept=".md,.markdown,.txt,text/markdown,text/plain"
+            accept=".md,.markdown,.txt,.pdf,text/markdown,text/plain,application/pdf"
             hidden
             data-testid="file-input"
             onChange={onPickFile}
@@ -133,7 +135,7 @@ function App() {
             className="composer__attach"
             data-testid="attach"
             aria-label="参考資料を添付"
-            title="参考資料（Markdown/テキスト）を添付"
+            title="参考資料（Markdown/テキスト/PDF）を添付"
             onClick={() => fileRef.current?.click()}
           >
             <PaperclipIcon />
