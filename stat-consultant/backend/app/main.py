@@ -9,6 +9,7 @@ from .references import ReferenceLibrary
 from .references_api import router as references_router
 from .rstudio import RStudioQueue
 from .rstudio_api import router as rstudio_router
+from .rstudio_auth import generate_and_write_token
 from .settings_api import router as settings_router
 from .ws_consult import router as ws_consult_router
 
@@ -21,6 +22,8 @@ app = FastAPI(title="Stat Consultant Backend")
 app.state.conversations = ConversationStore()
 app.state.references = ReferenceLibrary(REFERENCES_DIR)
 app.state.rstudio_queue = RStudioQueue()
+# Fresh shared secret each start; the Addin re-reads it every poll (self-heals).
+app.state.rstudio_token = generate_and_write_token()
 
 # The frontend is served from a different localhost port in dev, so the
 # reference upload (a cross-origin fetch) needs CORS. Localhost only.
