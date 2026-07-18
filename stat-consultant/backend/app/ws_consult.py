@@ -107,8 +107,10 @@ async def ws_consult(websocket: WebSocket) -> None:
                 )
                 continue
 
-            state = store.get_or_create(conversation_id or default_conversation_id)
+            resolved_conversation_id = conversation_id or default_conversation_id
+            state = store.get_or_create(resolved_conversation_id)
             state.add_turn("user", text)
+            store.persist(resolved_conversation_id)
 
             # Ground on the user's uploaded references: retrieve the top hits for
             # the latest message and fold their excerpts into the system prompt.
@@ -131,6 +133,7 @@ async def ws_consult(websocket: WebSocket) -> None:
                     await websocket.send_json(frame)
 
             state.add_turn("assistant", blocks_to_text(blocks))
+            store.persist(resolved_conversation_id)
             await websocket.send_json({"type": "done"})
     except WebSocketDisconnect:
         return
