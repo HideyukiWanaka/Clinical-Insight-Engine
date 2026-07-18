@@ -26,10 +26,9 @@ from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
 from . import secrets_store
-from .models_registry import ModelSpec
+from .models_registry import GEMINI_BASE_URL, ModelSpec
 
 _MAX_TOKENS = 16000
-_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
 # SPEC 4.4 message types as an ordered list of blocks. ``reason`` is required on
 # every block, which is what guarantees 「理由が常に付与されている」 for code.
@@ -77,7 +76,7 @@ def _new_openai_client(spec: ModelSpec) -> AsyncOpenAI:
     """
     key = secrets_store.load_api_key(spec.provider) or ""
     if spec.provider == "gemini":
-        return AsyncOpenAI(api_key=key, base_url=_GEMINI_BASE_URL)
+        return AsyncOpenAI(api_key=key, base_url=GEMINI_BASE_URL)
     return AsyncOpenAI(api_key=key)
 
 

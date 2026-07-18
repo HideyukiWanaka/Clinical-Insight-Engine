@@ -195,6 +195,13 @@
   font-size: 13px;
   line-height: 1.55;
 }
+/* nord.css's default comment color (#616e88) sits at ~2.4:1 contrast on
+ * --code-bg (#2e3440) — well under WCAG's 4.5:1 floor — so comments read as
+ * near-invisible. Brighten just that token; still visibly dimmer than the
+ * ~9:1 main text color, keeping the muted-comment convention legible. */
+.code-card__pre .hljs-comment {
+  color: #9aa5c0;
+}
 
 /* Dark charcoal RStudio button, flush to the code panel, full width. */
 .rstudio-btn {
