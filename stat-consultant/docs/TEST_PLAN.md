@@ -18,10 +18,11 @@ Step 8（環境コンテキスト注入）・Step 9（参考図→ggplot2 Vision
 - ブラウザでの添付UI・トースト・コンポーザチップの実際の見え方と操作感
 
 このテストプランは Step 7-9 を中心に、最後に SPEC §12 の3つの痛みの通し受け入れ
-確認を行う。**対象プラットフォームは Mac/Linux。Windows は本ラウンドでは対象外**
-（`rstudio_auth.py` にコメントされている「Pythonの `Path.home()` (`USERPROFILE`) と
-Rの `path.expand("~")` (`R_USER`/`HOME`) がWindowsでは食い違いうる」というリスクは
-既知の未検証事項として残る）。
+確認を行う。**対象プラットフォームは Mac/Linux**。Windows向けの手順・追加
+チェックポイント（`rstudio_auth.py` にコメントされている「Pythonの
+`Path.home()` (`USERPROFILE`) とRの `path.expand("~")` (`R_USER`/`HOME`) が
+Windowsでは食い違いうる」というリスクの診断を含む）は
+`docs/TEST_PLAN_WINDOWS.md` を参照。
 
 LLMの応答は非決定的なので、検証基準は「特定の文言と完全一致」ではなく「意味的に
 正しい内容（群数・欠損数への言及など）を含むか」で判定する。
@@ -321,7 +322,7 @@ conversation内で①→②→③の順に行う。
 - [ ] 見つかった問題点の一覧化（再現手順つき）
 - [ ] `README.md` のAddin名・「Later features は無い」記述など、Step 7-9 未反映の
       古い記述を追従修正するかどうかの判断（本テストプラン §1.4 で指摘した差分）
-  - [ ] Windows実機での再検証が必要かどうかの判断（本ラウンドは対象外としたため）
+- [ ] Windows実機テスト（`docs/TEST_PLAN_WINDOWS.md`）を実施したか
 
 ---
 
@@ -329,8 +330,8 @@ conversation内で①→②→③の順に行う。
 
 - LLMの応答は非決定的。検証基準は「意味的に正しい内容を含むか」で判定し、
   厳密な文字列一致は求めない。
-- Windows は本ラウンドの対象外。`~/.stat-consultant/rstudio_token` のパス解決が
-  PythonとRで食い違う既知のリスクがあるため、Windows実機がある場合は別途
-  同様のテストプランで確認することを推奨する。
+- Windows は本ドキュメントの対象外。`~/.stat-consultant/rstudio_token` の
+  パス解決がPythonとRで食い違う既知のリスクがあるため、Windows実機での確認は
+  `docs/TEST_PLAN_WINDOWS.md` を参照すること。
 - 本ドキュメント自体はこのセッションでは**実行されていない**（実機が無いため）。
   作成のみがスコープであり、実施と結果記録はユーザー自身が行う。
