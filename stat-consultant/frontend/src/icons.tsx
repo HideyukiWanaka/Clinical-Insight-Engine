@@ -41,6 +41,16 @@ export function GearIcon() {
   );
 }
 
+export function RestartIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 12a9 9 0 1 1 3 6.7" />
+      <path d="M3 21v-6h6" />
+    </svg>
+  );
+}
+
 export function CloseIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"

@@ -13,11 +13,11 @@ import {
 } from "./api";
 import { ChatMessage } from "./components/ChatMessage";
 import { SettingsModal } from "./components/SettingsModal";
-import { GearIcon, PaperclipIcon, SendIcon } from "./icons";
+import { GearIcon, PaperclipIcon, RestartIcon, SendIcon } from "./icons";
 import { useConsult } from "./useConsult";
 
 function App() {
-  const { messages, connected, busy, send } = useConsult();
+  const { messages, connected, busy, send, resetConversation } = useConsult();
   const [input, setInput] = useState("");
   // A reference figure staged for the next turn only (Step 9); not persisted.
   const [pendingImage, setPendingImage] = useState<ImagePayload | null>(null);
@@ -29,14 +29,14 @@ function App() {
   const fileRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<number | undefined>(undefined);
 
-  // Load the selectable models; keep a valid selection as availability changes
-  // (e.g. after a key is saved in settings).
+  // Load the currently invocable models; keep a valid selection as the set
+  // changes (e.g. after a key is saved in settings).
   function refreshModels() {
     fetchModels()
       .then((data) => {
         setModels(data.models);
         setModel((current) => {
-          const ok = data.models.find((m) => m.id === current && m.available);
+          const ok = data.models.find((m) => m.id === current);
           return ok ? current : data.default;
         });
       })
@@ -56,6 +56,16 @@ function App() {
     setToast(msg);
     window.clearTimeout(toastTimer.current);
     toastTimer.current = window.setTimeout(() => setToast(null), 2800);
+  }
+
+  function handleNewChat() {
+    if (messages.length === 0) return;
+    if (
+      !window.confirm("新しいチャットを始めますか？現在の会話はリセットされます。")
+    )
+      return;
+    resetConversation();
+    showToast("新しいチャットを始めました");
   }
 
   function submit() {
@@ -123,13 +133,23 @@ function App() {
               onChange={(e) => setModel(e.target.value)}
             >
               {models.map((m) => (
-                <option key={m.id} value={m.id} disabled={!m.available}>
+                <option key={m.id} value={m.id}>
                   {m.label}
-                  {m.available ? "" : "（未設定）"}
                 </option>
               ))}
             </select>
           )}
+          <button
+            type="button"
+            className="app__gear"
+            data-testid="new-chat"
+            aria-label="新しいチャット"
+            title="新しいチャットを始める"
+            disabled={messages.length === 0}
+            onClick={handleNewChat}
+          >
+            <RestartIcon />
+          </button>
           <button
             type="button"
             className="app__gear"

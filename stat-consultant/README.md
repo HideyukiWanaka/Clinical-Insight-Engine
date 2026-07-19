@@ -8,6 +8,14 @@ OpenAI / Gemini) with an in-app model picker and BYOK API-key entry (keys
 stored in the OS keychain). Later features (environment sync, image/Vision)
 are not here yet.
 
+## quick start (再起動含む)
+
+`stat-consultant/start.command`（macOS）/ `start.bat`（Windows）をダブルクリック
+すると、backend・frontendを（既存プロセスが残っていれば安全に停止した上で）
+まとめて起動し、チャット画面をブラウザで開く。開発中に立ち上げ直したい
+ときも、これを再度ダブルクリックすればよい。以下は内部で実行している
+コマンドの詳細（手動で個別に動かしたい場合や、スクリプトが使えない環境向け）。
+
 ## backend (FastAPI + uvicorn)
 
 ```

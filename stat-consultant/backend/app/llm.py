@@ -23,10 +23,19 @@ import json
 import re
 
 from anthropic import AsyncAnthropic
+from anthropic import NotFoundError as AnthropicNotFoundError
 from openai import AsyncOpenAI
+from openai import NotFoundError as OpenAINotFoundError
 
 from . import secrets_store
-from .models_registry import GEMINI_BASE_URL, ModelSpec
+from .models_registry import GEMINI_BASE_URL, ModelSpec, list_models
+
+# A model can be listed in a provider's own /models catalog yet already be
+# retired from actual generation calls (observed live: Gemini's catalog kept
+# listing a "-preview" id that 404'd on chat.completions). generate_blocks
+# retries the next live candidate from the same provider rather than failing
+# the whole turn on this specific, provider-side listing/serving mismatch.
+_MODEL_RETIRED_ERRORS = (AnthropicNotFoundError, OpenAINotFoundError)
 
 _MAX_TOKENS = 16000
 
@@ -181,7 +190,7 @@ async def _openai_compat_json(
     with_image = _attach_image_last_user(messages, image, provider=spec.provider)
     async with _new_openai_client(spec) as client:
         resp = await client.chat.completions.create(
-            model=spec.model,
+            model=spec.id,
             messages=openai_messages(system, with_image),
             response_format=openai_response_format(spec),
         )
@@ -201,13 +210,29 @@ async def generate_blocks(
                   only (Step 9); attached to the last user message, not stored.
 
     Raises:
-        Anything the SDK raises; the caller turns it into an error frame.
+        Anything the SDK raises (after exhausting the retired-model fallback
+        below); the caller turns it into an error frame.
     """
-    if spec.provider == "anthropic":
-        text = await _anthropic_json(spec.model, system, messages, image)
-    else:
-        text = await _openai_compat_json(spec, system, messages, image)
-    return parse_blocks(text)
+    candidates = [spec]
+    try:
+        pool = await list_models(spec.provider)
+    except Exception:  # noqa: BLE001 — no fallback candidates beats a crash here
+        pool = []
+    candidates += [m for m in pool if m.id != spec.id]
+
+    last_exc: Exception | None = None
+    for candidate in candidates:
+        try:
+            if candidate.provider == "anthropic":
+                text = await _anthropic_json(candidate.id, system, messages, image)
+            else:
+                text = await _openai_compat_json(candidate, system, messages, image)
+            return parse_blocks(text)
+        except _MODEL_RETIRED_ERRORS as exc:
+            last_exc = exc
+            continue
+    assert last_exc is not None  # candidates is never empty (spec itself)
+    raise last_exc
 
 
 def blocks_to_text(blocks: list[dict]) -> str:

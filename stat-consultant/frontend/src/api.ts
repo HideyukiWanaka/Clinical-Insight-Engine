@@ -5,7 +5,6 @@ export interface ModelInfo {
   id: string;
   label: string;
   provider: string;
-  available: boolean;
 }
 
 export interface ModelList {
@@ -13,7 +12,7 @@ export interface ModelList {
   models: ModelInfo[];
 }
 
-/** Fetch the selectable models (with per-model availability) and the default. */
+/** Fetch the currently invocable models (per configured provider) and the default. */
 export async function fetchModels(): Promise<ModelList> {
   const res = await fetch(`${API_BASE}/api/models`);
   if (!res.ok) throw new Error(`models fetch failed: ${res.status}`);

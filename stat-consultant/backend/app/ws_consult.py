@@ -130,7 +130,7 @@ async def ws_consult(websocket: WebSocket) -> None:
                 continue
 
             # Resolve the chosen model; require its provider key to be configured.
-            spec = resolve_model(model)
+            spec = await resolve_model(model)
             if not is_available(spec):
                 await websocket.send_json(
                     {

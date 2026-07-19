@@ -1,19 +1,21 @@
 """Model registry across providers (Anthropic / OpenAI / Gemini).
 
-The user picks a model in the UI; the WS turn carries its ``id``. A model is
-marked available when its provider API key is configured on the server *and*
-(best-effort, via ``verified_available``) the provider's own catalog still
-lists that model id — see the "live catalog check" section below. Keys come
-from the environment — never the UI (no secrets screen).
+No hardcoded model-id list: each configured provider's own ``/models``
+catalog is queried directly and filtered down to ordinary text-chat models.
+A distributed app can't ship a source patch every time a provider renames a
+model or tacks on a date/preview suffix (observed live: Gemini's real id is
+``gemini-3-pro-preview``, not a curated ``gemini-3-pro``) — so nothing here
+pins an exact model id. Only the *provider* set (Anthropic/OpenAI/Gemini) and
+the coarse per-provider "which family names are chat models" heuristics
+below are hardcoded; those change far less often than individual model ids.
 
-NOTE: the model IDs below are still a curated starting set (display label,
-ordering, and which ids are worth offering at all are a human call) — edit
-this one list to match each provider's current lineup. The live catalog check
-only *hides* entries the provider has dropped; it never adds new ones.
+Keys come from the OS keychain or environment (``secrets_store``) — never
+hardcoded, never echoed to the UI beyond ``has_key``.
 """
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 
@@ -26,30 +28,7 @@ Provider = str  # "anthropic" | "openai" | "gemini"
 
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
-
-@dataclass(frozen=True)
-class ModelSpec:
-    id: str  # stable id used by the frontend + WS frame
-    label: str  # display name in the dropdown
-    provider: Provider
-    model: str  # the provider's actual model id
-
-
-# --- curated model list (edit here to match current provider lineups) ---
-MODELS: tuple[ModelSpec, ...] = (
-    ModelSpec("claude-opus-4-8", "Claude Opus 4.8", "anthropic", "claude-opus-4-8"),
-    ModelSpec("claude-sonnet-5", "Claude Sonnet 5", "anthropic", "claude-sonnet-5"),
-    ModelSpec("claude-haiku-4-5", "Claude Haiku 4.5", "anthropic", "claude-haiku-4-5"),
-    ModelSpec("gpt-5.1", "GPT-5.1", "openai", "gpt-5.1"),
-    ModelSpec("gpt-5-mini", "GPT-5 mini", "openai", "gpt-5-mini"),
-    ModelSpec("gemini-3-pro", "Gemini 3 Pro", "gemini", "gemini-3-pro"),
-    ModelSpec("gemini-2.5-flash", "Gemini 2.5 Flash", "gemini", "gemini-2.5-flash"),
-)
-
-_BY_ID: dict[str, ModelSpec] = {m.id: m for m in MODELS}
-
-# Distinct providers appearing in MODELS (order-stable).
-_PROVIDERS: tuple[Provider, ...] = tuple(dict.fromkeys(m.provider for m in MODELS))
+PROVIDERS: tuple[Provider, ...] = ("anthropic", "openai", "gemini")
 
 # Human labels for the settings screen.
 PROVIDER_LABELS: dict[Provider, str] = {
@@ -59,28 +38,75 @@ PROVIDER_LABELS: dict[Provider, str] = {
 }
 
 
+@dataclass(frozen=True)
+class ModelSpec:
+    id: str  # the provider's real model id — used as-is for the API call
+    label: str  # display name in the dropdown
+    provider: Provider
+
+
 def configured_providers() -> set[Provider]:
     """Providers with a configured API key (OS keyring or environment)."""
-    return {p for p in _PROVIDERS if secrets_store.has_api_key(p)}
+    return {p for p in PROVIDERS if secrets_store.has_api_key(p)}
 
 
 def is_available(spec: ModelSpec) -> bool:
     return spec.provider in configured_providers()
 
 
-# --- live catalog check (SPEC: hide curated entries the provider dropped) ---
-# The curated list above can drift from a provider's actual lineup (renamed or
-# retired model ids). Rather than requiring a code edit every time that
-# happens, cross-check each provider's own /models endpoint and hide entries
-# that no longer exist there. Cached per provider so the settings screen
-# doesn't hit the network on every render; a fetch failure (offline, key just
-# rotated, provider outage) fails open — i.e. trusts the curated list — so a
-# transient lookup error never blanks out every model.
-_LIVE_CACHE_TTL_SECONDS = 300
-_live_cache: dict[Provider, tuple[float, set[str]]] = {}
+# --- text-chat filtering ---------------------------------------------------
+# Each provider's /models mixes in embeddings/TTS/image/video/etc. A model
+# must match one of its provider's family prefixes and none of the shared
+# deny substrings to be offered in the chat picker.
+_CHAT_ALLOW_PREFIX: dict[Provider, tuple[str, ...]] = {
+    "anthropic": ("claude-",),
+    "openai": ("gpt-", "chatgpt-", "o1", "o3", "o4", "o5"),
+    "gemini": ("gemini-",),
+}
+_CHAT_DENY_SUBSTRING: tuple[str, ...] = (
+    "embed", "whisper", "tts", "dall-e", "audio", "video", "image",
+    "moderation", "davinci", "babbage", "instruct", "realtime",
+    "transcribe", "search", "computer-use", "codex", "live", "veo",
+    "imagen", "aqa",
+)
 
 
-async def _fetch_live_ids(provider: Provider) -> set[str] | None:
+def _is_chat_model(provider: Provider, model_id: str) -> bool:
+    allow = _CHAT_ALLOW_PREFIX.get(provider, ())
+    if not any(model_id.startswith(p) for p in allow):
+        return False
+    low = model_id.lower()
+    return not any(bad in low for bad in _CHAT_DENY_SUBSTRING)
+
+
+def _strip_models_prefix(raw_id: str) -> str:
+    # Gemini's OpenAI-compat catalog returns ids like "models/gemini-3-pro-preview".
+    return raw_id.removeprefix("models/")
+
+
+def _humanize_id(model_id: str) -> str:
+    """Fallback label when the provider doesn't supply a display name (OpenAI)."""
+    words = []
+    for part in model_id.split("-"):
+        if part.lower() == "gpt":
+            words.append("GPT")
+        elif re.fullmatch(r"o\d+", part.lower()):
+            words.append(part.lower())
+        else:
+            words.append(part.capitalize())
+    return " ".join(words)
+
+
+def _created_sort_key(created: object) -> tuple[int, object]:
+    """Normalize Anthropic's ISO ``created_at`` str, OpenAI's unix ``created``
+    int, and Gemini's (observed) absent value into one comparable, descending
+    ("newest/most preferred first") sort key."""
+    if isinstance(created, (int, float)) or (isinstance(created, str) and created):
+        return (1, created)
+    return (0, "")
+
+
+async def _fetch_provider_models(provider: Provider) -> list[ModelSpec] | None:
     key = secrets_store.load_api_key(provider)
     if not key:
         return None
@@ -88,51 +114,69 @@ async def _fetch_live_ids(provider: Provider) -> set[str] | None:
         if provider == "anthropic":
             async with AsyncAnthropic(api_key=key) as client:
                 page = await client.models.list()
+            raw = [(m.id, getattr(m, "display_name", None), getattr(m, "created_at", None))
+                   for m in page.data]
         else:
             base_url = GEMINI_BASE_URL if provider == "gemini" else None
             async with AsyncOpenAI(api_key=key, base_url=base_url) as client:
                 page = await client.models.list()
-        return {m.id for m in page.data}
-    except Exception:  # noqa: BLE001 — any SDK/network failure just fails open
+            raw = [(_strip_models_prefix(m.id), getattr(m, "display_name", None),
+                    getattr(m, "created", None)) for m in page.data]
+    except Exception:  # noqa: BLE001 — any SDK/network failure just fails open to the cache
         return None
 
+    chat_only = [(mid, label, created) for mid, label, created in raw
+                 if _is_chat_model(provider, mid)]
+    chat_only.sort(key=lambda t: (_created_sort_key(t[2]), t[0]), reverse=True)
+    return [ModelSpec(id=mid, label=label or _humanize_id(mid), provider=provider)
+            for mid, label, _created in chat_only]
 
-async def _live_ids(provider: Provider) -> set[str] | None:
-    """Cached live catalog for ``provider``, or None if never fetched."""
+
+_LIVE_CACHE_TTL_SECONDS = 300
+_live_cache: dict[Provider, tuple[float, list[ModelSpec]]] = {}
+
+
+async def list_models(provider: Provider) -> list[ModelSpec]:
+    """This provider's currently available chat models, newest-first.
+
+    Cached per provider (network calls are relatively slow); a fetch failure
+    (offline, key just rotated, provider outage) reuses the last-known-good
+    cache instead of blanking the dropdown, but there's no static fallback
+    list any more — if this provider has never been fetched successfully, it
+    contributes nothing until connectivity is restored.
+    """
     now = time.monotonic()
     cached = _live_cache.get(provider)
     if cached and now - cached[0] < _LIVE_CACHE_TTL_SECONDS:
         return cached[1]
-    fetched = await _fetch_live_ids(provider)
+    fetched = await _fetch_provider_models(provider)
     if fetched is not None:
         _live_cache[provider] = (now, fetched)
         return fetched
-    return cached[1] if cached else None  # stale cache beats no cache
+    return cached[1] if cached else []
 
 
-async def verified_available(spec: ModelSpec) -> bool:
-    """``is_available`` plus a best-effort check that the model id still
-    exists in the provider's own catalog, so a renamed/retired curated entry
-    (e.g. a model id that never shipped) stops showing up as selectable."""
-    if not is_available(spec):
-        return False
-    live_ids = await _live_ids(spec.provider)
-    if live_ids is None:  # couldn't verify — trust the curated list
-        return True
-    return spec.model in live_ids
+async def _first_live_model() -> ModelSpec | None:
+    for provider in PROVIDERS:
+        models = await list_models(provider)
+        if models:
+            return models[0]
+    return None
 
 
-def default_model_id() -> str:
-    """First available model, else the first listed (so the UI is never empty)."""
-    configured = configured_providers()
-    for m in MODELS:
-        if m.provider in configured:
-            return m.id
-    return MODELS[0].id
+def _infer_provider(model_id: str) -> Provider | None:
+    for provider, prefixes in _CHAT_ALLOW_PREFIX.items():
+        if any(model_id.startswith(p) for p in prefixes):
+            return provider
+    return None
 
 
-def resolve_model(model_id: str | None) -> ModelSpec:
-    """Return the spec for ``model_id``, falling back to the default."""
-    if model_id and model_id in _BY_ID:
-        return _BY_ID[model_id]
-    return _BY_ID[default_model_id()]
+async def resolve_model(model_id: str | None) -> ModelSpec:
+    """Return the spec for ``model_id``, falling back to the first available
+    live model when omitted (bare-text WS turns, per the README)."""
+    if model_id:
+        provider = _infer_provider(model_id)
+        # Unrecognized prefix: provider="" makes is_available() False below,
+        # so the caller's existing "not configured" error path handles it.
+        return ModelSpec(id=model_id, label=model_id, provider=provider or "")
+    return await _first_live_model() or ModelSpec(id="", label="(no model)", provider="")

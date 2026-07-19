@@ -189,6 +189,22 @@ export function useConsult() {
     };
   }, []);
 
+  /** Start a new conversation: fresh id, cleared history. The WS connection
+   *  itself doesn't need to change — `send()` sends `conversation_id` per
+   *  message, not per connection. */
+  const resetConversation = useCallback(() => {
+    const id = newConversationId();
+    conversationId.current = id;
+    try {
+      localStorage.setItem(CONVERSATION_ID_KEY, id);
+    } catch {
+      /* non-fatal: new id just won't survive a reload */
+    }
+    pending.current = [];
+    setBusy(false);
+    setMessages([]);
+  }, []);
+
   const send = useCallback(
     (text: string, model: string, image?: ImagePayload | null) => {
       const trimmed = text.trim();
@@ -220,5 +236,5 @@ export function useConsult() {
     [],
   );
 
-  return { messages, connected, busy, send };
+  return { messages, connected, busy, send, resetConversation };
 }
