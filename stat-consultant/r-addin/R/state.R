@@ -6,3 +6,7 @@
 # — it's driven by this `running` flag, flipped by the start / stop addins.
 .state <- new.env(parent = emptyenv())
 .state$running <- FALSE
+# Signature of the last successfully synced environment snapshot (Step 7). The
+# scan loop only POSTs when this changes, so an unchanged GlobalEnv doesn't spam
+# the backend; NULL means "nothing synced yet" (first change always sends).
+.state$last_env_sig <- NULL

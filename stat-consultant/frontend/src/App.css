@@ -104,6 +104,18 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
+/* Attached reference figure inside a user bubble (Step 9). */
+.msg__figure {
+  display: block;
+  max-width: 100%;
+  max-height: 240px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+.msg__bubble:has(.msg__figure) {
+  padding: 8px;
+}
 .msg--assistant {
   justify-content: flex-start;
   align-items: flex-start;
@@ -285,6 +297,47 @@
   min-height: 24px;
   max-height: 180px;
   line-height: 1.5;
+}
+
+/* Staged reference figure chip above the composer (Step 9). */
+.composer__figure {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 6px 10px 6px 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  max-width: 100%;
+}
+.composer__figure-thumb {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.composer__figure-label {
+  font-size: 13px;
+  color: var(--muted);
+}
+.composer__figure-remove {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: none;
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+}
+.composer__figure-remove:hover {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.06);
 }
 
 /* Gear button (opens settings). */

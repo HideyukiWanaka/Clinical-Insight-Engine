@@ -1,9 +1,9 @@
-Name: コード挿入: 開始
-Description: /api/rstudio/pending をポーリングし、キューされたコードをアクティブドキュメントのカーソル位置へ挿入します。
+Name: Stat Consultant: 開始
+Description: コード挿入(/api/rstudio/pending をポーリングしカーソル位置へ挿入)と、透明な環境同期(GlobalEnvを走査しPII除外済みの集計を /api/environment/sync へ送信)を開始します。
 Binding: statConsultantInsertCode
 Interactive: false
 
-Name: コード挿入: 停止
-Description: コード挿入のポーリングを停止します。
+Name: Stat Consultant: 停止
+Description: コード挿入と環境同期のポーリングを停止します。
 Binding: statConsultantStopInsert
 Interactive: false
