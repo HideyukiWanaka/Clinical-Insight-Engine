@@ -1,7 +1,11 @@
 #!/bin/bash
 # Double-click to (re)launch stat-consultant: stops any stale backend/frontend
-# from a previous run, (re)installs deps if missing, starts both, and opens
-# the chat in the browser. Close this window (or Ctrl+C) to stop everything.
+# from a previous run, (re)installs deps if missing, then opens backend and
+# frontend each in their OWN Terminal window (not backgrounded in this one),
+# and opens the chat in the browser. This keeps backend log lines (startup
+# token message, environment-sync lines used in docs/TEST_PLAN.md §S7) fully
+# visible instead of interleaved with Vite's dev-server output. Close a
+# window (or Ctrl+C inside it) to stop that process.
 set -u
 cd "$(dirname "$0")"
 ROOT="$(pwd)"
@@ -30,28 +34,31 @@ kill_stale() {
 kill_stale 8000 "app.main:app"
 kill_stale 5173 "vite"
 
-echo "== backend =="
+echo "== backend 準備 =="
 cd "$ROOT/backend"
 if [ ! -d .venv ]; then
   python3 -m venv .venv
   .venv/bin/pip install -e .
 fi
-.venv/bin/uvicorn app.main:app --reload --port 8000 &
-BACKEND_PID=$!
 
-echo "== frontend =="
+echo "== frontend 準備 =="
 cd "$ROOT/frontend"
 if [ ! -d node_modules ]; then
   npm install
 fi
-npm run dev &
-FRONTEND_PID=$!
 
-cleanup() {
-  echo "停止しています…"
-  kill "$BACKEND_PID" "$FRONTEND_PID" 2>/dev/null
-}
-trap cleanup EXIT INT TERM
+# backend と frontend をそれぞれ独立した Terminal ウィンドウで起動する。
+# 1つの端末に混在させると、TEST_PLAN.md が確認対象とするbackendのログ行
+# （起動時のトークン出力、環境同期ログ等）がVite側の出力に埋もれてしまうため。
+osascript <<EOF
+tell application "Terminal"
+  activate
+  set backendWin to do script "cd '$ROOT/backend' && .venv/bin/uvicorn app.main:app --reload --port 8000"
+  set custom title of backendWin to "stat-consultant: backend"
+  set frontendWin to do script "cd '$ROOT/frontend' && npm run dev"
+  set custom title of frontendWin to "stat-consultant: frontend"
+end tell
+EOF
 
 # frontend が応答するようになるまで待ってからブラウザを開く
 for _ in $(seq 1 30); do
@@ -62,4 +69,6 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 
-wait
+echo "backend / frontend はそれぞれ別のTerminalウィンドウで起動しました。"
+echo "backendのログ（環境同期など）は「stat-consultant: backend」ウィンドウで確認できます。"
+echo "止めるには各ウィンドウを閉じるか、そのウィンドウでCtrl+Cしてください。"

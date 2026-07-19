@@ -27,6 +27,13 @@ statConsultantInsertCode <- function(interval_sec = 2) {
     return(invisible(NULL))
   }
   .state$running <- TRUE
+  # Reset the dedup signature so the very next cycle always resends a full
+  # snapshot, even if GlobalEnv is unchanged. Without this, a backend restart
+  # (which wipes its in-memory environment store) followed by re-starting the
+  # addin without touching GlobalEnv would leave the backend permanently
+  # without any environment context: env_scan_once() would keep seeing the
+  # same signature as before the restart and skip every POST.
+  .state$last_env_sig <- NULL
   message(
     "Stat Consultant: コード挿入と環境同期を開始しました",
     "（停止は「停止」アドイン）。"
