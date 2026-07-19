@@ -11,11 +11,12 @@ or logged; only a per-provider ``has_key`` boolean is exposed.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from . import secrets_store
 from .models_registry import PROVIDER_LABELS
+from .origins import require_local_origin
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -64,7 +65,7 @@ def get_keys() -> dict[str, object]:
     return _status()
 
 
-@router.post("/keys")
+@router.post("/keys", dependencies=[Depends(require_local_origin)])
 def save_key(body: ApiKeyBody) -> dict[str, object]:
     """Save a provider's API key to the OS keyring. Returns has_key-only status."""
     _require_known_provider(body.provider)
@@ -81,7 +82,7 @@ def save_key(body: ApiKeyBody) -> dict[str, object]:
     return _status()
 
 
-@router.delete("/keys/{provider}")
+@router.delete("/keys/{provider}", dependencies=[Depends(require_local_origin)])
 def clear_key(provider: str) -> dict[str, object]:
     """Remove a provider's stored key."""
     _require_known_provider(provider)

@@ -5,12 +5,15 @@ Adapted (SPEC §11 "翻案") from ``cie/security/pii_detector.py`` +
 import ``cie`` (SPEC §7 — treat ``cie/`` as reference/port source only).
 
 The Addin already excludes PII columns before sending (SPEC §9.2); this module
-is the server-side second layer. Only *structural metadata* is ever inspected —
-column names and aggregated category **level labels**. Raw row/cell values are
-never passed here (``inject_raw_data_rows = False``, CLAUDE.md).
+is the server-side second layer. Only *structural metadata* is ever inspected.
+Raw row/cell values — and category level label strings — are never sent to the
+backend (the environment schema has no field for them), so the value-pattern
+check here runs only when the caller passes labels, which happens Addin-side
+(``r-addin/R/pii.R``) before send. Server-side, only the **column name** is
+available to check.
 
-A column is dropped when its **name** matches a name pattern, or any of its
-**level labels** matches a value pattern (phone/email shaped values).
+A column is dropped when its **name** matches a name pattern, or (Addin-side)
+any of its **level labels** matches a value pattern (phone/email shaped values).
 """
 
 from __future__ import annotations
@@ -109,9 +112,9 @@ def level_label_is_pii(label: str) -> bool:
 def column_has_pii(col_name: str, level_labels: list[str] | None = None) -> bool:
     """Whole-column PII decision (SPEC §9.2).
 
-    Returns True — meaning drop the entire column (type + n_missing + levels) —
-    when the column *name* trips a name pattern, or any of its *level labels*
-    trips a value pattern.
+    Returns True — meaning drop the entire column (name + type + n_missing +
+    aggregate summary) — when the column *name* trips a name pattern, or (when
+    labels are supplied, i.e. Addin-side) any *level label* trips a value pattern.
     """
     if column_name_is_pii(col_name):
         return True

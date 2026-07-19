@@ -60,10 +60,17 @@ poll_once <- function() {
       }
 
       # Multiple queued blocks insert in order, blank-line separated, as one
-      # insertText call (a single editor undo step).
-      code_text <- paste(
-        vapply(items, function(it) it[["code"]], character(1)),
-        collapse = "\n\n"
+      # insertText call (a single editor undo step). A leading blank-line
+      # separator is also prepended: insertText() inserts literally at the
+      # cursor with no awareness of what's already in the document, so without
+      # this, a second "RStudioへ送る" click in a later poll cycle would abut
+      # directly onto the end of a previous insertion with no line break.
+      code_text <- paste0(
+        "\n\n",
+        paste(
+          vapply(items, function(it) it[["code"]], character(1)),
+          collapse = "\n\n"
+        )
       )
       rstudioapi::insertText(text = code_text, id = ctx$id)  # location omitted = cursor
     },

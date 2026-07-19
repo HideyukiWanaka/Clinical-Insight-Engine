@@ -11,9 +11,11 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
+
+from .origins import require_local_origin
 
 router = APIRouter(tags=["references"])
 
@@ -38,7 +40,7 @@ def _extract_pdf_text(raw: bytes) -> str:
     return text
 
 
-@router.post("/api/references")
+@router.post("/api/references", dependencies=[Depends(require_local_origin)])
 async def upload_reference(
     request: Request, file: UploadFile = File(...)
 ) -> dict[str, object]:
