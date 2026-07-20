@@ -17,34 +17,31 @@ from __future__ import annotations
 import hmac
 import secrets
 import stat
-from pathlib import Path
 
 from fastapi import Header, HTTPException, Request
 
-# Home-anchored so an installed R Addin (which has no notion of where this repo
-# lives) can independently resolve the same path. macOS/Linux agree via $HOME;
-# on Windows Python's Path.home() (USERPROFILE) may differ from R's
-# path.expand("~") (R_USER/HOME) — the startup log below prints the absolute
-# path so a mismatch is self-diagnosable rather than a silent hang.
-TOKEN_DIR = Path.home() / ".stat-consultant"
-TOKEN_PATH = TOKEN_DIR / "rstudio_token"
-
+from . import paths
 
 def generate_and_write_token() -> str:
     """(Re)write the shared-secret file with a fresh token; owner-only perms.
 
     Returns the token so the caller can stash it on ``app.state`` for the
     per-request comparison in :func:`require_rstudio_token`.
+
+    The location comes from :mod:`app.paths`, which the R launcher can pin via
+    ``--state-dir`` so the Addin never has to guess at ``~`` (see paths.py for
+    the Windows divergence this avoids). ``GET /health`` echoes the same
+    directory for the case where the backend was started by hand.
     """
     token = secrets.token_urlsafe(32)
-    TOKEN_DIR.mkdir(parents=True, exist_ok=True)
-    TOKEN_PATH.write_text(token, encoding="utf-8")
+    path = paths.token_path()
+    path.write_text(token, encoding="utf-8")
     try:
-        TOKEN_PATH.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0600
+        path.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0600
     except OSError:
         # chmod is largely inert on Windows; harmless to skip.
         pass
-    print(f"[stat-consultant] RStudio shared secret written to {TOKEN_PATH}")
+    print(f"[stat-consultant] RStudio shared secret written to {path}")
     return token
 
 

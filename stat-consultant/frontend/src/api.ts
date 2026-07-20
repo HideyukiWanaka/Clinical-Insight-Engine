@@ -1,5 +1,6 @@
-// Backend REST base. Dev: Vite on 5173, FastAPI on 8000 (same host).
-const API_BASE = `http://${location.hostname || "localhost"}:8000`;
+// Same-origin. In the bundled app FastAPI serves this page itself; in dev the
+// Vite proxy (vite.config.ts) forwards /api to :8000. One code path either way.
+const API_BASE = "";
 
 export interface ModelInfo {
   id: string;

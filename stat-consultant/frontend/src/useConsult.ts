@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ImagePayload } from "./api";
 import type { AssistantBlock, Message, ServerFrame } from "./types";
 
-// Backend WS. Dev: Vite on 5173, FastAPI on 8000 (README). Same host, port 8000.
-const WS_URL = `ws://${location.hostname || "localhost"}:8000/ws/consult`;
+// Same-origin, like API_BASE in api.ts: FastAPI serves this page in the bundled
+// app, and Vite proxies /ws in dev. Scheme follows the page so an https deploy
+// doesn't get blocked as mixed content.
+const WS_URL = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/consult`;
 
 // Namespaced to match the R Addin's `statConsultant.baseUrl` option convention.
 const CONVERSATION_ID_KEY = "statConsultant.conversationId";
