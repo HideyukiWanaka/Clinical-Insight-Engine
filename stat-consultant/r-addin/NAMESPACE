@@ -2,4 +2,6 @@
 # roxygen2::roxygenise() once R is installed. Cross-package calls use ::, so no
 # importFrom() entries are needed here.
 export(statConsultantInsertCode)
+export(statConsultantStart)
+export(statConsultantStop)
 export(statConsultantStopInsert)

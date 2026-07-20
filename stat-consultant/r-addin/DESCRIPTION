@@ -2,18 +2,23 @@ Package: statConsultantAddin
 Type: Package
 Title: Stat Consultant RStudio Addin
 Version: 0.1.0
-Description: RStudio Addin for Stat Consultant. Polls the chat backend's
-    pending-code queue and inserts received code at the cursor position of
-    the active source document (rstudioapi::insertText). Also transparently
-    scans the global environment and syncs an aggregate-only, PII-filtered
-    snapshot (column names/types/missing counts/category levels — never row
-    values) to the backend. Zero-config auth via a local shared-secret file
-    the backend generates.
+Authors@R: person("Hideyuki", "Wanaka", role = c("aut", "cre"),
+    email = "ceh.2o4l.amrmtsc@gmail.com")
+Description: RStudio Addin for Stat Consultant. Starts the bundled backend,
+    opens the chat UI, then polls the backend's pending-code queue and inserts
+    received code at the cursor position of the active source document
+    (rstudioapi::insertText). Also transparently scans the global environment
+    and syncs an aggregate-only, PII-filtered snapshot (column names/types/
+    missing counts/category levels — never row values) to the backend.
+    Zero-config auth via a local shared-secret file the backend generates.
 License: Proprietary
 Encoding: UTF-8
 LazyData: true
 Imports:
-    rstudioapi,
-    httr2,
-    later
+    rstudioapi (>= 0.15),
+    httr2 (>= 1.0.0),
+    later (>= 1.3.0),
+    processx (>= 3.8.0),
+    jsonlite (>= 1.8.0),
+    utils
 RoxygenNote: 7.3.2

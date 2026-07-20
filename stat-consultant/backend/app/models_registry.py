@@ -68,6 +68,10 @@ _CHAT_DENY_SUBSTRING: tuple[str, ...] = (
     "moderation", "davinci", "babbage", "instruct", "realtime",
     "transcribe", "search", "computer-use", "codex", "live", "veo",
     "imagen", "aqa",
+    # Special-purpose families that share a chat prefix but aren't general
+    # chat models. "robotics" (Gemini Robotics-ER, embodied reasoning) used to
+    # slip through and become the default for a statistics tool.
+    "robotics", "learnlm", "guard",
 )
 
 
@@ -100,10 +104,47 @@ def _humanize_id(model_id: str) -> str:
 def _created_sort_key(created: object) -> tuple[int, object]:
     """Normalize Anthropic's ISO ``created_at`` str, OpenAI's unix ``created``
     int, and Gemini's (observed) absent value into one comparable, descending
-    ("newest/most preferred first") sort key."""
+    sort key. Gemini supplies nothing here, so this alone cannot order its
+    catalog — see _tier_score for what actually decides the default."""
     if isinstance(created, (int, float)) or (isinstance(created, str) and created):
         return (1, created)
     return (0, "")
+
+
+# --- default-selection ranking ---------------------------------------------
+# The dropdown still lists whatever the provider's catalog returns — nothing is
+# hardcoded — but the *default* must not be whichever id happens to sort first.
+# Gemini's catalog carries no `created`, so ordering by it alone degenerates to
+# reverse-alphabetical, which is how a robotics model became the default.
+#
+# Score capability *tier* words rather than version numbers, so a future
+# claude-opus-5 or gemini-4-pro ranks correctly with no edit here — that's the
+# property the live-catalog design exists to preserve.
+_TIER_BONUS: tuple[tuple[str, int], ...] = (
+    ("opus", 3),
+    ("pro", 3),
+    ("sonnet", 2),
+)
+_TIER_PENALTY: tuple[tuple[str, int], ...] = (
+    # Cheaper/faster tiers: fine to offer, wrong to auto-pick for statistical
+    # reasoning where answer quality matters more than latency.
+    ("mini", 2), ("nano", 2), ("lite", 2), ("flash", 2), ("haiku", 2),
+    # Unstable channels shouldn't be the default a clinician silently gets.
+    ("preview", 3), ("experimental", 3), ("-exp", 3), ("alpha", 3), ("beta", 3),
+)
+
+
+def _tier_score(model_id: str) -> int:
+    """Rough capability ranking used to order the picker and pick the default."""
+    low = model_id.lower()
+    score = 0
+    for token, bonus in _TIER_BONUS:
+        if token in low:
+            score += bonus
+    for token, penalty in _TIER_PENALTY:
+        if token in low:
+            score -= penalty
+    return score
 
 
 async def _fetch_provider_models(provider: Provider) -> list[ModelSpec] | None:
@@ -127,7 +168,13 @@ async def _fetch_provider_models(provider: Provider) -> list[ModelSpec] | None:
 
     chat_only = [(mid, label, created) for mid, label, created in raw
                  if _is_chat_model(provider, mid)]
-    chat_only.sort(key=lambda t: (_created_sort_key(t[2]), t[0]), reverse=True)
+    # Tier first (capability), then recency where the provider reports it, then
+    # id for a stable tiebreak. Without the tier term this is alphabetical noise
+    # for any provider that omits `created`.
+    chat_only.sort(
+        key=lambda t: (_tier_score(t[0]), _created_sort_key(t[2]), t[0]),
+        reverse=True,
+    )
     return [ModelSpec(id=mid, label=label or _humanize_id(mid), provider=provider)
             for mid, label, _created in chat_only]
 

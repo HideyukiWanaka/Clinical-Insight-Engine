@@ -50,3 +50,57 @@ jobs:
 
       - name: Scan production dependencies for known vulnerabilities
         run: npm audit --omit=dev
+
+  # stat-consultant ships to end users as a bundle, so its dependency set is the
+  # one that actually lands on someone else's machine — but the two jobs above
+  # scan the *root* pyproject and the *root* frontend/, so it had never been
+  # audited at all.
+  pip-audit-stat-consultant:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install the exact pinned dependency set that ships
+        working-directory: stat-consultant/backend
+        run: |
+          pip install --upgrade pip
+          pip install --require-hashes -r requirements.lock
+
+      - name: Upgrade setuptools to a patched version (PYSEC-2026-3447)
+        # setuptools isn't a dependency of the app (not in requirements.lock),
+        # but pip-audit scans whatever is sitting in the environment — the
+        # version bundled with the runner's Python — so it flags this even
+        # though nothing shipped actually carries it.
+        run: pip install --upgrade "setuptools>=83.0.0"
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Scan installed dependencies for known CVEs
+        run: pip-audit --desc
+
+  npm-audit-stat-consultant:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: stat-consultant/frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: stat-consultant/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Scan production dependencies for known vulnerabilities
+        run: npm audit --omit=dev

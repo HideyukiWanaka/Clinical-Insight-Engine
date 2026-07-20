@@ -1,0 +1,161 @@
+name: stat-consultant release
+
+# Builds the distributable bundle for each OS and smoke-tests it on that OS.
+# The smoke test is the point of this workflow: the failure modes that matter
+# (missing hidden imports, an unbundled frontend, a broken TLS trust store) only
+# appear in the built artifact, and the Windows-specific ones cannot be
+# reproduced on the maintainer's Mac.
+#
+# Push a tag (stat-consultant-v*) to also publish a GitHub Release.
+
+on:
+  push:
+    branches: [main]
+    paths: ['stat-consultant/**', '.github/workflows/stat-consultant-release.yml']
+    tags: ['stat-consultant-v*']
+  pull_request:
+    paths: ['stat-consultant/**', '.github/workflows/stat-consultant-release.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset: windows-x64
+          - os: macos-latest
+            asset: macos-arm64
+          # Add `- {os: macos-13, asset: macos-x64}` if any target user is on an
+          # Intel Mac: PyInstaller cannot cross-compile and macos-latest is
+          # arm64 only.
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: stat-consultant
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: stat-consultant/frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          # Match requirements.lock, which is compiled for the 3.11 floor.
+          python-version: '3.11'
+
+      - name: Build frontend
+        working-directory: stat-consultant/frontend
+        # npm ci, never npm install: the lockfile is the point.
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install backend dependencies
+        working-directory: stat-consultant/backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install --require-hashes -r requirements.lock
+          pip install "pyinstaller>=6.10,<7" "pyinstaller-hooks-contrib>=2024.8"
+
+      - name: Build backend bundle
+        working-directory: stat-consultant/backend
+        run: pyinstaller statconsultant.spec --noconfirm
+
+      - name: Smoke test the bundle
+        working-directory: stat-consultant/backend
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            EXE=dist/stat-consultant-backend/stat-consultant-backend.exe
+          else
+            EXE=dist/stat-consultant-backend/stat-consultant-backend
+          fi
+          python smoke_test.py "$EXE"
+
+      - name: Stage release contents
+        shell: bash
+        run: |
+          STAGE="stage/stat-consultant-${{ matrix.asset }}"
+          mkdir -p "$STAGE"
+          cp -r backend/dist/stat-consultant-backend "$STAGE/"
+          cp dist-assets/install.R "$STAGE/"
+          # The HTML is what users actually read: double-clicking it opens a
+          # formatted page in the browser, whereas a .md opens in TextEdit as
+          # raw markup. The .md is the maintainer-facing source of the same text.
+          cp "dist-assets/はじめにお読みください.html" "$STAGE/"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stat-consultant-${{ matrix.asset }}
+          path: stat-consultant/stage/
+          if-no-files-found: error
+
+  r-package:
+    # Pure-R package: one build serves both OSes.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          working-directory: stat-consultant/r-addin
+          extra-packages: any::roxygen2
+
+      - name: Generate documentation
+        # The committed NAMESPACE is hand-written and there are no man/ pages;
+        # regenerating here keeps R CMD build quiet without adding a local
+        # roxygen2 requirement for day-to-day work.
+        run: Rscript -e 'roxygen2::roxygenise("stat-consultant/r-addin")'
+
+      - name: Build source package
+        run: R CMD build stat-consultant/r-addin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stat-consultant-r-addin
+          path: statConsultantAddin_*.tar.gz
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/stat-consultant-v')
+    needs: [build, r-package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Bundle the R package into each OS zip
+        # Shipped together, not fetched at first run: the Addin *is* the
+        # launcher (chicken-and-egg), a hospital network is exactly where an
+        # outbound fetch fails, and co-shipping keeps the addin and backend
+        # agreed on the token protocol.
+        run: |
+          set -eux
+          for dir in artifacts/stat-consultant-*/; do
+            name=$(basename "$dir")
+            [ "$name" = "stat-consultant-r-addin" ] && continue
+            cp artifacts/stat-consultant-r-addin/*.tar.gz "$dir"/*/
+            (cd "$dir" && zip -r "../../$name.zip" .)
+          done
+          ls -la ./*.zip
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ./*.zip
+          fail_on_unmatched_files: true

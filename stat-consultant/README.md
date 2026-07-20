@@ -28,20 +28,77 @@ python3 -m venv .venv
 .venv/bin/uvicorn app.main:app --reload --port 8000
 ```
 
-Check: `curl localhost:8000/health` → `{"status":"ok"}`
+Check: `curl localhost:8000/health` →
+`{"status":"ok","state_dir":"…","version":"…"}`
 
-API keys are **per-user (BYOK)**: enter them in the app's settings screen (the
-gear icon) — they're stored in the OS keychain via `keyring`. Environment
+`state_dir` is where this process writes the RStudio shared secret,
+conversations and uploaded references (`app/paths.py`). It defaults to
+`~/.stat-consultant` and is overridable with `STAT_CONSULTANT_HOME` — the R
+Addin reads this field to locate the token, so the two sides agree even on
+Windows where Python's `Path.home()` and R's `path.expand("~")` can differ.
+
+### ports: one in production, two in dev
+
+If `frontend/dist` exists (after `npm run build`), the backend serves it
+directly — the shipped app is a single process on port 8000 with no Node
+involved. In dev you still run Vite separately, but the client uses same-origin
+relative URLs and Vite proxies `/api`, `/ws` and `/health` to 8000
+(`frontend/vite.config.ts`), so there is one code path for both modes.
+
+Same-origin serving does **not** remove the need for the origin checks in
+`app/origins.py`. CORS only stops a remote page from *reading* our responses;
+it does not stop cross-origin *writes*, and it does not apply to WebSockets at
+all. Since `POST /api/rstudio/insert` is deliberately unauthenticated, the
+shared `ALLOW_ORIGIN_REGEX` is re-checked server-side on state-changing
+endpoints and on the WS handshake. Keep both layers.
+
+API keys are **per-user (BYOK)**: each user enters their own in the app's
+settings screen (the gear icon) — they're stored in that user's OS keychain via
+`keyring`. No key is ever bundled, shared, or written to the repo. Environment
 variables (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` |
-`GOOGLE_API_KEY`) still work as a fallback for advanced/headless setups.
+`GOOGLE_API_KEY`) still work as a read fallback for advanced/headless setups.
+
+#### macOS: the Keychain prompt after an update (verified behaviour)
+
+Keychain ACLs are per-signing-identity. PyInstaller ad-hoc signs each build with
+a fresh identity, so macOS treats every release as a different application:
+
+- **First install** — no prompt. Nothing is stored yet, and writing a new key
+  never prompts.
+- **Normal restarts** — no prompt. The item was created by this same binary.
+- **After an app update** — one "…wants to use your confidential information
+  stored in stat-consultant" dialog per stored key. Click **常に許可**.
+
+Until it is answered the request blocks, so the model dropdown stays empty
+while the dialog is up. That is the OS asking for legitimate consent, not a
+hang — do not "fix" it with a timeout, which would report the key as missing
+and invite the user to re-enter a key they already have. Only a stable
+Developer ID certificate removes the repeat prompt.
+
+This also constrains CI (Phase 4): a macOS runner has no one to click the
+dialog, so the smoke test must either use a dedicated unlocked temporary
+keychain or run with
+`PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring` plus an env-var key.
+Otherwise the job hangs until it times out.
 
 ### models: `GET /api/models`
 
-Returns the curated model list (Anthropic / OpenAI / Gemini) with an `available`
-flag per model — true when that provider's key is configured (keychain or env) —
-and the `default` id. The chosen model id rides on each chat frame; the WS
-rejects a model whose provider key is missing. Edit the list in
-`backend/app/models_registry.py` to match each provider's current lineup.
+Returns the chat models each configured provider currently offers, fetched live
+from its `/models` catalog (5-minute cache) — nothing is hardcoded, so new
+releases appear without a code change — plus the `default` id. The chosen model
+id rides on each chat frame; the WS rejects a model whose provider key is
+missing.
+
+Two filters shape the result, both in `backend/app/models_registry.py`:
+
+- `_is_chat_model` drops non-chat entries sharing a chat prefix (embeddings,
+  TTS, image/video, and special-purpose families like Gemini Robotics-ER).
+- `_tier_score` orders the picker and therefore picks the default. It scores
+  capability *tier* words (`opus`/`pro` > `sonnet` > `flash`/`mini`/`haiku`,
+  with `preview`/`experimental` penalised) rather than version numbers, so a
+  future `claude-opus-5` or `gemini-4-pro` ranks correctly on its own. Recency
+  (`created`) is only a tiebreak — Gemini's catalog omits it entirely, and
+  sorting on it alone degenerates to reverse-alphabetical.
 
 ### settings: `GET/POST /api/settings/keys`, `DELETE /api/settings/keys/{provider}`
 
@@ -87,7 +144,8 @@ levels, and missing-data counts — never invented ones.
 ### references: `POST /api/references`
 
 Upload a Markdown/text reference (multipart `file`). It is saved to the single
-`user_references/` folder and reflected into a lightweight keyword index
+`~/.stat-consultant/references/` folder (see `app/paths.py`; overridable with
+`STAT_CONSULTANT_HOME`) and reflected into a lightweight keyword index
 (adapted from `cie/knowledge/reference_library.py`). On each chat turn the
 backend runs `retrieve(query_terms, top_k=2)` over the latest user message and
 folds the top hits into the system prompt, so answers ground on the user's own
