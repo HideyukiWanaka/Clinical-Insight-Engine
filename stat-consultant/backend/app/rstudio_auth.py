@@ -38,6 +38,12 @@ def generate_and_write_token() -> str:
     """
     token = secrets.token_urlsafe(32)
     TOKEN_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        # Restrict the shared dir too (holds the token + cleartext conversations),
+        # not just the token file. Inert on Windows; harmless to skip there.
+        TOKEN_DIR.chmod(stat.S_IRWXU)  # 0700
+    except OSError:
+        pass
     TOKEN_PATH.write_text(token, encoding="utf-8")
     try:
         TOKEN_PATH.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0600

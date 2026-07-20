@@ -7,6 +7,7 @@ from .conversation import ConversationStore
 from .environment import EnvironmentStore
 from .environment_api import router as environment_router
 from .models_api import router as models_router
+from .origins import ALLOW_ORIGIN_REGEX
 from .references import ReferenceLibrary
 from .references_api import router as references_router
 from .rstudio import RStudioQueue
@@ -30,10 +31,14 @@ app.state.environment = EnvironmentStore()
 app.state.rstudio_token = generate_and_write_token()
 
 # The frontend is served from a different localhost port in dev, so the
-# reference upload (a cross-origin fetch) needs CORS. Localhost only.
+# reference upload (a cross-origin fetch) needs CORS. Localhost only — the
+# allow-rule is shared with the WS handshake / write-endpoint checks so the two
+# never drift (see ``origins.py``). This blocks a remote page from *reading*
+# our responses; the same rule is re-checked server-side on state-changing
+# endpoints to block cross-origin *writes* (which CORS alone does not stop).
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_origin_regex=ALLOW_ORIGIN_REGEX,
     allow_methods=["*"],
     allow_headers=["*"],
 )

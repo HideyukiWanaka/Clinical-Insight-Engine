@@ -6,9 +6,11 @@
 # double-check backend-side).
 #
 # Only column *names* and aggregated category *level labels* are inspected —
-# never raw cell values (inject_raw_data_rows = FALSE, CLAUDE.md). A column is
-# dropped wholesale when its name trips a name pattern OR any level label trips
-# a value pattern.
+# never raw cell values. The labels inspected here are computed locally and are
+# NEVER sent to the backend (only distinct counts + anonymised group sizes are);
+# this value check exists so a column whose labels look like PII is dropped
+# wholesale before send. A column is dropped when its name trips a name pattern
+# OR any level label trips a value pattern.
 
 # Column-name patterns — matched unanchored, case-insensitive (mirrors Python
 # re.search + re.IGNORECASE). perl = TRUE so the \s / \b classes behave as PCRE.

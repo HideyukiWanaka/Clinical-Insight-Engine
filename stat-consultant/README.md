@@ -1,12 +1,15 @@
 # stat-consultant
 
 See `docs/SPEC.md` (正典) and `docs/BUILD_PROMPTS.md` for the implementation plan.
-Built through Step 6 (RStudio Addin: code insertion), including reference
-upload + lightweight RAG grounding (Step 4), the send-to-RStudio queue +
-clipboard fallback (Step 5), plus multi-provider LLM support (Anthropic /
-OpenAI / Gemini) with an in-app model picker and BYOK API-key entry (keys
-stored in the OS keychain). Later features (environment sync, image/Vision)
-are not here yet.
+Built through Step 9 (reference figure → ggplot2 code, mapped onto the user's
+synced real data), including reference upload + lightweight RAG grounding
+(Step 4), the send-to-RStudio queue + clipboard fallback (Step 5), the RStudio
+Addin's code insertion (Step 6) and transparent, PII-filtered environment sync
+(Step 7) that grounds chat answers in the user's actual GlobalEnv (Step 8),
+plus multi-provider LLM support (Anthropic / OpenAI / Gemini) with an in-app
+model picker and BYOK API-key entry (keys stored in the OS keychain). See
+`docs/TEST_PLAN.md` for the real-machine verification scenarios and
+`docs/TEST_FINDINGS.md` for issues found (and fixed) during that testing.
 
 ## quick start (再起動含む)
 
@@ -74,7 +77,12 @@ Server → client frames:
 - `{"type":"done"}` / `{"type":"error","reason":"..."}`
 
 The reply is shaped by an `output_config.format` JSON schema and grounded with an
-R method-selection few-shot distilled from `skills/core/statistics/*/SKILL.md`.
+R method-selection few-shot distilled from `skills/core/statistics/*/SKILL.md`
+(plus a ggplot2 visualization pitfalls section sourced from official ggplot2/R
+docs — see `backend/app/fewshot.py`). Every turn also folds in the latest
+PII-filtered RStudio environment snapshot (Step 7/8, see below) so method
+suggestions and generated code reference the user's real column names, group
+levels, and missing-data counts — never invented ones.
 
 ### references: `POST /api/references`
 
@@ -84,7 +92,21 @@ Upload a Markdown/text reference (multipart `file`). It is saved to the single
 backend runs `retrieve(query_terms, top_k=2)` over the latest user message and
 folds the top hits into the system prompt, so answers ground on the user's own
 material (proper nouns included). No approval flow or hierarchy — individual use.
-Non-UTF-8 uploads (e.g. images) are rejected with 415; images are Step 9.
+Non-UTF-8 uploads (e.g. images) are rejected with 415.
+
+### reference figures (Step 9): image attachment in chat
+
+A separate attach path (paperclip in the composer, distinct from the
+`/api/references` text-upload above) lets the user attach an image — a plot
+from a paper, a style they want reproduced — to a single chat turn. The image
+is **never persisted server-side** (no `user_references/` write; it lives only
+in the WebSocket frame and the frontend's local display cache). When an image
+is present, `IMAGE_INSTRUCTION` (`backend/app/prompts.py`) is appended to the
+system prompt for that turn: reproduce the figure's *style* (chart type, axes,
+facets, color mapping) using the user's real synced column names, never
+fabricate columns that aren't in the synced environment (ask instead), and
+never invent the figure's underlying numbers. The generated `ggplot2` code
+goes through the same「RStudioへ送る」path as any other code block.
 
 ## frontend (Vite + React + TypeScript)
 
@@ -101,33 +123,47 @@ Shift+Enter for a newline, IME-safe) + a small model dropdown in the header
 icon opening the API-key settings modal (paste a key → stored in the OS keychain,
 never re-shown; saving re-enables that provider's models in the dropdown). Assistant replies render as `assistant_text`
 (一言理由 + click-to-expand detail) and syntax-highlighted `assistant_code` cards,
-each with a「RStudioへ送る」button (visual only — wired in Step 5). One attach
-button (paperclip) uploads a Markdown/text reference to `POST /api/references`
-and shows a toast; images are Step 9. The history sidebar / model select /
+each with a「RStudioへ送る」button (wired to the pending-code queue, Step 5/6).
+The attach button (paperclip) has two paths: uploading a Markdown/text
+reference goes to `POST /api/references` (a toast confirms); attaching an
+image sends it inline with the chat turn as a one-off reference figure (Step
+9, see backend §"reference figures" above) — a toast confirms that too, and a
+thumbnail chip lets the user remove it before sending. The history sidebar /
 settings / auth UI (SPEC 4.5) are intentionally absent.
 
 The UI connects to `ws://<host>:8000/ws/consult`, so run the backend (with
 `ANTHROPIC_API_KEY`) first.
 
-## r-addin (RStudio Addin)
+## r-addin (RStudio Addin: `statConsultantAddin`)
 
-Code insertion (Step 6). Polls the backend's pending-code queue and inserts
-each queued block at the cursor of the active source document via
-`rstudioapi::insertText()`. Polling is non-blocking (runs on RStudio's idle
-event loop via `later`), so the console stays free to run the inserted code.
+Code insertion (Step 6) + transparent environment sync (Step 7), on one
+non-blocking poller (runs on RStudio's idle event loop via `later`, so the
+console stays free to run the inserted code). Each ~2s cycle does two things:
+
+- **Code insertion**: polls the backend's pending-code queue and inserts each
+  queued block at the cursor of the active source document via
+  `rstudioapi::insertText()`.
+- **Environment sync**: scans `GlobalEnv` for `data.frame`-like objects and, on
+  change only, POSTs an aggregate-only snapshot (column names/types/missing
+  counts/factor levels — **never row/cell values**, `inject_raw_data_rows`
+  stays `False`) to the backend, which grounds chat answers in the user's real
+  data (Step 8). PII columns/values are excluded client-side (`R/pii.R`) and
+  double-checked server-side (`app/pii.py`) before anything leaves the
+  machine.
 
 Install into RStudio:
 
 ```r
 install.packages(c("rstudioapi", "httr2", "later"))  # if not already present
-remotes::install_local("stat-consultant/r-addin")     # or devtools::install(...)
+remotes::install_local("stat-consultant/r-addin", force = TRUE)  # or devtools::install(...)
 ```
 
 Then, in RStudio, run the backend first, and use the **Addins** menu:
 
-- **コード挿入: 開始** — start polling. Invoke once per session; each
-  「RStudioへ送る」in the chat then appears at your cursor within ~2s.
-- **コード挿入: 停止** — stop polling.
+- **Stat Consultant: 開始** — start polling (code insertion + environment
+  sync). Invoke once per session; each「RStudioへ送る」in the chat then
+  appears at your cursor within ~2s, and any synced data grounds chat replies.
+- **Stat Consultant: 停止** — stop polling.
 
 Auth is zero-config: the backend writes a fresh shared secret to
 `~/.stat-consultant/rstudio_token` on every start, and the Addin reads it on
