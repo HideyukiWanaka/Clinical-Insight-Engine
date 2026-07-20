@@ -1,9 +1,19 @@
-Name: Stat Consultant: 開始
-Description: コード挿入(/api/rstudio/pending をポーリングしカーソル位置へ挿入)と、透明な環境同期(GlobalEnvを走査しPII除外済みの集計を /api/environment/sync へ送信)を開始します。
+Name: Stat Consultant: 起動
+Description: バックエンドを起動し、チャット画面をブラウザで開き、コード挿入と環境同期のポーリングを開始します。通常はこれ1つを使います。
+Binding: statConsultantStart
+Interactive: false
+
+Name: Stat Consultant: 終了
+Description: ポーリングを停止し、このセッションが起動したバックエンドを停止します。
+Binding: statConsultantStop
+Interactive: false
+
+Name: Stat Consultant: ポーリングのみ開始
+Description: バックエンドが既に起動している場合に、コード挿入(/api/rstudio/pending をポーリングしカーソル位置へ挿入)と環境同期(GlobalEnvを走査しPII除外済みの集計を /api/environment/sync へ送信)だけを開始します。
 Binding: statConsultantInsertCode
 Interactive: false
 
-Name: Stat Consultant: 停止
-Description: コード挿入と環境同期のポーリングを停止します。
+Name: Stat Consultant: ポーリングのみ停止
+Description: バックエンドは起動したまま、コード挿入と環境同期のポーリングだけを停止します。
 Binding: statConsultantStopInsert
 Interactive: false
