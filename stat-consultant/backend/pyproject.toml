@@ -14,6 +14,24 @@ dependencies = [
     "pypdf>=5",
 ]
 
+[project.optional-dependencies]
+# Bundling toolchain — only needed to produce a release artifact, never at
+# runtime. pyinstaller-hooks-contrib carries the community hooks for keyring
+# and the LLM SDKs. Both are upper-bounded: a PyInstaller minor bump can change
+# hook behaviour, and this is the one dependency whose breakage is invisible
+# until a user runs the shipped binary.
+build = [
+    "pyinstaller>=6.10,<7",
+    "pyinstaller-hooks-contrib>=2024.8",
+]
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# Declared explicitly because run_backend.py sits beside the app package at the
+# backend root, which makes setuptools' flat-layout auto-discovery ambiguous.
+# The entry script isn't part of the installed package — PyInstaller and the
+# dev command both reference it by path.
+packages = ["app"]
