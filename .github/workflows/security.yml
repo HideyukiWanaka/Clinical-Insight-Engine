@@ -71,6 +71,13 @@ jobs:
           pip install --upgrade pip
           pip install --require-hashes -r requirements.lock
 
+      - name: Upgrade setuptools to a patched version (PYSEC-2026-3447)
+        # setuptools isn't a dependency of the app (not in requirements.lock),
+        # but pip-audit scans whatever is sitting in the environment — the
+        # version bundled with the runner's Python — so it flags this even
+        # though nothing shipped actually carries it.
+        run: pip install --upgrade "setuptools>=83.0.0"
+
       - name: Install pip-audit
         run: pip install pip-audit
 
