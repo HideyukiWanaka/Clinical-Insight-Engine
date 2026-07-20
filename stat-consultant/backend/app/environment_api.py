@@ -2,13 +2,15 @@
 
 The RStudio Addin scans ``ls(.GlobalEnv)`` and POSTs an **aggregate-only**
 snapshot of each data.frame (SPEC §9.1): column names, types, missing counts,
-and factor/categorical level labels+counts. Raw row/cell values are never sent
-(``inject_raw_data_rows = False``, CLAUDE.md).
+and — for categorical columns — the distinct count and anonymised group sizes.
+Category *label strings* are never sent (they are raw cell values); raw
+row/cell values are never sent either. The wire schema below has no field that
+can carry a label, so even a buggy/old/hostile Addin cannot push one through.
 
 The Addin already drops PII columns before sending (SPEC §9.2); this endpoint
-runs the same check again as a server-side second layer, stores the filtered
-snapshot on ``app.state.environment`` (consumed by Step 8), and logs a one-line
-summary so the sync is visible in the uvicorn console.
+runs the column-name check again as a server-side second layer, stores the
+filtered snapshot on ``app.state.environment`` (consumed by Step 8), and logs a
+one-line summary so the sync is visible in the uvicorn console.
 
 Auth: gated by the local shared secret (same Addin-only boundary as
 ``GET /api/rstudio/pending`` — see ``rstudio_auth.py``). A same-origin browser
@@ -26,20 +28,19 @@ from .rstudio_auth import require_rstudio_token
 router = APIRouter(prefix="/api/environment", tags=["environment"])
 
 
-class Level(BaseModel):
-    """One aggregated category level of a factor/categorical column."""
-
-    label: str
-    count: int
-
-
 class Column(BaseModel):
-    """A single column's aggregate metadata (no raw values)."""
+    """A single column's aggregate metadata (no raw values, no level labels).
+
+    ``n_distinct`` is the number of distinct non-NA values; ``level_counts`` is
+    the anonymised group sizes (top-10, sorted desc) with no labels attached.
+    There is deliberately no field for a category label string.
+    """
 
     name: str
     type: str
     n_missing: int
-    levels: list[Level] | None = None
+    n_distinct: int | None = None
+    level_counts: list[int] | None = None
 
 
 class RObject(BaseModel):
@@ -61,15 +62,13 @@ class EnvironmentSnapshot(BaseModel):
 
 
 def _filter_object(obj: RObject) -> RObject:
-    """Return a copy of *obj* with any PII-tripping column removed (double-check)."""
-    kept = [
-        col
-        for col in obj.columns
-        if not column_has_pii(
-            col.name,
-            [lvl.label for lvl in col.levels] if col.levels else None,
-        )
-    ]
+    """Return a copy of *obj* with any PII-tripping column removed (double-check).
+
+    Only the column *name* can be checked server-side — level labels never reach
+    the backend (the schema has no field for them), so the value-pattern check
+    runs Addin-side only, before send.
+    """
+    kept = [col for col in obj.columns if not column_has_pii(col.name)]
     return obj.model_copy(update={"columns": kept})
 
 

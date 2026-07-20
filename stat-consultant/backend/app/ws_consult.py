@@ -7,7 +7,9 @@ several ``assistant_code`` blocks, and every code block carries a one-line
 reason. The server still owns the running history so later turns keep context.
 
 Out of scope here: frontend rendering (Step 3), environment/references/images/
-RStudio wiring (later steps). Localhost personal app, so no auth/rate-limit yet.
+RStudio wiring (later steps). The socket is loopback-bound and the handshake is
+Origin-gated to localhost (see ``origins.py``); there is no per-user auth or
+rate-limit (single-user personal app).
 
 Frames the client sends (one JSON object, or bare text, per message):
   {"text": "...", "conversation_id": "..."}   — a user turn
@@ -30,6 +32,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from .environment import build_environment_context
 from .llm import blocks_to_text, generate_blocks
 from .models_registry import is_available, resolve_model
+from .origins import is_allowed_origin
 from .prompts import IMAGE_INSTRUCTION, SYSTEM_PROMPT
 from .references import build_reference_context, extract_query_terms
 
@@ -110,6 +113,15 @@ def _frame_for(block: dict) -> dict | None:
 @router.websocket("/ws/consult")
 async def ws_consult(websocket: WebSocket) -> None:
     """Accept a socket, then stream structured reply frames per user turn."""
+    # WebSocket handshakes are exempt from CORS, so a page on any site the user
+    # has open could otherwise connect to ws://127.0.0.1:8000/ws/consult and
+    # drive the chat on the user's stored API keys — receiving the grounded
+    # environment context in the streamed replies. Reject non-localhost origins
+    # at the handshake (a browser always sends Origin here; an absent header is
+    # a non-browser client that the loopback bind already contains).
+    if not is_allowed_origin(websocket.headers.get("origin")):
+        await websocket.close(code=1008)  # policy violation
+        return
     await websocket.accept()
     store = websocket.app.state.conversations
     # One conversation per socket by default; a client may override per frame.
@@ -151,10 +163,10 @@ async def ws_consult(websocket: WebSocket) -> None:
             # system prompt. When a reference figure is attached (Step 9), add
             # the vision-to-ggplot2 instruction too.
             library = websocket.app.state.references
-            refs = library.retrieve(extract_query_terms(text), top_k=2)
+            passages = library.retrieve(extract_query_terms(text))
             system = (
                 SYSTEM_PROMPT
-                + build_reference_context(refs)
+                + build_reference_context(passages)
                 + build_environment_context(websocket.app.state.environment.latest)
             )
             if image is not None:

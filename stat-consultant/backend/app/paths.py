@@ -40,10 +40,13 @@ def state_dir() -> Path:
     root = Path(override).expanduser() if override else Path.home() / ".stat-consultant"
     root.mkdir(parents=True, exist_ok=True)
     try:
-        # 0700. The token file is already 0600, but the directory itself was
-        # left at the process umask, so conversations/ and references/ — which
-        # hold chat history and uploaded documents — were world-readable on a
-        # shared machine. chmod is largely inert on Windows; harmless to skip.
+        # 0700, applied explicitly rather than left to umask so a pre-existing
+        # looser directory is tightened too. The token file is already 0600, but
+        # the directory holds conversations/ — cleartext JSON of whatever the
+        # user typed, which despite the in-app guidance may include PHI — and
+        # references/, their uploaded documents. Restricting it here means every
+        # writer inherits the restriction instead of each repeating it.
+        # chmod is largely inert on Windows; harmless to skip.
         root.chmod(stat.S_IRWXU)
     except OSError:
         pass

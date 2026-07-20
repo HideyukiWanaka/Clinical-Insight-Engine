@@ -1,4 +1,3 @@
-import os
 import shutil
 import sys
 from pathlib import Path
@@ -12,6 +11,7 @@ from .conversation import ConversationStore
 from .environment import EnvironmentStore
 from .environment_api import router as environment_router
 from .models_api import router as models_router
+from .origins import ALLOW_ORIGIN_REGEX
 from .references import ReferenceLibrary
 from .references_api import router as references_router
 from .rstudio import RStudioQueue
@@ -70,20 +70,18 @@ app.state.environment = EnvironmentStore()
 # Fresh shared secret each start; the Addin re-reads it every poll (self-heals).
 app.state.rstudio_token = generate_and_write_token()
 
-# CORS is off by default. The frontend now talks to the backend over same-origin
-# relative URLs — served by this process when bundled, and forwarded by the Vite
-# dev proxy otherwise — so neither mode needs it. That matters because
-# POST /api/rstudio/insert is deliberately unauthenticated (see rstudio_api.py):
-# with permissive CORS, any localhost page the user happens to have open could
-# push R code into their editor. Opt back in only for a direct-to-:8000 setup
-# that bypasses the proxy.
-if os.environ.get("STAT_CONSULTANT_DEV_CORS") == "1":
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+# Localhost-only CORS. In the bundled app the page is same-origin so this never
+# fires, but it still matters in dev (Vite on another port) and it is only half
+# the defence: the same rule is re-checked server-side on state-changing
+# endpoints and on the WS handshake, because CORS does not stop cross-origin
+# *writes* and does not apply to WebSockets at all. Sharing ALLOW_ORIGIN_REGEX
+# keeps the two checks from drifting — see ``origins.py``.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=ALLOW_ORIGIN_REGEX,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(ws_consult_router)
 app.include_router(references_router)

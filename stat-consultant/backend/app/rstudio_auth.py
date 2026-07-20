@@ -34,6 +34,10 @@ def generate_and_write_token() -> str:
     directory for the case where the backend was started by hand.
     """
     token = secrets.token_urlsafe(32)
+    # paths.state_dir() creates the containing directory 0700 — it holds the
+    # token plus cleartext conversations, so owner-only matters for the whole
+    # directory and not just the token file. That restriction now lives in one
+    # place rather than at each writer.
     path = paths.token_path()
     path.write_text(token, encoding="utf-8")
     try:
