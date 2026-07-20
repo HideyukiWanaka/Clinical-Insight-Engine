@@ -48,6 +48,10 @@ generated_figures/
 # 上記 *.html は生成レポート用。stat-consultant/frontend の Vite エントリ
 # ポイントは生成物ではなく必須のソースファイルなので除外しない。
 !stat-consultant/frontend/index.html
+# 配布zipに同梱する利用者向けガイド（手書き・生成物ではない）。この除外ルール
+# のせいで一度コミットされておらず、リリースworkflowのステージングが
+# 「ファイルが見つからない」で失敗していた。
+!stat-consultant/dist-assets/*.html
 
 # Rスクリプト実行時の一時ファイル
 *.Rhistory
